@@ -709,6 +709,10 @@ async function main() {
     appJs.includes('inbox-error') && appJs.includes('Tap to retry.') && appJs.includes('INBOX_MAX_RETRIES') && appJs.includes('retryInboxLoad'));
   check('inbox fetch has a timeout so a hung request can fail and retry',
     appJs.includes('INBOX_FETCH_TIMEOUT_MS') && appJs.includes('timeoutMs'));
+  check('inbox renders instantly from a saved cache before any network call',
+    appJs.includes('s19_inbox_cache') && appJs.includes('restoreInboxCache') && appJs.includes('inboxCached') && appJs.includes('saveInboxCache'));
+  check('failed background refresh keeps the cached list and shows only a hint',
+    appJs.includes("Couldn't refresh") && appJs.includes('inboxRefreshFailed') && appJs.includes('inbox-refresh-hint'));
   const styleCss = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
   check('dark mode inbox title is white, light mode stays green',
     styleCss.includes(':root[data-theme="dark"] .app-header .app-title { color: #FFFFFF; }')
