@@ -1,4 +1,4 @@
-// S_19 CHAT BOOK — email sender stub (Resend-style HTTP API)
+// S_19 CHAT BOOK — email sender (Resend / generic HTTP API / Gmail SMTP)
 // ---------------------------------------------------------------------------
 // This file sends a real 6-digit login code by email when the environment
 // variables are set. When they are NOT set, it reports "not_configured"
@@ -6,21 +6,49 @@
 // Email codes are FREE (unlike SMS, which costs money per message) — that
 // is why Gmail login costs nothing while phone login needs an SMS pack.
 //
-// Supported providers (both are plain HTTP POST APIs):
-//   - "resend"  (resend.com) — free tier: 100 emails/day, no card
+// Supported providers:
+//   - "resend"  (resend.com) — free tier: 100 emails/day, no card.
+//     BUT: without a verified domain Resend only sends to the Resend
+//     account's own email address, so it CANNOT send codes to just any
+//     Gmail. Use "smtp" for that.
 //   - "generic" — any JSON POST email API (api_key + from + to + subject
 //                 + message fields)
+//   - "smtp"    — Gmail SMTP with an App Password. This is the free path
+//                 that sends to ANY Gmail address: turn on 2-Step
+//                 Verification on the Google account, create an App
+//                 Password (Google Account → Security → App passwords),
+//                 and use that 16-character password as EMAIL_SMTP_PASS.
+//                 No domain verification, no card, no per-email cost.
 //
 // Required env vars (see .env.example):
-//   EMAIL_PROVIDER  "resend" | "generic"
+//   EMAIL_PROVIDER  "resend" | "generic" | "smtp"
 //   EMAIL_API_URL   send-email endpoint URL, e.g. https://api.resend.com/emails
+//                   (resend / generic only — not used by smtp)
 //   EMAIL_API_KEY   API key from the provider dashboard
+//                   (resend / generic only — not used by smtp)
 //   EMAIL_FROM      sender address shown in the inbox,
 //                   e.g. "S_19 CHAT BOOK <login@s19chatbook.app>"
+//                   (smtp: defaults to "S_19 CHAT BOOK <EMAIL_SMTP_USER>")
+//   EMAIL_SMTP_HOST  SMTP host, default smtp.gmail.com (smtp only)
+//   EMAIL_SMTP_PORT  SMTP port, default 587 (smtp only; use 465 with
+//                    EMAIL_SMTP_SECURE=true)
+//   EMAIL_SMTP_SECURE  "true" for port 465 (implicit TLS), default "false"
+//                    (port 587 uses STARTTLS)
+//   EMAIL_SMTP_USER  the Gmail address that sends the codes (smtp only)
+//   EMAIL_SMTP_PASS  the 16-character Gmail App Password (smtp only)
 //
-// No key, password or credential is stored in this file. Ever.
+// No key, password or credential is stored in this file. Ever. The
+// password is never logged — not even on failure.
+
+function provider() {
+  return String(process.env.EMAIL_PROVIDER || '').toLowerCase();
+}
 
 function isConfigured() {
+  if (provider() === 'smtp') {
+    // SMTP needs only the Gmail account + its App Password.
+    return Boolean(process.env.EMAIL_SMTP_USER && process.env.EMAIL_SMTP_PASS);
+  }
   return Boolean(
     process.env.EMAIL_PROVIDER &&
     process.env.EMAIL_API_URL &&
@@ -28,26 +56,46 @@ function isConfigured() {
   );
 }
 
+function smtpConfig() {
+  const secure = String(process.env.EMAIL_SMTP_SECURE || '').toLowerCase() === 'true';
+  const port = Number(process.env.EMAIL_SMTP_PORT || '') || (secure ? 465 : 587);
+  return {
+    host: process.env.EMAIL_SMTP_HOST || 'smtp.gmail.com',
+    port,
+    secure,
+    user: process.env.EMAIL_SMTP_USER || '',
+    // The password is read here and passed straight to nodemailer; it is
+    // never stored in a module variable and never logged.
+    pass: process.env.EMAIL_SMTP_PASS || '',
+  };
+}
+
 /**
  * Send a 6-digit OTP to an email address.
  * Returns { sent: true, provider } on success, or
  * { sent: false, reason } when not configured / failed.
  * Never throws for a provider failure — the caller decides the fallback.
+ * The code and the password are never written to any log.
  */
 async function sendOtp(email, code) {
   if (!isConfigured()) {
     return { sent: false, reason: 'not_configured' };
   }
-  const provider = String(process.env.EMAIL_PROVIDER || '').toLowerCase();
-  const url = process.env.EMAIL_API_URL;
-  const apiKey = process.env.EMAIL_API_KEY;
-  const from = process.env.EMAIL_FROM || 'S_19 CHAT BOOK <login@s19chatbook.app>';
+  const prov = provider();
   const subject = 'S_19 CHAT BOOK লগইন কোড';
   const message = `S_19 CHAT BOOK: tomar login code ${code}. Kauke code ta dio na. Ei code 10 minute porjonto cholbe.`;
 
+  if (prov === 'smtp') {
+    return sendViaSmtp(email, subject, message);
+  }
+
+  const url = process.env.EMAIL_API_URL;
+  const apiKey = process.env.EMAIL_API_KEY;
+  const from = process.env.EMAIL_FROM || 'S_19 CHAT BOOK <login@s19chatbook.app>';
+
   let headers;
   let payload;
-  if (provider === 'resend') {
+  if (prov === 'resend') {
     // Resend API: POST https://api.resend.com/emails with a Bearer key.
     headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey };
     payload = { from, to: [email], subject, text: message };
@@ -77,11 +125,51 @@ async function sendOtp(email, code) {
       console.error('[email] API rejected:', JSON.stringify(body).slice(0, 300));
       return { sent: false, reason: 'email_rejected' };
     }
-    return { sent: true, provider };
+    return { sent: true, provider: prov };
   } catch (err) {
     console.error('[email] send failed:', err && err.message ? err.message : err);
     return { sent: false, reason: 'network_error' };
   }
 }
 
-module.exports = { sendOtp, isConfigured };
+async function sendViaSmtp(email, subject, message) {
+  const cfg = smtpConfig();
+  // Gmail only accepts mail from the authenticated account (or one of its
+  // verified aliases), so the default sender is the SMTP account itself.
+  const from = process.env.EMAIL_FROM || `S_19 CHAT BOOK <${cfg.user}>`;
+  let nodemailer;
+  try {
+    // Lazy require: a missing nodemailer must not break the resend /
+    // generic paths (or module load) for installs without the dep.
+    nodemailer = require('nodemailer');
+  } catch (err) {
+    console.error('[email] nodemailer is not installed:', err && err.message ? err.message : err);
+    return { sent: false, reason: 'smtp_no_transport' };
+  }
+  const transporter = nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    auth: { user: cfg.user, pass: cfg.pass },
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 15000,
+  });
+  // Hard cap so a stalled SMTP handshake can never hang the login request.
+  const timeout = new Promise((resolve) => setTimeout(() => resolve({ sent: false, reason: 'smtp_timeout' }), 20000));
+  const send = (async () => {
+    try {
+      await transporter.sendMail({ from, to: email, subject, text: message });
+      return { sent: true, provider: 'smtp' };
+    } catch (err) {
+      // Log only the error message — never the password or the code.
+      console.error('[email] SMTP send failed:', err && err.message ? err.message : err);
+      return { sent: false, reason: 'smtp_error' };
+    } finally {
+      try { transporter.close(); } catch { /* already closed */ }
+    }
+  })();
+  return Promise.race([send, timeout]);
+}
+
+module.exports = { sendOtp, isConfigured, smtpConfig };
