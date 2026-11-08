@@ -490,7 +490,7 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
   const sender = await publicUser(req.phone);
   await pushUnlessMuted(to, req.phone, {
     title: sender.name || req.phone,
-    body: 'নতুন মেসেজ',
+    body: 'New message',
     tag: 'msg-' + req.phone,
     type: 'message',
     peer: req.phone,
@@ -642,7 +642,7 @@ app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
 // incremental message fetch; the client pulls them on demand from
 // GET /api/media/:id, so polling stays light.
 const MEDIA_CAPS = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024, voice: 10 * 1024 * 1024, file: 5 * 1024 * 1024 };
-const MEDIA_LABELS = { image: '📷 ছবি', video: '🎥 ভিডিও', voice: '🎤 ভয়েস', file: '📄 ফাইল' };
+const MEDIA_LABELS = { image: '📷 Photo', video: '🎥 Video', voice: '🎤 Voice', file: '📄 File' };
 
 app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   const body = req.body || {};
@@ -940,7 +940,7 @@ app.post('/api/calls/signal', ah(auth), ah(async (req, res) => {
     const caller = await publicUser(req.phone);
     await pushUnlessMuted(to, req.phone, {
       title: caller.name || req.phone,
-      body: 'কল আসছে…',
+      body: 'Incoming call…',
       tag: 'call-' + req.phone,
       type: 'call',
       peer: req.phone,
@@ -1081,7 +1081,7 @@ app.post('/api/admin/broadcast', ah(auth), adminAuth, ah(async (req, res) => {
   for (const u of users) {
     push.sendPushToUser(db, u.phone, {
       title: 'S_19 CHAT BOOK',
-      body: 'নতুন ঘোষণা',
+      body: 'New announcement',
       tag: 'announce',
       type: 'announcement',
       peer: SYSTEM_SENDER,
