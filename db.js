@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS call_signals (
   consumed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_call_signals_to ON call_signals (to_phone, consumed);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_phone TEXT NOT NULL,
+  keys TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions (user_phone);
 `;
 
 // Postgres equivalent of the schema above. Differences from SQLite:
@@ -172,6 +179,13 @@ CREATE TABLE IF NOT EXISTS call_signals (
   consumed BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_call_signals_to ON call_signals (to_phone, consumed);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_phone TEXT NOT NULL,
+  keys TEXT NOT NULL DEFAULT '{}',
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions (user_phone);
 `;
 
 // Neon's pooler (PgBouncer) does not support channel binding, so that
