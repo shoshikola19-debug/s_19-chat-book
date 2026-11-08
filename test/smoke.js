@@ -484,7 +484,7 @@ async function main() {
     return post('/api/messages/media', { to, mediaKind: kind, fileName, mimeType, size: Buffer.from(data, 'base64').length, data, duration, clientKey }, token);
   }
   const img = await sendMedia(FRIEND, 'image', 'test-photo.png', 'image/png', PNG_1X1, tokA);
-  check('send photo (original bytes, no compression)', img.status === 200 && img.data.message.media_kind === 'image' && img.data.message.body === '📷 ছবি', img);
+  check('send photo (original bytes, no compression)', img.status === 200 && img.data.message.media_kind === 'image' && img.data.message.body === '📷 Photo', img);
   const imgId = img.data.message.id;
   const imgFetch = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
   const imgMsg = (imgFetch.data.messages || []).find((m) => m.id === imgId);
@@ -508,11 +508,11 @@ async function main() {
   const imgDataStranger = await get('/api/media/' + imgId, tokG);
   check('a stranger cannot download the photo', imgDataStranger.status === 403, imgDataStranger);
   const vid = await sendMedia(FRIEND, 'video', 'test-video.mp4', 'video/mp4', FAKE_VIDEO, tokA);
-  check('send video', vid.status === 200 && vid.data.message.media_kind === 'video' && vid.data.message.body === '🎥 ভিডিও', vid);
+  check('send video', vid.status === 200 && vid.data.message.media_kind === 'video' && vid.data.message.body === '🎥 Video', vid);
   const vidData = await get('/api/media/' + vid.data.message.id, tokB);
   check('receiver downloads the video bytes unchanged', vidData.status === 200 && vidData.data.data === FAKE_VIDEO, vidData);
   const voice = await sendMedia(FRIEND, 'voice', 'voice-1.webm', 'audio/webm', FAKE_VOICE, tokA, 7);
-  check('send voice note with duration', voice.status === 200 && voice.data.message.media_kind === 'voice' && voice.data.message.media_duration === 7 && voice.data.message.body === '🎤 ভয়েস', voice);
+  check('send voice note with duration', voice.status === 200 && voice.data.message.media_kind === 'voice' && voice.data.message.media_duration === 7 && voice.data.message.body === '🎤 Voice', voice);
   const file = await sendMedia(FRIEND, 'file', 'notes.txt', 'text/plain', FILE_TEXT, tokA);
   check('send file', file.status === 200 && file.data.message.media_kind === 'file' && file.data.message.body === '📄 notes.txt', file);
   const fileData = await get('/api/media/' + file.data.message.id, tokB);
