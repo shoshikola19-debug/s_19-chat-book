@@ -476,6 +476,7 @@ function openSettings() {
   $('settings-about').textContent = myProfile.about || 'Hey there! I am using S_19 CHAT BOOK.';
   $('settings-phone').textContent = displayId(myProfile.phone);
   renderAutosaveRow();
+  renderPhotoGuardRow();
   $('settings-overlay').classList.remove('hidden');
 }
 // Inbox header gear: opens Settings directly (the old ⋮ menu only
@@ -486,7 +487,16 @@ $('btn-header-settings').addEventListener('click', openSettings);
 $('btn-header-camera').addEventListener('click', () => $('file-image').click());
 $('tools-profile-card').addEventListener('click', openSettings);
 $('btn-close-settings').addEventListener('click', () => $('settings-overlay').classList.add('hidden'));
-$('settings-avatar-wrap').addEventListener('click', () => $('settings-avatar-input').click());
+// Tapping your own photo opens the guarded viewer; tapping the 📷
+// badge (or the photo, when none is set yet) opens the picker to
+// change it. The global avatar-tap handler below skips this wrap.
+$('settings-avatar-wrap').addEventListener('click', (e) => {
+  if (e.target.closest('.settings-avatar-camera') || !myProfile.avatar) {
+    $('settings-avatar-input').click();
+    return;
+  }
+  openPhotoViewer(myProfile.avatar, myProfile.name);
+});
 $('settings-avatar-input').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
@@ -553,15 +563,16 @@ function switchTab(tab) {
 }
 document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
-function avatarLetter(name, phone) {
-  return (name || phone || '?').trim().charAt(0).toUpperCase();
-}
-// A contact's photo when they set one, otherwise their initial letter.
+// A contact's photo when they set one, otherwise a WhatsApp-style
+// default avatar: a person silhouette in a muted brown circle — the
+// same in light and dark mode, in every place an avatar appears
+// (inbox, chat header, contact info, group members, status, Settings).
 // The avatar is a data URL (no quotes in base64), so it is safe inside
 // an <img src="..."> built this way.
 function avatarHtml(name, phone, avatar) {
   if (avatar) return '<img src="' + avatar + '" alt="">';
-  return avatarLetter(name, phone);
+  return '<span class="avatar-default" aria-hidden="true">' +
+    '<svg viewBox="0 0 24 24"><path d="M12 12c2.2 0 4-1.8 4-4s-1.8-4-4-4-4 1.8-4 4 1.8 4 4 4zm0 2c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z"/></svg></span>';
 }
 function peerName(c) { return c.name || displayId(c.phone); }
 
@@ -2149,6 +2160,83 @@ $('settings-autosave-row').addEventListener('click', () => {
   renderAutosaveRow();
   toast(autosaveOn() ? 'Auto-save on — photos and videos from friends will be saved to your phone' : 'Auto-save off');
 });
+
+// ---- Profile photo guard -------------------------------------------------
+// Per-device toggle, default ON. The guard only changes the photo
+// viewer: guarded = no download/save button, no long-press or
+// right-click saving, and the photo hides the moment the app loses
+// focus. It never blocks opening a photo and never changes who can
+// see one — and it cannot stop screenshots, so nothing in the UI
+// claims that it does.
+function photoGuardOn() {
+  try { return localStorage.getItem('s19_photo_guard') !== 'off'; } catch { return true; }
+}
+function renderPhotoGuardRow() {
+  $('settings-photoguard').textContent = photoGuardOn() ? 'On' : 'Off';
+}
+$('settings-photoguard-row').addEventListener('click', () => {
+  try { localStorage.setItem('s19_photo_guard', photoGuardOn() ? 'off' : 'on'); } catch { /* storage unavailable */ }
+  renderPhotoGuardRow();
+  toast(photoGuardOn() ? 'Profile photo guard on — photos open guarded' : 'Profile photo guard off — photos can be saved from the viewer');
+});
+
+// ---- Full-screen profile photo viewer ------------------------------------
+// Opens when tapping a profile photo anywhere (see the capture-phase
+// avatar handler below, and the Settings photo handler above).
+let photoViewerOpen = false;
+function openPhotoViewer(src, name) {
+  const guard = photoGuardOn();
+  $('photo-viewer-img').src = src;
+  $('photo-viewer-name').textContent = name || '';
+  $('photo-viewer-guarded').classList.toggle('hidden', !guard);
+  const dl = $('photo-viewer-download');
+  dl.classList.toggle('hidden', guard);
+  if (!guard) dl.href = src;
+  $('photo-viewer').classList.remove('hidden', 'photo-hidden');
+  photoViewerOpen = true;
+}
+function closePhotoViewer() {
+  $('photo-viewer').classList.add('hidden');
+  $('photo-viewer-img').removeAttribute('src');
+  photoViewerOpen = false;
+}
+$('btn-close-photo-viewer').addEventListener('click', closePhotoViewer);
+$('photo-viewer').addEventListener('click', (e) => { if (e.target.id === 'photo-viewer') closePhotoViewer(); });
+// Guarded: no long-press / right-click saving on the photo.
+$('photo-viewer-img').addEventListener('contextmenu', (e) => { if (photoGuardOn()) e.preventDefault(); });
+// Guarded: hide the photo the moment the app loses focus, show it
+// again when the app comes back.
+function hideViewerPhoto() { if (photoViewerOpen && photoGuardOn()) $('photo-viewer').classList.add('photo-hidden'); }
+function showViewerPhoto() { $('photo-viewer').classList.remove('photo-hidden'); }
+document.addEventListener('visibilitychange', () => { if (document.hidden) hideViewerPhoto(); else showViewerPhoto(); });
+window.addEventListener('blur', hideViewerPhoto);
+window.addEventListener('focus', showViewerPhoto);
+// Tapping a profile photo opens the viewer. Capture phase, so the tap
+// never also opens the chat, contact info or call underneath.
+// Skipped: status rings (tap opens the status), the Tools profile card
+// (tap opens Settings), and the Settings photo (its own handler above).
+// Avatars with no photo (the brown default icon, emoji avatars) have
+// nothing to view, so they do nothing.
+document.addEventListener('click', (e) => {
+  const av = e.target.closest('.avatar, .profile-avatar, .profile-head-avatar');
+  if (!av) return;
+  if (av.closest('.status-ring') || av.closest('#tools-profile-card') || av.closest('#settings-avatar-wrap')) return;
+  const img = av.querySelector('img');
+  if (!img || !img.getAttribute('src')) return;
+  e.stopPropagation();
+  e.preventDefault();
+  let name = '';
+  const row = av.closest('.chat-row');
+  if (row) {
+    const n = row.querySelector('.chat-row-name');
+    if (n) name = n.textContent;
+  } else if (av.closest('#chat-peer-box')) {
+    name = $('chat-peer-name').textContent;
+  } else if (av.closest('#profile-overlay')) {
+    name = $('profile-name').textContent;
+  }
+  openPhotoViewer(img.getAttribute('src'), name);
+}, true);
 
 async function loadMediaInto(div, m) {
   const wrap = div.querySelector('.msg-media');
