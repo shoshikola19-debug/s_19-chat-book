@@ -851,6 +851,15 @@ async function main() {
     && appJs.includes('Add your own') && appJs.includes('addCustomTone') && appJs.includes('deleteCustomTone')
     && appJs.includes('getCustomToneBlob') && appJs.includes('playCustomToneOnce')
     && idxHtml2.includes('custom-tone-input'));
+  // A visible + icon in both picker headers opens the same file input
+  // as the bottom "+ Add your own" row (Bijoy 2026-11-08 23:17 — the
+  // bottom row sits below 22 tones, so it was easy to miss).
+  check('ringtone + message-tone pickers have a + icon in the header to add a tone from a file',
+    idxHtml2.includes('btn-ringtone-add') && idxHtml2.includes('btn-msgtone-add')
+    && idxHtml2.includes('dialog-add-btn')
+    && appJs.includes("btn-ringtone-add") && appJs.includes("btn-msgtone-add")
+    && appJs.includes("customToneTarget = 'ring'") && appJs.includes("customToneTarget = 'msg'")
+    && styleCss.includes('.dialog-add-btn'));
   check('Silent is a valid ringtone and message tone (no sound, call/message still works)',
     appJs.includes("'silent'") && appJs.includes('Silent') && appJs.includes('ringtoneDisplayName')
     && appJs.includes('msgToneDisplayName'));
