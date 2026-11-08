@@ -1,5 +1,6 @@
 node_modules/
 .env
+.vapid-private-key.txt
 s19.db
 s19.db-wal
 s19.db-shm
