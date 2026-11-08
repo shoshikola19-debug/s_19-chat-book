@@ -797,6 +797,44 @@ const MISSED_PHONE_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="
 // chats (groups cannot be favorited — the chat ⋮ menu that sets the
 // flag only exists in 1-to-1 chats).
 let favoritesOnly = false;
+// Pinned chats: per-device, survives reloads (localStorage s19_pinned).
+// Pinned rows stick to the top of the inbox, newest first among pinned,
+// with a 📌 mark. Pinned + Favorites compose: a pinned favorite still
+// shows in the Favorites filter.
+function getPinned() {
+  try { return JSON.parse(localStorage.getItem('s19_pinned') || '[]'); } catch { return []; }
+}
+function setPinned(list) {
+  try { localStorage.setItem('s19_pinned', JSON.stringify(list)); } catch { /* storage unavailable */ }
+}
+function togglePin(key) {
+  const list = getPinned();
+  const i = list.indexOf(key);
+  if (i >= 0) { list.splice(i, 1); toast('Chat unpinned'); }
+  else { list.unshift(key); toast('Chat pinned'); }
+  setPinned(list);
+  renderInbox();
+}
+// A long-press on an inbox row pins/unpins it. The row is rebuilt by
+// renderInbox the moment the press fires, so the click that follows the
+// pointer-up must be swallowed — this flag does that. (Right-click fires
+// no click, so it needs no flag.)
+let suppressRowClick = false;
+function consumeRowClick() {
+  if (!suppressRowClick) return false;
+  suppressRowClick = false;
+  return true;
+}
+function attachInboxRowPin(row, key) {
+  let timer = null;
+  row.addEventListener('pointerdown', () => {
+    timer = setTimeout(() => { suppressRowClick = true; togglePin(key); }, 500);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) {
+    row.addEventListener(ev, () => clearTimeout(timer));
+  }
+  row.addEventListener('contextmenu', (e) => { e.preventDefault(); togglePin(key); });
+}
 function renderInbox() {
   const q = chatSearch.trim().toLowerCase();
   const list = $('chat-list');
@@ -835,6 +873,15 @@ function renderInbox() {
   const grows = myGroups.filter((g) => !q || g.name.toLowerCase().includes(q))
     .map((g) => ({ kind: 'group', ...g }));
   let all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  // Pinned chats stick to the top (newest first among pinned).
+  const pinned = new Set(getPinned());
+  const pinKey = (c) => (c.kind === 'group' ? 'group:' + c.id : c.phone);
+  all.sort((a, b) => {
+    const ap = pinned.has(pinKey(a)) ? 0 : 1;
+    const bp = pinned.has(pinKey(b)) ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return (b.lastAt || 0) - (a.lastAt || 0);
+  });
   if (favoritesOnly) all = all.filter((c) => c.kind === 'chat' && c.favorite);
   // The truly-empty note only appears after a successful load that
   // returned zero chats (or a clean cached list that was empty when
@@ -856,12 +903,13 @@ function renderInbox() {
       row.innerHTML =
         '<div class="avatar">👥</div>' +
         '<div class="chat-row-body">' +
-          '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(c.name) + '</span>' +
+          '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(c.name) + (pinned.has('group:' + c.id) ? ' <span class="pinned-mark">📌</span>' : '') + '</span>' +
           '<span class="chat-row-time">' + (c.lastAt ? fmtTime(c.lastAt) : '') + '</span></div>' +
           '<div class="chat-row-top"><span class="chat-row-msg">' + preview + '</span>' +
           (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
         '</div>';
-      row.addEventListener('click', () => openGroup(c.id, c.name));
+      row.addEventListener('click', () => { if (consumeRowClick()) return; openGroup(c.id, c.name); });
+      attachInboxRowPin(row, 'group:' + c.id);
       list.appendChild(row);
       continue;
     }
@@ -877,12 +925,13 @@ function renderInbox() {
     row.innerHTML =
       '<div class="avatar">' + avatarHtml(c.name, c.phone, c.avatar) + '</div>' +
       '<div class="chat-row-body">' +
-        '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + (c.muted ? ' 🔇' : '') + '</span>' +
+        '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + (c.muted ? ' 🔇' : '') + (pinned.has(c.phone) ? ' <span class="pinned-mark">📌</span>' : '') + '</span>' +
         '<span class="chat-row-time">' + rowTime + '</span></div>' +
         '<div class="chat-row-top">' + preview +
         (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
       '</div>';
-    row.addEventListener('click', () => openChat(c.phone, c.name));
+    row.addEventListener('click', () => { if (consumeRowClick()) return; openChat(c.phone, c.name); });
+    attachInboxRowPin(row, c.phone);
     list.appendChild(row);
   }
   // Locked chats stay hidden from the list; one row at the bottom opens
@@ -1027,6 +1076,8 @@ function openChat(phone, name) {
   groupInfo = null;
   chatAfterId = 0;
   chatSettings = null;
+  chatMsgById.clear();
+  cancelReplyEdit();
   $('chat-messages').innerHTML = '';
   $('chat-messages').className = 'chat-messages';
   const peer = conversations.find((c) => c.phone === phone) || {};
@@ -1063,6 +1114,8 @@ function openGroup(id, name) {
   groupInfo = null;
   chatAfterId = 0;
   chatSettings = null;
+  chatMsgById.clear();
+  cancelReplyEdit();
   peerLastSeen = 0;
   $('chat-messages').innerHTML = '';
   $('chat-messages').className = 'chat-messages';
@@ -1112,6 +1165,7 @@ async function fetchGroupMessages() {
     }
     if (!firstFetch && gotIncoming && !document.hidden && loadNotifSettings().groupSound) playMsgBeep();
     applyTicks(r.ticks);
+    if (r.viewedOnce) markViewedOnce(r.viewedOnce);
     if (r.group && r.group.memberCount) {
       const n = r.group.memberCount;
       $('chat-peer-phone').textContent = n + (n === 1 ? ' member' : ' members');
@@ -1126,7 +1180,15 @@ function applyTicks(ticks) {
   document.querySelectorAll('#chat-messages .msg.mine:not(.msg-deleted)').forEach((el) => {
     const id = Number(el.dataset.id);
     const t = tickMap[id];
-    if (t && el.dataset.ts) el.querySelector('.msg-meta').innerHTML = fmtTime(Number(el.dataset.ts)) + ' ' + tickHtml(t);
+    if (t && el.dataset.ts) {
+      el.querySelector('.msg-meta').innerHTML = metaHtml({
+        sender: session.phone,
+        created_at: Number(el.dataset.ts),
+        edited_at: el.dataset.edited === '1' ? 1 : 0,
+        starred: el.dataset.starred === '1' ? 1 : 0,
+        ...t,
+      });
+    }
   });
 }
 // ---- new group + group info ---------------------------------------------------
@@ -1461,6 +1523,106 @@ $('menu-favorite').addEventListener('click', () => {
   const fav = !(chatSettings && chatSettings.favorite);
   saveChatSettings({ favorite: fav }, fav ? 'Added to Favorites' : 'Removed from Favorites');
 });
+$('menu-starred').addEventListener('click', () => {
+  hideChatMenu();
+  openStarred();
+});
+$('profile-starred-row').addEventListener('click', () => {
+  $('profile-overlay').classList.add('hidden');
+  openStarred();
+});
+
+// ---- forward (long-press → Forward) ----------------------------------------
+// Pick up to 5 chats (1-to-1 or groups). The server copies the text or
+// points the copy at the original media row — nothing is re-uploaded.
+function openForward(m) {
+  forwardTarget = m;
+  renderForwardList();
+  $('forward-dialog').classList.remove('hidden');
+}
+function renderForwardList() {
+  const list = $('forward-list');
+  list.innerHTML = '';
+  const selected = new Set();
+  const addRow = (key, label, avatar) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'forward-row';
+    row.innerHTML = '<div class="avatar">' + avatar + '</div><span>' + escapeHtml(label) + '</span><span class="forward-check hidden">✓</span>';
+    row.addEventListener('click', () => {
+      if (selected.has(key)) {
+        selected.delete(key);
+        row.querySelector('.forward-check').classList.add('hidden');
+      } else {
+        if (selected.size >= FORWARD_MAX) { toast('You can forward to up to 5 chats at a time'); return; }
+        selected.add(key);
+        row.querySelector('.forward-check').classList.remove('hidden');
+      }
+    });
+    list.appendChild(row);
+  };
+  for (const c of conversations) addRow('chat:' + c.phone, peerName(c), avatarHtml(c.name, c.phone, c.avatar));
+  for (const g of myGroups) addRow('group:' + g.id, g.name + ' (group)', '👥');
+  if (!list.children.length) list.innerHTML = '<div class="empty-note">No chats to forward to yet.</div>';
+  $('btn-forward-send').onclick = () => doForward(selected);
+}
+async function doForward(selected) {
+  if (!forwardTarget) return;
+  if (!selected.size) { toast('Pick at least one chat'); return; }
+  const targets = [...selected].map((k) => {
+    const [kind, val] = k.split(':');
+    return kind === 'group' ? { groupId: Number(val) } : { to: val };
+  });
+  $('forward-dialog').classList.add('hidden');
+  const target = forwardTarget;
+  forwardTarget = null;
+  try {
+    const r = await api('/api/messages/' + target.id + '/forward', { method: 'POST', body: JSON.stringify({ targets }) });
+    toast('Forwarded to ' + bn(r.messages.length) + ' chat' + (r.messages.length === 1 ? '' : 's'));
+    loadInbox();
+  } catch (e) {
+    toast(e.message === 'view_once' ? "View-once photos can't be forwarded" : "Couldn't forward — check your connection and try again");
+  }
+}
+$('btn-forward-cancel').addEventListener('click', () => { $('forward-dialog').classList.add('hidden'); forwardTarget = null; });
+$('forward-dialog').addEventListener('click', (e) => { if (e.target.id === 'forward-dialog') { $('forward-dialog').classList.add('hidden'); forwardTarget = null; } });
+
+// ---- starred messages (chat ⋮ menu / contact info) --------------------------
+// Newest first. Tapping a row jumps to that message in the chat — if it
+// is loaded (the chat view holds the recent history).
+async function openStarred() {
+  $('starred-overlay').classList.remove('hidden');
+  const list = $('starred-list');
+  list.innerHTML = '<div class="empty-note">Loading…</div>';
+  try {
+    const q = activeGroup
+      ? '/api/messages/starred?groupId=' + activeGroup
+      : '/api/messages/starred?with=' + encodeURIComponent(activeChat);
+    const r = await api(q);
+    list.innerHTML = '';
+    if (!(r.messages || []).length) {
+      list.innerHTML = '<div class="empty-note">No starred messages in this chat yet.<br>Long-press a message, then tap Star.</div>';
+      return;
+    }
+    for (const m of r.messages) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'starred-row';
+      const who = m.sender === session.phone ? 'You' : (m.group_id ? (m.senderName || displayId(m.sender)) : peerNameOf(m));
+      const text = m.media_kind ? mediaLabel(m.media_kind, m.media_name) : (m.body || '');
+      row.innerHTML = '<div class="starred-row-body">⭐ ' + escapeHtml(text) + '</div>' +
+        '<div class="starred-row-meta">' + escapeHtml(who) + ' • ' + fmtDateLong(m.created_at) + ' ' + fmtTime(m.created_at) + '</div>';
+      row.addEventListener('click', () => {
+        $('starred-overlay').classList.add('hidden');
+        jumpToMessage(m.id);
+      });
+      list.appendChild(row);
+    }
+  } catch {
+    list.innerHTML = '<div class="empty-note">Couldn\'t load starred messages.</div>';
+  }
+}
+$('btn-close-starred').addEventListener('click', () => $('starred-overlay').classList.add('hidden'));
 
 // ---- export chat (menu: More ▸ Export chat) --------------------------------
 // Downloads the whole 1-to-1 history as a .txt transcript, one line per
@@ -2416,6 +2578,8 @@ async function fetchChatMessages() {
     // becomes ✓✓ and then blue (seen) after the friend reads it.
     // Deleted placeholders carry no ticks, so they are skipped.
     applyTicks(r.ticks);
+    // View-once messages of mine the friend opened since the last poll.
+    if (r.viewedOnce) markViewedOnce(r.viewedOnce);
     // The peer's last activity rides on every poll, so "online" /
     // "last seen …" in the header stays fresh without another request.
     if (typeof r.peerLastSeen === 'number') {
@@ -2477,22 +2641,97 @@ function docCardHtml(m, href) {
     ? '<a class="doc-card" href="' + href + '" download="' + escapeHtml(m.media_name || 'file') + '">' + inner + '</a>'
     : '<span class="doc-card">' + inner + '</span>';
 }
+// ---- WhatsApp essentials: reactions, reply, forward, star, pin, view-once, edit ----
+const QUICK_REACTIONS = ['❤️', '😂', '😮', '😢', '🙏', '👍', '🔥', '🎉'];
+const EDIT_WINDOW_MS = 15 * 60 * 1000; // WhatsApp-style edit window
+const FORWARD_MAX = 5;
+let replyTarget = null;   // message being replied to (quote preview above the input)
+let editTarget = null;    // my own text message being edited
+let viewOnceNext = false; // attach-menu toggle: the next photo/video is view-once
+let actionTarget = null;  // message the action sheet is about
+let forwardTarget = null; // message being forwarded
+let reactionTarget = null; // message a reaction from the emoji panel is for
+let reactionMode = false; // emoji panel is picking a reaction, not typing
+const chatMsgById = new Map(); // server id -> last message object on screen (for actions)
+
 // Delete message: long-press (~500 ms) or right-click a bubble opens
 // the delete dialog. Pending bubbles have no server id yet, and a
 // placeholder that is already deleted cannot be deleted again.
 let deleteTarget = null; // message row the delete dialog is about
+// Long-press (~500 ms) or right-click a bubble opens the message
+// action sheet (reply / react / forward / star / edit / delete).
+// A quick swipe right on a bubble replies to it, like WhatsApp.
 function attachDeleteHandlers(div, m) {
   if (!m.id) return;
   let pressTimer = null;
-  div.addEventListener('pointerdown', () => {
+  let swipeStart = null;
+  div.addEventListener('pointerdown', (e) => {
     clearTimeout(pressTimer);
-    pressTimer = setTimeout(() => openDeleteMenu(m), 500);
+    swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
+    pressTimer = setTimeout(() => openMsgActions(m), 500);
   });
-  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) {
-    div.addEventListener(ev, () => clearTimeout(pressTimer));
+  div.addEventListener('pointerup', (e) => {
+    clearTimeout(pressTimer);
+    if (swipeStart && Date.now() - swipeStart.t < 500) {
+      const dx = e.clientX - swipeStart.x;
+      const dy = e.clientY - swipeStart.y;
+      if (dx > 60 && Math.abs(dy) < 40) startReply(m);
+    }
+    swipeStart = null;
+  });
+  for (const ev of ['pointerleave', 'pointercancel']) {
+    div.addEventListener(ev, () => { clearTimeout(pressTimer); swipeStart = null; });
   }
-  div.addEventListener('contextmenu', (e) => { e.preventDefault(); openDeleteMenu(m); });
+  div.addEventListener('contextmenu', (e) => { e.preventDefault(); openMsgActions(m); });
 }
+// The action sheet: 8 quick reactions (+ more) on top, then the
+// actions. Edit only shows for my own text messages inside 15 minutes;
+// "Delete for everyone" only for my own messages.
+function openMsgActions(m) {
+  if (!m.id) return;
+  const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+  if (el && el.classList.contains('msg-deleted')) return;
+  actionTarget = m;
+  const mine = m.sender === session.phone;
+  const canEdit = mine && !m.media_kind && !m.deleted_for_all && (Date.now() - (m.created_at || 0) < EDIT_WINDOW_MS);
+  $('msg-action-edit').classList.toggle('hidden', !canEdit);
+  $('msg-action-delete-all').classList.toggle('hidden', !mine);
+  $('msg-action-star').textContent = m.starred ? 'Unstar' : 'Star';
+  const row = $('msg-action-reactions');
+  row.innerHTML = '';
+  for (const em of QUICK_REACTIONS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = em;
+    b.addEventListener('click', () => { closeMsgActions(); sendReaction(m, em); });
+    row.appendChild(b);
+  }
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.textContent = '➕';
+  more.title = 'More reactions';
+  more.addEventListener('click', () => {
+    reactionTarget = m;
+    closeMsgActions();
+    reactionMode = true;
+    $('emoji-panel').classList.remove('hidden');
+    toast('Tap an emoji to react');
+  });
+  row.appendChild(more);
+  $('msg-action-dialog').classList.remove('hidden');
+}
+function closeMsgActions() {
+  $('msg-action-dialog').classList.add('hidden');
+  actionTarget = null;
+}
+$('msg-action-cancel').addEventListener('click', closeMsgActions);
+$('msg-action-dialog').addEventListener('click', (e) => { if (e.target.id === 'msg-action-dialog') closeMsgActions(); });
+$('msg-action-reply').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) startReply(m); });
+$('msg-action-forward').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) openForward(m); });
+$('msg-action-star').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) toggleStar(m); });
+$('msg-action-edit').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) startEdit(m); });
+$('msg-action-delete-all').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) openDeleteMenu(m); });
+$('msg-action-delete-me').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) { deleteTarget = m; deleteMessage('me'); } });
 function openDeleteMenu(m) {
   if (!m.id) return;
   const el = document.querySelector('.msg[data-id="' + m.id + '"]');
@@ -2539,6 +2778,206 @@ $('btn-delete-me').addEventListener('click', () => deleteMessage('me'));
 $('btn-delete-cancel').addEventListener('click', closeDeleteMenu);
 $('delete-msg-dialog').addEventListener('click', (e) => { if (e.target.id === 'delete-msg-dialog') closeDeleteMenu(); });
 
+// ---- message rendering helpers: quote, forwarded, reactions, meta ----
+// The reply quote above a bubble: sender name + quoted text (or media
+// label) from the server snapshot. Tapping it jumps to the original.
+function quoteHtml(m) {
+  if (!m.reply_to) return '';
+  return '<div class="msg-quote" data-quote-id="' + m.reply_to + '"><div class="msg-quote-name">' +
+    escapeHtml(m.reply_sender || 'Someone') + '</div><div class="msg-quote-text">' +
+    escapeHtml(m.reply_body || '') + '</div></div>';
+}
+function forwardedHtml(m) {
+  return m.forwarded ? '<div class="msg-forwarded">Forwarded</div>' : '';
+}
+// Reaction chips under a bubble, grouped by emoji with a count. My own
+// reaction is highlighted; tapping a chip shows who reacted.
+function reactionsHtml(m) {
+  const list = m.reactions || [];
+  if (!list.length) return '';
+  const groups = new Map();
+  for (const r of list) {
+    if (!groups.has(r.emoji)) groups.set(r.emoji, []);
+    groups.get(r.emoji).push(r);
+  }
+  let html = '<div class="msg-reactions">';
+  for (const [emoji, who] of groups) {
+    const mine = who.some((w) => w.phone === session.phone);
+    html += '<button type="button" class="reaction-chip' + (mine ? ' mine' : '') + '" data-emoji="' + escapeHtml(emoji) + '">' +
+      escapeHtml(emoji) + ' ' + bn(who.length) + '</button>';
+  }
+  return html + '</div>';
+}
+// One line: time + "• Edited" + ⭐ + ticks (mine only). applyTicks
+// rebuilds the same line from the bubble's dataset flags.
+function metaHtml(m) {
+  let s = fmtTime(m.created_at || Date.now());
+  if (m.edited_at) s += ' • Edited';
+  if (m.starred) s += ' ⭐';
+  if (m.sender === session.phone || !m.sender) s += ' ' + tickHtml(m);
+  return s;
+}
+function jumpToMessage(id) {
+  const el = document.querySelector('.msg[data-id="' + id + '"]');
+  if (!el) { toast('That message is not loaded in this chat'); return; }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.background = 'rgba(37, 211, 102, .25)';
+  setTimeout(() => { el.style.background = ''; }, 1200);
+}
+function showWhoReacted(m, emoji) {
+  const who = (m.reactions || []).filter((r) => r.emoji === emoji);
+  $('reaction-who-list').innerHTML = who.map((r) =>
+    '<div class="option-btn" style="cursor:default">' + escapeHtml(r.emoji) + ' ' + escapeHtml(r.name || displayId(r.phone)) +
+    (r.phone === session.phone ? ' (you)' : '') + '</div>').join('') ||
+    '<div class="option-btn" style="cursor:default">No reactions</div>';
+  $('reaction-who-dialog').classList.remove('hidden');
+}
+$('btn-reaction-who-close').addEventListener('click', () => $('reaction-who-dialog').classList.add('hidden'));
+$('reaction-who-dialog').addEventListener('click', (e) => { if (e.target.id === 'reaction-who-dialog') $('reaction-who-dialog').classList.add('hidden'); });
+// Taps inside a bubble: quote → jump, reaction chip → who reacted,
+// view-once placeholder → open it once.
+$('chat-messages').addEventListener('click', (e) => {
+  const q = e.target.closest('.msg-quote');
+  if (q) { jumpToMessage(Number(q.dataset.quoteId)); return; }
+  const chip = e.target.closest('.reaction-chip');
+  if (chip) {
+    const el = chip.closest('.msg');
+    const m = el && chatMsgById.get(Number(el.dataset.id));
+    if (m) showWhoReacted(m, chip.dataset.emoji);
+    return;
+  }
+  const vo = e.target.closest('.view-once-box:not(.opened)');
+  if (vo) {
+    const el = vo.closest('.msg');
+    const m = el && chatMsgById.get(Number(el.dataset.id));
+    if (m) openViewOnce(m, el);
+  }
+});
+async function sendReaction(m, emoji) {
+  if (!m.id) return;
+  try {
+    const r = await api('/api/messages/' + m.id + '/react', { method: 'POST', body: JSON.stringify({ emoji }) });
+    // Refresh the chips from the server's answer: everyone else's
+    // reactions stay, mine is replaced (or removed on toggle-off).
+    const others = (m.reactions || []).filter((x) => x.phone !== session.phone);
+    if (r.reacted) others.push({ emoji: r.emoji, phone: session.phone, name: 'You' });
+    m.reactions = others;
+    chatMsgById.set(m.id, m);
+    refreshReactionsRow(m);
+  } catch { toast("Couldn't react — check your connection and try again"); }
+}
+function refreshReactionsRow(m) {
+  const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+  if (!el) return;
+  el.querySelector('.msg-reactions')?.remove();
+  const html = reactionsHtml(m);
+  if (html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    el.appendChild(tmp.firstChild);
+  }
+}
+async function toggleStar(m) {
+  if (!m.id) return;
+  const star = !m.starred;
+  try {
+    await api('/api/messages/' + m.id + '/star', { method: 'POST', body: JSON.stringify({ star }) });
+    m.starred = star ? 1 : 0;
+    chatMsgById.set(m.id, m);
+    const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+    if (el) {
+      el.dataset.starred = m.starred ? '1' : '';
+      el.querySelector('.msg-meta').innerHTML = metaHtml(m);
+    }
+  } catch { toast("Couldn't star it — check your connection and try again"); }
+}
+
+// ---- reply / edit ---------------------------------------------------------
+// The quoted label for a message: its text, or "📷 Photo" / "🎥 Video" /
+// "🎤 Voice" / "📄 filename" for media.
+function replyLabel(m) {
+  if (!m.media_kind) return m.body || '';
+  if (m.media_kind === 'image') return '📷 Photo';
+  if (m.media_kind === 'video') return '🎥 Video';
+  if (m.media_kind === 'voice') return '🎤 Voice';
+  return '📄 ' + (m.media_name || 'File');
+}
+function peerNameOf(m) {
+  if (activeGroup) return m.senderName || displayId(m.sender);
+  const c = conversations.find((x) => x.phone === m.sender);
+  return c ? (c.name || displayId(m.sender)) : displayId(m.sender);
+}
+function startReply(m) {
+  replyTarget = m;
+  editTarget = null;
+  const name = m.sender === session.phone ? 'You' : peerNameOf(m);
+  $('reply-bar-title').textContent = 'Replying to ' + name;
+  $('reply-bar-text').textContent = replyLabel(m);
+  $('reply-bar').classList.remove('hidden');
+  $('chat-input').focus();
+}
+function startEdit(m) {
+  editTarget = m;
+  replyTarget = null;
+  $('reply-bar-title').textContent = 'Editing message';
+  $('reply-bar-text').textContent = m.body || '';
+  $('reply-bar').classList.remove('hidden');
+  $('chat-input').value = m.body || '';
+  updateMicSend();
+  $('chat-input').focus();
+}
+function cancelReplyEdit() {
+  replyTarget = null;
+  editTarget = null;
+  $('reply-bar').classList.add('hidden');
+}
+$('btn-reply-cancel').addEventListener('click', () => {
+  const wasEdit = !!editTarget;
+  cancelReplyEdit();
+  if (wasEdit) { $('chat-input').value = ''; updateMicSend(); }
+});
+
+// ---- view-once ------------------------------------------------------------
+// Open a received view-once photo/video: the server hands the bytes
+// over once and deletes them in the same request, so the bubble flips
+// to "Opened" and can never be viewed again. The sender can never open
+// their own view-once media.
+async function openViewOnce(m, el) {
+  if (m.sender === session.phone || m.viewed) return;
+  try {
+    const r = await api('/api/media/' + m.id);
+    const url = dataUrl(r.mimeType, r.data);
+    mediaCache.set(m.id, url);
+    m.viewed = 1;
+    chatMsgById.set(m.id, m);
+    openMediaViewer(url, m.media_kind);
+    const wrap = el && el.querySelector('.msg-media');
+    if (wrap) wrap.innerHTML = '<div class="view-once-box opened">📷 ' + (m.media_kind === 'video' ? 'Video opened' : 'Photo opened') + '</div>';
+  } catch (e) {
+    if (e.message === 'view_once_gone') {
+      m.viewed = 1;
+      toast('This photo was already opened');
+      const wrap = el && el.querySelector('.msg-media');
+      if (wrap) wrap.innerHTML = '<div class="view-once-box opened">📷 ' + (m.media_kind === 'video' ? 'Video opened' : 'Photo opened') + '</div>';
+    } else {
+      toast("Couldn't open it — check your connection and try again");
+    }
+  }
+}
+// My view-once messages that the receiver opened: flip their bubbles
+// to "Opened". The incremental fetch never re-sends old messages, so
+// this list rides on the poll.
+function markViewedOnce(ids) {
+  for (const id of ids || []) {
+    const m = chatMsgById.get(id);
+    if (!m || m.viewed) continue;
+    m.viewed = 1;
+    const el = document.querySelector('.msg[data-id="' + id + '"]');
+    const wrap = el && el.querySelector('.msg-media');
+    if (wrap) wrap.innerHTML = '<div class="view-once-box opened">📷 ' + (m.media_kind === 'video' ? 'Video opened' : 'Photo opened') + '</div>';
+  }
+}
+
 function appendMessage(m) {
   const box = $('chat-messages');
   // A message already on screen is never rendered twice. The 3-second
@@ -2569,7 +3008,10 @@ function appendMessage(m) {
   div.className = 'msg ' + (mine ? 'mine' : 'theirs') + (m.pending ? ' msg-pending' : '');
   div.dataset.id = m.id || ('tmp-' + m.tempId);
   div.dataset.ts = ts;
-  const meta = '<div class="msg-meta">' + fmtTime(ts) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
+  div.dataset.edited = m.edited_at ? '1' : '';
+  div.dataset.starred = m.starred ? '1' : '';
+  if (m.id) chatMsgById.set(m.id, m);
+  const meta = '<div class="msg-meta">' + (m.pending ? fmtTime(ts) + ' 🕐' : metaHtml(m)) + '</div>';
   // Group chats: an incoming bubble starts with the sender's name, so
   // you can tell who wrote what. (My own bubbles need no name.)
   const senderLine = (m.group_id && !mine && m.senderName)
@@ -2588,14 +3030,14 @@ function appendMessage(m) {
     // A media message the sender just uploaded carries its bytes locally
     // (localDataUrl), so it renders at once without a round trip.
     if (m.localDataUrl && m.id) mediaCache.set(m.id, m.localDataUrl);
-    div.innerHTML = senderLine + mediaHtml(m) + meta;
+    div.innerHTML = senderLine + quoteHtml(m) + forwardedHtml(m) + mediaHtml(m) + meta + reactionsHtml(m);
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     if (!m.pending) loadMediaInto(div, m);
     attachDeleteHandlers(div, m);
     return;
   }
-  div.innerHTML = senderLine + '<div>' + linkify(escapeHtml(m.body)) + '</div>' + meta;
+  div.innerHTML = senderLine + quoteHtml(m) + forwardedHtml(m) + '<div class="msg-body">' + linkify(escapeHtml(m.body)) + '</div>' + meta + reactionsHtml(m);
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
   attachDeleteHandlers(div, m);
@@ -2624,6 +3066,15 @@ function mediaHtml(m) {
       '<span class="media-retry hidden">Try again</span></div>';
   }
   const size = m.media_size ? '<div class="media-size">' + fmtBytes(m.media_size) + '</div>' : '';
+  // View-once: a tap-to-view placeholder, never the photo itself. The
+  // sender sees the same placeholder (they can never re-open it), and
+  // once viewed both sides see "Photo opened". loadMediaInto never
+  // fetches view-once bytes on its own — only the tap does.
+  if (m.view_once) {
+    if (m.viewed) return wrap + '<div class="view-once-box opened">📷 ' + (kind === 'video' ? 'Video opened' : 'Photo opened') + '</div></div>';
+    if (m.sender === session.phone) return wrap + '<div class="view-once-box opened">📷 View once ' + (kind === 'video' ? 'video' : 'photo') + '</div></div>';
+    return wrap + '<div class="view-once-box">📷 View once ' + (kind === 'video' ? 'video' : 'photo') + ' — tap to view</div></div>';
+  }
   if (kind === 'image') return wrap + '<div class="media-loading">📷 Photo loading…</div>' + size + '</div>';
   if (kind === 'video') return wrap + '<div class="media-loading">🎥 Video loading…</div>' + size + '</div>';
   if (kind === 'voice') return wrap + '<div>🎤 Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + ' loading…</div>' + size + '</div>';
@@ -3041,6 +3492,9 @@ document.addEventListener('click', (e) => {
 async function loadMediaInto(div, m) {
   const wrap = div.querySelector('.msg-media');
   if (!wrap) return;
+  // View-once media is never auto-fetched: the receiver taps the
+  // placeholder once to open it, and the server deletes the bytes then.
+  if (m.view_once) return;
   try {
     let url = mediaCache.get(m.id);
     if (!url) {
@@ -3107,16 +3561,47 @@ function saveOutbox(o) { localStorage.setItem('s19_outbox', JSON.stringify(o)); 
 async function sendMessage() {
   const body = $('chat-input').value.trim();
   if (!body || (!activeChat && !activeGroup)) return;
+  // Edit mode: save the new text instead of sending a new message.
+  // The bubble keeps its original time and gains an "Edited" mark.
+  if (editTarget) {
+    const target = editTarget;
+    cancelReplyEdit();
+    $('chat-input').value = '';
+    updateMicSend();
+    try {
+      const r = await api('/api/messages/' + target.id + '/edit', { method: 'POST', body: JSON.stringify({ body }) });
+      const m = r.message;
+      chatMsgById.set(m.id, m);
+      const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+      if (el) {
+        el.dataset.edited = '1';
+        const bodyEl = el.querySelector('.msg-body');
+        if (bodyEl) bodyEl.innerHTML = linkify(escapeHtml(m.body));
+        el.querySelector('.msg-meta').innerHTML = metaHtml(m);
+      }
+    } catch (e) {
+      toast(e.message === 'too_old' ? 'That message is too old to edit (15 minutes)' : "Couldn't edit it — check your connection and try again");
+    }
+    return;
+  }
+  const replyTo = replyTarget ? replyTarget.id : null;
+  const replySnapshot = replyTarget ? {
+    reply_to: replyTarget.id,
+    reply_body: replyLabel(replyTarget),
+    reply_sender: replyTarget.sender === session.phone ? 'You' : peerNameOf(replyTarget),
+    reply_media_kind: replyTarget.media_kind || '',
+  } : null;
   $('chat-input').value = '';
   updateMicSend();
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-  appendMessage({ body, sender: session.phone, created_at: Date.now(), pending: true, tempId, group_id: activeGroup || undefined });
+  appendMessage({ body, sender: session.phone, created_at: Date.now(), pending: true, tempId, group_id: activeGroup || undefined, ...replySnapshot });
+  cancelReplyEdit();
   try {
     let r;
     if (activeGroup) {
-      r = await api('/api/groups/' + activeGroup + '/messages', { method: 'POST', body: JSON.stringify({ body }) });
+      r = await api('/api/groups/' + activeGroup + '/messages', { method: 'POST', body: JSON.stringify({ body, replyTo }) });
     } else {
-      r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: activeChat, body }) });
+      r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: activeChat, body, replyTo }) });
     }
     addMsgBytes(bytesOf(body));
     document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
@@ -3138,7 +3623,7 @@ async function sendMessage() {
       return;
     }
     const outbox = loadOutbox();
-    outbox.push({ to: activeChat, body, tempId, created_at: Date.now() });
+    outbox.push({ to: activeChat, body, tempId, created_at: Date.now(), replyTo });
     saveOutbox(outbox);
     toast("No connection — message saved, it will send when you're back online");
   }
@@ -3158,13 +3643,23 @@ $('chat-input').addEventListener('input', updateMicSend);
 $('btn-emoji').addEventListener('click', (e) => {
   e.stopPropagation();
   const panel = $('emoji-panel');
-  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
+  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); reactionMode = false; reactionTarget = null; return; }
   if (!panel.children.length) {
     for (const em of EMOJIS) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = em;
       b.addEventListener('click', () => {
+        // Reaction mode (from the action sheet's "more"): the emoji
+        // reacts to that message instead of going into the input.
+        if (reactionMode) {
+          reactionMode = false;
+          panel.classList.add('hidden');
+          const target = reactionTarget;
+          reactionTarget = null;
+          if (target) sendReaction(target, em);
+          return;
+        }
         const input = $('chat-input');
         input.setRangeText(em, input.selectionStart, input.selectionEnd, 'end');
         input.focus();
@@ -3183,7 +3678,7 @@ async function flushOutbox() {
   const remaining = [];
   for (const item of outbox) {
     try {
-      const r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: item.to, body: item.body }) });
+      const r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: item.to, body: item.body, replyTo: item.replyTo || null }) });
       addMsgBytes(bytesOf(item.body));
       if (item.to === activeChat) {
         document.querySelector('[data-id="tmp-' + item.tempId + '"]')?.remove();
@@ -3232,6 +3727,18 @@ $('btn-attach').addEventListener('click', (e) => {
 $('attach-photo').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-image').click(); });
 $('attach-video').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-video').click(); });
 $('attach-file').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-any').click(); });
+// View once: a toggle for the NEXT photo/video only — it turns itself
+// off after one send. The menu stays open so you can pick the photo
+// right after turning it on. (Screenshots cannot be blocked in a
+// browser — the app never claims otherwise.)
+function updateViewOnceToggle() {
+  $('view-once-state').textContent = viewOnceNext ? 'On' : 'Off';
+}
+$('attach-view-once').addEventListener('click', () => {
+  viewOnceNext = !viewOnceNext;
+  updateViewOnceToggle();
+  toast(viewOnceNext ? 'View once ON — the next photo or video can be opened only once' : 'View once off');
+});
 $('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; if (!activeChat && !activeGroup) { toast('Open a chat first to send a photo'); return; } sendMediaFile('image', f); });
 $('file-video').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('video', f); });
 $('file-any').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('file', f); });
@@ -3273,14 +3780,23 @@ async function sendMediaFile(kind, file, durationSec) {
     return;
   }
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0, groupId: activeGroup || 0 });
+  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0, groupId: activeGroup || 0, replyTo: replyTarget ? replyTarget.id : null, viewOnce: viewOnceNext });
   const previewUrl = (kind === 'image' || kind === 'video') ? URL.createObjectURL(file) : '';
   appendMessage({
     tempId, sender: session.phone, created_at: Date.now(),
     body: mediaLabel(kind, file.name), media_kind: kind, media_name: file.name,
     media_type: file.type, media_size: file.size, duration: durationSec || 0,
     localPreviewUrl: previewUrl, pending: true, progress: 0, group_id: activeGroup || undefined,
+    reply_to: replyTarget ? replyTarget.id : null,
+    reply_body: replyTarget ? replyLabel(replyTarget) : '',
+    reply_sender: replyTarget ? (replyTarget.sender === session.phone ? 'You' : peerNameOf(replyTarget)) : '',
+    reply_media_kind: replyTarget ? (replyTarget.media_kind || '') : '',
+    view_once: viewOnceNext ? 1 : 0,
   });
+  // The reply and the view-once flag belong to this one send only.
+  cancelReplyEdit();
+  viewOnceNext = false;
+  updateViewOnceToggle();
   document.querySelector('[data-id="tmp-' + tempId + '"] .media-retry')
     ?.addEventListener('click', () => uploadPendingMedia(tempId));
   await uploadPendingMedia(tempId);
@@ -3308,6 +3824,8 @@ async function uploadPendingMedia(tempId) {
       // instead of inserting a second copy of the photo/video/file.
       clientKey: tempId,
     };
+    if (p.replyTo) uploadBody.replyTo = p.replyTo;
+    if (p.viewOnce) uploadBody.viewOnce = true;
     if (p.groupId) uploadBody.groupId = p.groupId;
     else uploadBody.to = activeChat;
     const r = await uploadMediaXhr(uploadBody, (pct) => setProgress(pct, false));
