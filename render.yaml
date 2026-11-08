@@ -51,6 +51,14 @@ services:
         sync: false
       - key: VAPID_PRIVATE_KEY
         sync: false
+      # Admin panel: who can see the Admin tab. Comma-separated phone
+      # numbers in the app's stored form (e.g. 8801XXXXXXXXX, no +) or
+      # Gmail addresses, e.g. 8801XXXXXXXXX,shoshikola19@gmail.com.
+      # Empty = nobody is admin, the tab stays hidden for everyone.
+      # Set this in the Dashboard (Environment tab) — it is not secret,
+      # but it belongs with the other env vars, not in git.
+      - key: ADMIN_USERS
+        value: ""
     # Free tier has an ephemeral disk: the SQLite file is lost when the
     # service restarts or redeploys. Use DATABASE_URL (Neon, free tier)
     # for permanent data instead (see README.md).
