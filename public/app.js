@@ -1328,6 +1328,12 @@ function showCallOverlay(name, status, incoming, isVideo) {
   // look exactly as before.
   $('call-overlay').classList.toggle('video', Boolean(isVideo));
   $('call-video-wrap').classList.toggle('hidden', !isVideo);
+  if (isVideo) {
+    // New call: the own-camera preview starts back in its default
+    // corner (a drag from the last call does not carry over).
+    const lv = $('local-video');
+    lv.style.left = ''; lv.style.top = ''; lv.style.right = ''; lv.style.bottom = '';
+  }
   $('btn-cam-toggle').classList.toggle('hidden', !isVideo);
   $('btn-cam-switch').classList.toggle('hidden', !isVideo);
   $('btn-cam-toggle').textContent = '📷';
@@ -1498,6 +1504,39 @@ $('btn-video-call-peer').addEventListener('click', () => {
 // Any tap on the call screen is a fresh user gesture — use it to
 // (re)start the remote video/audio playback if autoplay blocked it.
 $('call-overlay').addEventListener('pointerdown', resumeRemotePlayback);
+
+// The small own-camera preview can be dragged anywhere on the call
+// screen (like WhatsApp): press it and slide it — it stays where you
+// leave it for this call.
+const localVideoEl = $('local-video');
+let dragLocal = null;
+localVideoEl.addEventListener('pointerdown', (e) => {
+  const wrap = $('call-video-wrap').getBoundingClientRect();
+  const r = localVideoEl.getBoundingClientRect();
+  dragLocal = { dx: e.clientX - r.left, dy: e.clientY - r.top, wrap };
+  // Switch from the CSS corner (right/bottom) to explicit left/top so
+  // the preview follows the finger.
+  localVideoEl.style.left = (r.left - wrap.left) + 'px';
+  localVideoEl.style.top = (r.top - wrap.top) + 'px';
+  localVideoEl.style.right = 'auto';
+  localVideoEl.style.bottom = 'auto';
+  try { localVideoEl.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  e.preventDefault();
+});
+localVideoEl.addEventListener('pointermove', (e) => {
+  if (!dragLocal) return;
+  const w = dragLocal.wrap.width, h = dragLocal.wrap.height;
+  const vw = localVideoEl.offsetWidth, vh = localVideoEl.offsetHeight;
+  let x = e.clientX - dragLocal.wrap.left - dragLocal.dx;
+  let y = e.clientY - dragLocal.wrap.top - dragLocal.dy;
+  x = Math.max(8, Math.min(x, w - vw - 8));
+  y = Math.max(8, Math.min(y, h - vh - 8));
+  localVideoEl.style.left = x + 'px';
+  localVideoEl.style.top = y + 'px';
+});
+const endLocalDrag = () => { dragLocal = null; };
+localVideoEl.addEventListener('pointerup', endLocalDrag);
+localVideoEl.addEventListener('pointercancel', endLocalDrag);
 $('btn-cam-toggle').addEventListener('click', () => {
   if (!localStream) return;
   const vt = localStream.getVideoTracks()[0];
