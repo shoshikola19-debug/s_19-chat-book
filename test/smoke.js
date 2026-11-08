@@ -147,7 +147,8 @@ async function main() {
     idxText.includes('Manage storage') && idxText.includes('Media visibility') && idxText.includes('Chat lock')
     && idxText.includes('No groups in common') && idxText.includes('Create group with') && idxText.includes('Add to groups'));
   check('contact-info screen never claims end-to-end encryption or advanced privacy',
-    !idxText.includes('end-to-end encrypted') && !idxText.includes('Advanced chat privacy') && !idxText.includes('Encryption'));
+    !idxText.includes('are end-to-end encrypted') && idxText.includes('NOT end-to-end encrypted')
+    && !idxText.includes('Advanced chat privacy') && !idxText.includes('Encryption'));
   const menuOrder = ['menu-new-group', 'menu-view-contact', 'menu-search', 'menu-media', 'menu-mute', 'menu-disappearing', 'menu-chat-theme', 'menu-more'];
   let menuIdx = -1, menuInOrder = true;
   for (const id of menuOrder) {
@@ -295,7 +296,8 @@ async function main() {
   check('video overlay styles present', css.includes('.call-video-wrap') && css.includes('#local-video'));
   const appJs2 = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   check('melodic ringtone (original tune, two volumes)',
-    appJs2.includes('RING_MELODY') && appJs2.includes("startRinging('soft')") && appJs2.includes("startRinging('full')"));
+    appJs2.includes('RING_MELODIES') && appJs2.includes('classic') && appJs2.includes('659.25')
+    && appJs2.includes("startRinging('soft')") && appJs2.includes("startRinging('full')"));
   check('old dual-sine beep is gone', !appJs2.includes('1209') && !appJs2.includes("frequency.value = 941"));
   check('video call flow in the client (720p, flag, prioritised audio)',
     appJs2.includes('callIsVideo') && appJs2.includes('video: Boolean(isVideo)') && appJs2.includes('video: isVideo') && appJs2.includes('ideal: 1280')
@@ -737,9 +739,60 @@ async function main() {
   check('guarded viewer shows Guarded label, unguarded shows a save button',
     appJs.includes('photo-viewer-guarded') && appJs.includes('photo-viewer-download')
     && idxHtml2.includes('🔒 Guarded') && idxHtml2.includes('Save photo'));
-  check('no end-to-end encryption claim anywhere in the client',
-    !appJs.includes('end-to-end encrypted') && !idxHtml2.includes('end-to-end encrypted')
+  check('no end-to-end encryption claim anywhere in the client (only the honest "NOT" note in Help)',
+    !appJs.includes('end-to-end encrypted') && !idxHtml2.includes('are end-to-end encrypted')
+    && idxHtml2.includes('NOT end-to-end encrypted')
     && !idxHtml2.includes('Encryption'));
+  // Static guards for the audit sweep + Settings rebuild: every fixed
+  // control has a real handler, and the new Settings screens exist.
+  check('inbox camera opens the device camera, then a send-to chooser (not a dead toast)',
+    idxHtml2.includes('id="file-camera"') && idxHtml2.includes('capture="environment"')
+    && idxHtml2.includes('send-photo-dialog') && idxHtml2.includes('Send photo to')
+    && appJs.includes('pendingCameraFile') && appJs.includes('file-camera'));
+  check('in-chat search jumps between matches with a highlighted current match',
+    idxHtml2.includes('btn-search-prev') && idxHtml2.includes('btn-search-next')
+    && appJs.includes('stepSearchMatch') && appJs.includes('highlightSearchMatch')
+    && appJs.includes('search-hit') && styleCss.includes('.msg.search-hit'));
+  check('call history rows call the person back',
+    appJs.includes('startCall(item.peer'));
+  check('Manage storage shows a real breakdown instead of the media grid',
+    idxHtml2.includes('manage-storage-dialog') && idxHtml2.includes('storage-breakdown')
+    && appJs.includes('storage-breakdown') && appJs.includes('Voice notes'));
+  check('Settings has the five new rows and their screens (no dead rows)',
+    idxHtml2.includes('settings-notif-row') && idxHtml2.includes('settings-storage-row')
+    && idxHtml2.includes('settings-access-row') && idxHtml2.includes('settings-help-row')
+    && idxHtml2.includes('settings-invite-row')
+    && idxHtml2.includes('settings-notif-overlay') && idxHtml2.includes('settings-storage-overlay')
+    && idxHtml2.includes('settings-access-overlay') && idxHtml2.includes('settings-help-overlay'));
+  check('Notifications screen: per-device sound toggles, 3 ringtones, preview, and the call/message paths respect them',
+    appJs.includes('s19_notif') && appJs.includes('loadNotifSettings') && appJs.includes('saveNotifSettings')
+    && appJs.includes('RING_MELODIES') && appJs.includes("gentle") && appJs.includes("bright")
+    && appJs.includes('previewRingtone') && appJs.includes('playMsgBeep')
+    && appJs.includes('callSound') && appJs.includes('msgSound') && appJs.includes('groupSound'));
+  check('Storage and data screen mirrors the meters and splits auto-download by photos/videos',
+    idxHtml2.includes('storage2-used') && idxHtml2.includes('meter2-total')
+    && idxHtml2.includes('autodl-photos-row') && idxHtml2.includes('autodl-videos-row')
+    && appJs.includes('s19_autosave_photos') && appJs.includes('s19_autosave_videos')
+    && appJs.includes('autosavePhotosOn') && appJs.includes('autosaveVideosOn'));
+  check('Accessibility screen: larger text and reduce motion, stored per-device and applied on load',
+    idxHtml2.includes('access-text-row') && idxHtml2.includes('access-motion-row')
+    && appJs.includes('s19_a11y') && appJs.includes('applyA11y')
+    && styleCss.includes('html.large-text') && styleCss.includes('html.reduce-motion'));
+  check('Help screen states plainly that messages are NOT end-to-end encrypted and has a contact action',
+    idxHtml2.includes('help-contact-row') && appJs.includes('help-contact-row')
+    && appJs.includes('App link copied'));
+  check('Invite a friend uses the system share sheet with a clipboard fallback',
+    appJs.includes('settings-invite-row') && appJs.includes('navigator.share')
+    && appJs.includes('navigator.clipboard.writeText'));
+  // Two-step verification was cancelled by the user and must not exist
+  // anywhere: no PIN, no second code, no columns, no endpoints, no row.
+  const serverJs = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const dbJs = fs.readFileSync(path.join(__dirname, '..', 'db.js'), 'utf8');
+  check('two-step verification is fully absent (cancelled by the user)',
+    !appJs.includes('two-step') && !appJs.includes('two_step') && !appJs.includes('twostep')
+    && !idxHtml2.includes('two-step') && !idxHtml2.includes('Two-step')
+    && !serverJs.includes('two-step') && !serverJs.includes('two_step')
+    && !dbJs.includes('two_step'));
 
   console.log('== delete message + last seen + missed call ==');
   // Last seen: every authenticated request touches it (throttled to
