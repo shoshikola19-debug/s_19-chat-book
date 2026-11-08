@@ -17,6 +17,7 @@
       <img src="logo.webp" alt="S_19 CHAT BOOK লোগো" class="logo-big">
       <h1>S_19 CHAT BOOK</h1>
       <p class="welcome-sub">বন্ধুদের সাথে ফ্রিতে মেসেজ আর ভয়েস কল</p>
+      <p id="welcome-banner" class="welcome-banner hidden"></p>
       <p class="welcome-note">মেসেজ, কল, স্ট্যাটাস আর চ্যানেল — সব এক জায়গায়।</p>
       <button id="btn-agree" class="btn-primary">সম্মত আছি, চালিয়ে যাও</button>
     </div>
@@ -134,11 +135,39 @@
       <p class="app-version">S_19 CHAT BOOK • পরীক্ষার সংস্করণ</p>
     </div>
 
+    <!-- Admin (only shown when the server says this user is an admin) -->
+    <div id="tab-admin" class="tab-page hidden">
+      <div class="section-title">পরিসংখ্যান</div>
+      <div class="meter-card">
+        <div class="meter-rows">
+          <div>ব্যবহারকারী <b id="admin-stat-users">০</b></div>
+          <div>মেসেজ <b id="admin-stat-messages">০</b></div>
+          <div>কল <b id="admin-stat-calls">০</b></div>
+        </div>
+      </div>
+      <div class="section-title">ব্যবহারকারী</div>
+      <div id="admin-users" class="chat-list"></div>
+      <div class="section-title">চ্যানেল</div>
+      <div id="admin-channels" class="chat-list"></div>
+      <div class="section-title">সবাইকে ঘোষণা পাঠাও</div>
+      <div class="status-add-row">
+        <input id="admin-broadcast-input" class="input" type="text" maxlength="4000" placeholder="ঘোষণা লেখো…">
+        <button id="btn-admin-broadcast" class="btn-primary btn-small">পাঠাও</button>
+      </div>
+      <div class="section-title">সেটিংস — স্বাগতম পাতার ব্যানার</div>
+      <div class="status-add-row">
+        <input id="admin-banner-input" class="input" type="text" maxlength="300" placeholder="ব্যানারের লেখা (খালি রাখলে দেখাবে না)">
+        <button id="btn-admin-save-banner" class="btn-primary btn-small">সেভ করো</button>
+      </div>
+      <p class="hint" style="padding:0 16px">ব্যানারটা অ্যাপের প্রথম (স্বাগতম) পাতায় দেখাবে। খালি রাখলে কিছু দেখাবে না।</p>
+    </div>
+
     <nav class="bottom-nav">
       <button data-tab="chats" class="nav-btn active">💬<span>চ্যাট</span></button>
       <button data-tab="calls" class="nav-btn">📞<span>কল</span></button>
       <button data-tab="updates" class="nav-btn">⭕<span>আপডেট</span></button>
       <button data-tab="tools" class="nav-btn">🛠️<span>টুলস</span></button>
+      <button data-tab="admin" id="nav-admin" class="nav-btn hidden">🛡️<span>অ্যাডমিন</span></button>
     </nav>
   </section>
 
