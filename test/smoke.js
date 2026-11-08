@@ -97,7 +97,7 @@ async function main() {
       ssl: { rejectUnauthorized: false },
     });
     await client.connect();
-    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings, groups, group_members CASCADE');
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings, chat_settings, groups, group_members, reports CASCADE');
     await client.end();
   } else {
     console.log('== engine: SQLite (local file) ==');
@@ -139,6 +139,25 @@ async function main() {
     swJs.status === 200 && swText.includes("addEventListener('fetch'"));
   const idxText = await (await fetch(BASE + '/')).text();
   check('index offers Gmail login', idxText.includes('Gmail'));
+  check('contact-info screen has the WhatsApp rows',
+    idxText.includes('Manage storage') && idxText.includes('Media visibility') && idxText.includes('Chat lock')
+    && idxText.includes('No groups in common') && idxText.includes('Create group with') && idxText.includes('Add to groups'));
+  check('contact-info screen never claims end-to-end encryption or advanced privacy',
+    !idxText.includes('end-to-end encrypted') && !idxText.includes('Advanced chat privacy') && !idxText.includes('Encryption'));
+  const menuOrder = ['menu-new-group', 'menu-view-contact', 'menu-search', 'menu-media', 'menu-mute', 'menu-disappearing', 'menu-chat-theme', 'menu-more'];
+  let menuIdx = -1, menuInOrder = true;
+  for (const id of menuOrder) {
+    const i = idxText.indexOf('id="' + id + '"');
+    if (i < 0 || i < menuIdx) menuInOrder = false;
+    menuIdx = i;
+  }
+  check('chat menu items in WhatsApp order', menuInOrder);
+  check('chat menu More submenu has Report / Export / Shortcut / Favorites',
+    idxText.includes('menu-report') && idxText.includes('menu-block') && idxText.includes('menu-export')
+    && idxText.includes('menu-shortcut') && idxText.includes('menu-favorite'));
+  check('favorites chip and PIN / locked-chats / visibility dialogs exist',
+    idxText.includes('favorites-chip') && idxText.includes('pin-dialog') && idxText.includes('locked-chats-dialog')
+    && idxText.includes('media-visibility-dialog') && idxText.includes('report-dialog') && idxText.includes('admin-reports'));
 
   console.log('== auth ==');
   const tokA = await login(BIJOY, 'Bijoy Test');
@@ -411,10 +430,25 @@ async function main() {
   const delMissing = await fetch(BASE + '/api/admin/channels/999999', { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
   check('admin delete of missing channel -> 404', delMissing.status === 404);
 
+  console.log('== reports ==');
+  const repAnon = await post('/api/report', { peer: FRIEND, reason: 'spam' });
+  check('report needs a session', repAnon.status === 401, repAnon);
+  const repSelf = await post('/api/report', { peer: BIJOY, reason: 'self' }, tokA);
+  check('cannot report yourself', repSelf.status === 400 && repSelf.data.error === 'bad_peer', repSelf);
+  const rep = await post('/api/report', { peer: FRIEND, reason: 'Spamming the group' }, tokA);
+  check('report a peer', rep.status === 200 && rep.data.ok && typeof rep.data.id === 'number', rep);
+  const repEmpty = await post('/api/report', { peer: FRIEND, reason: '' }, tokA);
+  check('report with an empty reason works', repEmpty.status === 200 && repEmpty.data.ok, repEmpty);
+  const repNo = await get('/api/admin/reports', tokB);
+  check('non-admin reports list -> 403', repNo.status === 403, repNo);
+  const repList = await get('/api/admin/reports', tokA);
+  check('admin sees the reports with names',
+    repList.status === 200 && repList.data.reports.some((r) => r.reported === FRIEND && r.reporter === BIJOY && r.reason === 'Spamming the group' && r.reportedName === 'Friend Test'), repList);
+
   console.log('== chat settings: theme / mute / disappearing / clear / block ==');
   const set0 = await get('/api/chat-settings?with=' + FRIEND, tokA);
   check('chat settings default (not muted, no disappearing, default theme, not blocked)',
-    set0.status === 200 && set0.data.muted === 0 && set0.data.disappearing === 0 && set0.data.chatTheme === '' && set0.data.blockedByMe === 0 && set0.data.blockedByPeer === 0, set0);
+    set0.status === 200 && set0.data.muted === 0 && set0.data.disappearing === 0 && set0.data.chatTheme === '' && set0.data.blockedByMe === 0 && set0.data.blockedByPeer === 0 && set0.data.mediaVisibility === null && set0.data.favorite === 0, set0);
   const setTheme = await post('/api/chat-settings', { with: FRIEND, chatTheme: 'blue' }, tokA);
   check('set per-chat theme blue', setTheme.status === 200 && setTheme.data.chatTheme === 'blue', setTheme);
   const setThemeBad = await post('/api/chat-settings', { with: FRIEND, chatTheme: 'rainbow' }, tokA);
@@ -436,6 +470,23 @@ async function main() {
   check('inbox row carries muted flag', convsMuted.status === 200 && mutedConv && mutedConv.muted === 1, mutedConv);
   const setUnmute = await post('/api/chat-settings', { with: BIJOY, muted: false }, tokB);
   check('friend unmutes Bijoy chat', setUnmute.status === 200 && setUnmute.data.muted === 0, setUnmute);
+  // Media visibility (per-chat auto-save override) + Favorites: tri-state
+  // null = follow the global toggle, 1 = always save, 0 = never.
+  const setVis0 = await post('/api/chat-settings', { with: FRIEND, mediaVisibility: 0 }, tokA);
+  check('media visibility off for this chat', setVis0.status === 200 && setVis0.data.mediaVisibility === 0, setVis0);
+  const setVis1 = await post('/api/chat-settings', { with: FRIEND, mediaVisibility: 1 }, tokA);
+  check('media visibility on for this chat', setVis1.status === 200 && setVis1.data.mediaVisibility === 1, setVis1);
+  const setVisBad = await post('/api/chat-settings', { with: FRIEND, mediaVisibility: 5 }, tokA);
+  check('bad media visibility rejected', setVisBad.status === 400 && setVisBad.data.error === 'bad_visibility', setVisBad);
+  const setVisDef = await post('/api/chat-settings', { with: FRIEND, mediaVisibility: null }, tokA);
+  check('media visibility back to default (null)', setVisDef.status === 200 && setVisDef.data.mediaVisibility === null, setVisDef);
+  const setFav = await post('/api/chat-settings', { with: FRIEND, favorite: true }, tokA);
+  check('favorite a chat', setFav.status === 200 && setFav.data.favorite === 1, setFav);
+  const convsFav = await get('/api/conversations', tokA);
+  const favConv = (convsFav.data.conversations || []).find((c) => c.phone === FRIEND);
+  check('inbox row carries favorite flag', convsFav.status === 200 && favConv && favConv.favorite === 1, favConv);
+  const setUnfav = await post('/api/chat-settings', { with: FRIEND, favorite: false }, tokA);
+  check('unfavorite a chat', setUnfav.status === 200 && setUnfav.data.favorite === 0, setUnfav);
   // Disappearing: Bijoy sets 24h; the message gets expires_at; backdate
   // it in the DB and it hides from fetch and from the inbox preview.
   const setDisp = await post('/api/chat-settings', { with: FRIEND, disappearing: 86400 }, tokA);
@@ -640,6 +691,10 @@ async function main() {
     appJs.includes('const recMimeType = mediaRecorder.mimeType') && appJs.includes('type: recMimeType'));
   check('voice onstop no longer reads the cleared global recorder',
     !appJs.includes('type: mediaRecorder.mimeType'));
+  check('client has export, deep link, chat lock and per-chat visibility logic',
+    appJs.includes('function exportChat') && appJs.includes('handleDeepLink')
+    && appJs.includes('mediaVisibility') && appJs.includes('getLockedChats')
+    && appJs.includes('showPinDialog') && appJs.includes('renderProfileGroups'));
 
   console.log('== delete message + last seen + missed call ==');
   // Last seen: every authenticated request touches it (throttled to
