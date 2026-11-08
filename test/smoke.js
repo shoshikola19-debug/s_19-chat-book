@@ -495,6 +495,16 @@ async function main() {
     imgData.status === 200 && imgData.data.data === PNG_1X1 && imgData.data.mimeType === 'image/png', imgData);
   const imgDataSender = await get('/api/media/' + imgId, tokA);
   check('sender can download their own photo', imgDataSender.status === 200 && imgDataSender.data.data === PNG_1X1, imgDataSender);
+  // Contact profile: /api/chat-media returns the peer info plus every
+  // media item shared in this chat (metadata only, no bytes inline).
+  const chatMedia = await get('/api/chat-media?with=' + FRIEND, tokA);
+  check('chat-media returns peer info and the shared photo',
+    chatMedia.status === 200 && chatMedia.data.peer && chatMedia.data.peer.phone === FRIEND
+    && (chatMedia.data.media || []).some((m) => m.id === imgId && m.media_kind === 'image' && !('media_data' in m)), chatMedia);
+  const chatMediaBad = await get('/api/chat-media', tokA);
+  check('chat-media needs a peer', chatMediaBad.status === 400, chatMediaBad);
+  const chatMediaAnon = await get('/api/chat-media?with=' + FRIEND);
+  check('chat-media needs a session', chatMediaAnon.status === 401, chatMediaAnon);
   const imgDataStranger = await get('/api/media/' + imgId, tokG);
   check('a stranger cannot download the photo', imgDataStranger.status === 403, imgDataStranger);
   const vid = await sendMedia(FRIEND, 'video', 'test-video.mp4', 'video/mp4', FAKE_VIDEO, tokA);
