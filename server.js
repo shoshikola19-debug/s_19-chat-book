@@ -337,6 +337,9 @@ app.get('/api/contacts', auth, (req, res) => {
 // Inbox: one row per 1-to-1 conversation (contacts + anyone who messaged
 // me), newest first, with the last message and unread count.
 app.get('/api/conversations', auth, (req, res) => {
+  // A message counts as delivered as soon as the other person's app is
+  // open (it polls the inbox), even before they open the chat.
+  db.prepare('UPDATE messages SET delivered = 1 WHERE receiver = ? AND delivered = 0').run(req.phone);
   const peers = new Map();
   for (const r of db
     .prepare('SELECT contact_phone AS peer FROM contacts WHERE owner_phone = ?')
@@ -389,7 +392,16 @@ app.get('/api/messages', auth, (req, res) => {
   db.prepare(
     'UPDATE messages SET delivered = 1 WHERE sender = ? AND receiver = ? AND delivered = 0',
   ).run(withPhone, req.phone);
-  return res.json({ ok: true, messages: rows });
+  // Tick state for MY messages in this conversation — returned on every
+  // fetch, even when there are no new messages, so the sender's ticks
+  // update from ✓ to ✓✓ to seen without re-downloading the history.
+  const ticks = db
+    .prepare(
+      `SELECT id, delivered, read FROM messages
+       WHERE sender = ? AND receiver = ? ORDER BY id DESC LIMIT 100`,
+    )
+    .all(req.phone, withPhone);
+  return res.json({ ok: true, messages: rows, ticks });
 });
 
 app.post('/api/messages', auth, (req, res) => {
