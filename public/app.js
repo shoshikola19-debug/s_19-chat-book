@@ -270,6 +270,7 @@ function enterApp() {
   switchTab('chats');
   refreshAll();
   startPolling();
+  setupPushNotifications();
 }
 
 function switchTab(tab) {
@@ -505,6 +506,67 @@ async function refreshAll() {
   if (activeChat) fetchChatMessages();
 }
 
+// ---- web push notifications ---------------------------------------------------
+// After login, this device subscribes for push notifications, so a call or
+// a message can arrive even when the app is closed and the screen is off
+// (data/WiFi on) — like WhatsApp. The notification itself never carries a
+// message text, only the sender's name. If the user says no (or the
+// browser does not support push), nothing breaks: the app keeps polling
+// exactly as before, and calls/messages arrive while the app is open.
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+let pushSetupDone = false;
+async function setupPushNotifications() {
+  if (pushSetupDone) return;
+  pushSetupDone = true;
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission === 'denied') return; // user said no — respect it
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    if (Notification.permission === 'granted') {
+      // Already allowed earlier: just (re)subscribe on this login.
+      await subscribePush(reg);
+      return;
+    }
+    // "পরে" বললে ২৪ ঘণ্টা আর জিজ্ঞেস করবে না।
+    const laterAt = Number(localStorage.getItem('s19_push_later_at') || 0);
+    if (laterAt && Date.now() - laterAt < 24 * 60 * 60 * 1000) return;
+    // First explain in-app (Bengali) why notifications are needed, then
+    // ask the browser permission from the Allow button's own tap.
+    $('push-dialog').classList.remove('hidden');
+    $('btn-push-allow').addEventListener('click', async () => {
+      $('push-dialog').classList.add('hidden');
+      try {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') await subscribePush(reg);
+      } catch { /* optional — polling keeps working */ }
+    }, { once: true });
+    $('btn-push-later').addEventListener('click', () => {
+      localStorage.setItem('s19_push_later_at', String(Date.now()));
+      $('push-dialog').classList.add('hidden');
+    }, { once: true });
+  } catch { /* notifications are optional — polling keeps working */ }
+}
+async function subscribePush(reg) {
+  const keyRes = await api('/api/push/vapid-public-key');
+  const publicKey = keyRes && keyRes.publicKey;
+  if (!publicKey) return; // push is not configured on the server
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+  await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: sub }) });
+}
+
 // ---- voice calls (WebRTC, low-bandwidth) --------------------------------------
 // Voice goes peer-to-peer; the server only passes signalling messages.
 // Audio is tuned for weak networks: Opus mono at ~16 kbps with silence
@@ -644,19 +706,36 @@ async function answerCall() {
       video: false,
     });
   } catch { toast('মাইক্রোফোনের অনুমতি লাগবে'); return; }
-  iceRestarts = 0;
-  callDir = 'in';
-  callStartAt = Date.now();
-  pc = makePc();
-  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-  await pc.setRemoteDescription(new RTCSessionDescription(pendingOffer.sdp));
-  const answer = await pc.createAnswer();
-  answer.sdp = tuneSdp(answer.sdp);
-  await pc.setLocalDescription(answer);
-  await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type } }) });
-  pendingOffer = null;
-  showCallOverlay($('call-peer-name').textContent, 'কথা হচ্ছে…', false);
-  startCallTimer();
+  try {
+    iceRestarts = 0;
+    callDir = 'in';
+    callStartAt = Date.now();
+    pc = makePc();
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    // pendingOffer is the whole { sdp, type } payload — RTCSessionDescription
+    // needs that dictionary, not just the sdp string. Passing the string
+    // threw a TypeError in Chrome, so the answer signal never went out:
+    // the caller kept ringing forever and no voice ever flowed.
+    await pc.setRemoteDescription(new RTCSessionDescription(pendingOffer));
+    const answer = await pc.createAnswer();
+    answer.sdp = tuneSdp(answer.sdp);
+    await pc.setLocalDescription(answer);
+    await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type } }) });
+    pendingOffer = null;
+    showCallOverlay($('call-peer-name').textContent, 'কথা হচ্ছে…', false);
+    startCallTimer();
+  } catch (e) {
+    // Any step failing here used to die silently and leave the caller
+    // ringing forever. Clean up and tell the user in Bengali instead.
+    console.error('[answerCall]', e && e.message);
+    stopCallTracks();
+    hideCallOverlay();
+    pendingOffer = null;
+    callPeer = null;
+    callStartAt = 0;
+    callSeconds = 0;
+    toast('কল ধরা যায়নি — নেট দেখে আবার চেষ্টা করো');
+  }
 }
 async function endCall(sendSignal = true) {
   if (sendSignal && callPeer) {
