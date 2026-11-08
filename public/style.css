@@ -661,3 +661,72 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .preview-zoom button { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(17,27,33,.6); color: #fff; font-size: 24px; cursor: pointer; }
 :root[data-theme="dark"] .theme-tab-btn { color: #E9EDEF; }
 :root[data-theme="dark"] .theme-mini-preview { background-color: #0B141A; }
+
+/* ---------- WhatsApp essentials: reactions, reply, forward, star, pin, view-once, edit ---------- */
+/* Reply quote inside a bubble: green left border, sender name + quoted
+   text. Tapping it scrolls to the original message when it is loaded. */
+.msg-quote {
+  border-left: 3px solid var(--green-light, #25D366); background: rgba(0,0,0,.06);
+  border-radius: 6px; padding: 5px 8px; margin-bottom: 5px; cursor: pointer;
+  font-size: 13px; line-height: 1.35;
+}
+.msg-quote-name { font-weight: 700; color: var(--green-dark, #128C7E); font-size: 12px; }
+.msg-quote-text { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "Forwarded" label above a forwarded bubble. */
+.msg-forwarded { font-size: 12px; font-style: italic; color: var(--muted); margin-bottom: 2px; }
+/* Reaction chips under a bubble: emoji + count. My own reaction is
+   highlighted; tapping a chip shows who reacted. */
+.msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reaction-chip {
+  background: rgba(255,255,255,.75); border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 7px; font-size: 13px; cursor: pointer; line-height: 1.5;
+}
+.reaction-chip.mine { background: #D9FDD3; border-color: var(--green-light, #25D366); }
+/* View-once placeholder: tap once to open; afterwards it reads "Opened". */
+.view-once-box {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(0,0,0,.05); cursor: pointer; font-size: 14px; min-width: 180px;
+}
+.view-once-box.opened { cursor: default; color: var(--muted); font-style: italic; }
+/* Reply / edit bar above the input row. */
+.reply-bar {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  background: #fff; border-top: 1px solid var(--line);
+  border-left: 4px solid var(--green-light, #25D366);
+}
+.reply-bar-body { flex: 1; min-width: 0; }
+.reply-bar-title { font-weight: 700; font-size: 13px; color: var(--green-dark, #128C7E); }
+.reply-bar-text { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Message action sheet: quick reaction row on top of the option list. */
+.msg-action-reactions { display: flex; justify-content: space-around; padding: 6px 2px 10px; }
+.msg-action-reactions button { background: none; border: 0; font-size: 30px; cursor: pointer; padding: 4px; line-height: 1.2; }
+.msg-action-reactions button:hover { transform: scale(1.15); }
+/* View-once toggle state inside the attach menu. */
+.view-once-state { float: right; font-weight: 700; color: var(--green-dark, #128C7E); }
+/* Forward picker rows: avatar + name + a ✓ when selected. */
+.forward-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; }
+.forward-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 4px; cursor: pointer;
+  border-bottom: 1px solid var(--line); background: none; border-left: 0; border-right: 0; border-top: 0;
+  font-size: 15px; text-align: left; width: 100%; color: inherit;
+}
+.forward-row .avatar { width: 40px; height: 40px; min-width: 40px; font-size: 16px; }
+.forward-row .forward-check { margin-left: auto; color: var(--green-light, #25D366); font-weight: 700; font-size: 18px; }
+/* Starred list rows: tap one to jump to it in the chat. */
+.starred-list { display: flex; flex-direction: column; }
+.starred-row {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid var(--line); padding: 12px 16px; cursor: pointer; color: inherit;
+}
+.starred-row:active { background: var(--bg-soft); }
+.starred-row-body { font-size: 15px; line-height: 1.4; word-break: break-word; }
+.starred-row-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+/* Pinned chat rows carry a small 📌 after the name. */
+.pinned-mark { color: var(--muted); font-size: 13px; margin-left: 4px; }
+
+:root[data-theme="dark"] .msg-quote { background: rgba(255,255,255,.08); }
+:root[data-theme="dark"] .msg-quote-name { color: #25D366; }
+:root[data-theme="dark"] .reaction-chip { background: #2A3942; border-color: #3A4A54; color: #E9EDEF; }
+:root[data-theme="dark"] .reaction-chip.mine { background: #005C4B; border-color: #25D366; }
+:root[data-theme="dark"] .view-once-box { background: rgba(255,255,255,.08); }
+:root[data-theme="dark"] .reply-bar { background: #111B21; border-top-color: #2A3942; }
