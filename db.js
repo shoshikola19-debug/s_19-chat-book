@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS users (
   avatar TEXT NOT NULL DEFAULT '',
   about TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
-  blocked INTEGER NOT NULL DEFAULT 0
+  blocked INTEGER NOT NULL DEFAULT 0,
+  -- Last time this user made an authenticated request (ms). The chat
+  -- header shows "online" / "last seen …" from it. Updated at most
+  -- once a minute per user (server.js auth throttle).
+  last_seen INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -72,7 +76,38 @@ CREATE TABLE IF NOT EXISTS messages (
   -- A retry of an upload whose response was lost (flaky network)
   -- re-sends the same key, and the server returns the row that
   -- already exists instead of inserting a second copy.
-  client_key TEXT
+  client_key TEXT,
+  -- Delete message (WhatsApp-style): deleted_for_all = the sender
+  -- deleted it for everyone (shown as a placeholder bubble, media
+  -- bytes are gone); deleted_for = JSON array of phones that deleted
+  -- it only for themselves (hidden from their fetch, kept for others).
+  deleted_for_all INTEGER NOT NULL DEFAULT 0,
+  deleted_for TEXT NOT NULL DEFAULT '',
+  -- Group chats: NULL for 1-to-1 messages. A group message's receiver
+  -- is '' — the group is the addressee, and membership decides who
+  -- may read it. (Index idx_messages_group is created AFTER the
+  -- migration below, never inside this schema — see the boot-crash
+  -- note in db.js.)
+  group_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+-- Group membership, unlimited: any member may add members, the
+-- creator (role admin) may remove them. last_read_id is the newest
+-- message id this member has fetched — the group's seen ticks are
+-- computed from it (a message counts as seen only when every member
+-- who was in the group when it was sent has read past it).
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL,
+  phone TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  joined_at INTEGER NOT NULL,
+  last_read_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (group_id, phone)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
 CREATE TABLE IF NOT EXISTS statuses (
@@ -165,7 +200,8 @@ CREATE TABLE IF NOT EXISTS users (
   avatar TEXT NOT NULL DEFAULT '',
   about TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL,
-  blocked BOOLEAN NOT NULL DEFAULT FALSE
+  blocked BOOLEAN NOT NULL DEFAULT FALSE,
+  last_seen BIGINT NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -199,7 +235,24 @@ CREATE TABLE IF NOT EXISTS messages (
   media_size BIGINT NOT NULL DEFAULT 0,
   media_data TEXT,
   media_duration BIGINT NOT NULL DEFAULT 0,
-  client_key TEXT
+  client_key TEXT,
+  deleted_for_all BOOLEAN NOT NULL DEFAULT FALSE,
+  deleted_for TEXT NOT NULL DEFAULT '',
+  group_id BIGINT
+);
+CREATE TABLE IF NOT EXISTS groups (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL,
+  phone TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  joined_at BIGINT NOT NULL,
+  last_read_id BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (group_id, phone)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
 CREATE TABLE IF NOT EXISTS statuses (
@@ -314,7 +367,8 @@ async function createDb({ dbPath }) {
     await pool.query(`ALTER TABLE users
       ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS about TEXT NOT NULL DEFAULT ''`);
+      ADD COLUMN IF NOT EXISTS about TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS last_seen BIGINT NOT NULL DEFAULT 0`);
     // Migration for databases created before chat settings / media /
     // disappearing messages: new messages columns. Same pattern — safe
     // on every boot, fresh DBs already have them from the schema.
@@ -326,7 +380,10 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS media_size BIGINT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS media_data TEXT,
       ADD COLUMN IF NOT EXISTS media_duration BIGINT NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS client_key TEXT`);
+      ADD COLUMN IF NOT EXISTS client_key TEXT,
+      ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS deleted_for TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS group_id BIGINT`);
     // Idempotency key for media-upload retries (see db.js schema note).
     // NOTE: this index must ONLY be created here, AFTER the ALTER above
     // — never inside PG_SCHEMA. On an existing database the schema's
@@ -334,6 +391,9 @@ async function createDb({ dbPath }) {
     // so an index on client_key inside PG_SCHEMA crashes the boot with
     // `column "client_key" does not exist` (seen live 2026-11-08).
     await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
+    // Same rule for group_id (a migrated column): the index on it
+    // lives here, after the migration, never inside PG_SCHEMA.
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_messages_group ON messages (group_id, id)');
     return {
       engine: 'postgres',
       label: 'Neon Postgres',
@@ -373,6 +433,9 @@ async function createDb({ dbPath }) {
   if (!userCols.some((c) => c.name === 'about')) {
     db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
   }
+  if (!userCols.some((c) => c.name === 'last_seen')) {
+    db.exec('ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0');
+  }
   // Migration for databases created before chat settings / media /
   // disappearing messages: new messages columns, same check-first way.
   const msgCols = db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name);
@@ -385,12 +448,18 @@ async function createDb({ dbPath }) {
     ['media_data', 'TEXT'],
     ['media_duration', 'INTEGER NOT NULL DEFAULT 0'],
     ['client_key', 'TEXT'],
+    ['deleted_for_all', 'INTEGER NOT NULL DEFAULT 0'],
+    ['deleted_for', "TEXT NOT NULL DEFAULT ''"],
+    ['group_id', 'INTEGER'],
   ];
   for (const [col, def] of msgAdds) {
     if (!msgCols.includes(col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${def}`);
   }
   // Idempotency key for media-upload retries (see schema note above).
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
+  // Same rule for group_id (a migrated column): after the migration,
+  // never inside SQLITE_SCHEMA.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_group ON messages (group_id, id)');
   return {
     engine: 'sqlite',
     label: 'SQLite (local file)',
