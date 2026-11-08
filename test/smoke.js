@@ -440,8 +440,8 @@ async function main() {
   const FAKE_VIDEO = Buffer.from('000000186674797069736f6d0000000000000000', 'hex').toString('base64');
   const FAKE_VOICE = Buffer.from('1a45dfa3', 'hex').toString('base64');
   const FILE_TEXT = Buffer.from('Hello, this is a test document for S_19 CHAT BOOK.', 'utf8').toString('base64');
-  async function sendMedia(to, kind, fileName, mimeType, data, token, duration) {
-    return post('/api/messages/media', { to, mediaKind: kind, fileName, mimeType, size: Buffer.from(data, 'base64').length, data, duration }, token);
+  async function sendMedia(to, kind, fileName, mimeType, data, token, duration, clientKey) {
+    return post('/api/messages/media', { to, mediaKind: kind, fileName, mimeType, size: Buffer.from(data, 'base64').length, data, duration, clientKey }, token);
   }
   const img = await sendMedia(FRIEND, 'image', 'test-photo.png', 'image/png', PNG_1X1, tokA);
   check('send photo (original bytes, no compression)', img.status === 200 && img.data.message.media_kind === 'image' && img.data.message.body === '📷 ছবি', img);
@@ -486,6 +486,66 @@ async function main() {
   check('file over 5 MB rejected', bigFile.status === 413 && bigFile.data.error === 'file_too_big', { status: bigFile.status, error: bigFile.data && bigFile.data.error });
   const bigVideoDeclared = await post('/api/messages/media', { to: FRIEND, mediaKind: 'video', fileName: 'big.mp4', mimeType: 'video/mp4', size: 60 * 1024 * 1024, data: FAKE_VIDEO }, tokA);
   check('video over 50 MB declared size rejected', bigVideoDeclared.status === 413 && bigVideoDeclared.data.error === 'file_too_big', { status: bigVideoDeclared.status, error: bigVideoDeclared.data && bigVideoDeclared.data.error });
+
+  console.log('== media regression: duplicate photo + voice note ==');
+  // BUG 1 (live report 2026-11-08): sending ONE photo showed TWO.
+  // Root causes: (a) the 3s poll can render a message while its
+  // upload is still in flight, and the upload's success handler
+  // appended it again — appendMessage had no dedupe; (b) a retry of
+  // an upload whose response was lost inserted a SECOND row.
+  // The client now sends its tempId as clientKey, and the server
+  // returns the existing row for a repeated key.
+  const dupImg = await sendMedia(FRIEND, 'image', 'dup-photo.png', 'image/png', PNG_1X1, tokA, 0, 'regression-dup-photo-1');
+  check('photo with idempotency key sends', dupImg.status === 200 && dupImg.data.message.id, dupImg);
+  const dupImgId = dupImg.data.message.id;
+  const convBefore = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const countBefore = (convBefore.data.messages || []).filter((m) => m.id === dupImgId).length;
+  check('receiver fetch has exactly one copy of the photo', countBefore === 1, { countBefore });
+  const dupImgRetry = await sendMedia(FRIEND, 'image', 'dup-photo.png', 'image/png', PNG_1X1, tokA, 0, 'regression-dup-photo-1');
+  check('retry of the same upload returns the SAME message id',
+    dupImgRetry.status === 200 && dupImgRetry.data.message.id === dupImgId && dupImgRetry.data.duplicate === true, dupImgRetry);
+  const convAfter = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('receiver fetch still has exactly one copy after the retry',
+    (convAfter.data.messages || []).filter((m) => m.id === dupImgId).length === 1
+    && convAfter.data.messages.length === convBefore.data.messages.length, { before: convBefore.data.messages.length, after: convAfter.data.messages.length });
+  // The same double-send hole covered video and file too: same key,
+  // same row, no second copy.
+  const dupVid = await sendMedia(FRIEND, 'video', 'dup-video.mp4', 'video/mp4', FAKE_VIDEO, tokA, 0, 'regression-dup-video-1');
+  const dupVidRetry = await sendMedia(FRIEND, 'video', 'dup-video.mp4', 'video/mp4', FAKE_VIDEO, tokA, 0, 'regression-dup-video-1');
+  check('video retry returns the same message id, no second copy',
+    dupVid.status === 200 && dupVidRetry.status === 200 && dupVidRetry.data.message.id === dupVid.data.message.id, { first: dupVid.data.message && dupVid.data.message.id, retry: dupVidRetry.data.message && dupVidRetry.data.message.id });
+  const dupFile = await sendMedia(FRIEND, 'file', 'dup-notes.txt', 'text/plain', FILE_TEXT, tokA, 0, 'regression-dup-file-1');
+  const dupFileRetry = await sendMedia(FRIEND, 'file', 'dup-notes.txt', 'text/plain', FILE_TEXT, tokA, 0, 'regression-dup-file-1');
+  check('file retry returns the same message id, no second copy',
+    dupFile.status === 200 && dupFileRetry.status === 200 && dupFileRetry.data.message.id === dupFile.data.message.id, { first: dupFile.data.message && dupFile.data.message.id, retry: dupFileRetry.data.message && dupFileRetry.data.message.id });
+  // BUG 2 (live report 2026-11-08): a voice note never arrived.
+  // Root cause was client-side: stopVoiceRec() cleared the global
+  // mediaRecorder right after stop(), and the async onstop handler
+  // then read mediaRecorder.mimeType (null) and died before sending.
+  // The server path is pinned here with the exact MIME Android
+  // Chrome produces (audio/webm;codecs=opus): the receiver must get
+  // the note, and GET /api/media/:id must serve the exact bytes
+  // with an audio content-type.
+  const voiceOpus = await sendMedia(FRIEND, 'voice', 'voice-opus.webm', 'audio/webm;codecs=opus', FAKE_VOICE, tokA, 9, 'regression-voice-opus-1');
+  check('voice note with Android Chrome MIME sends', voiceOpus.status === 200 && voiceOpus.data.message.media_kind === 'voice' && voiceOpus.data.message.media_duration === 9, voiceOpus);
+  const voiceOpusFetch = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const voiceOpusMsg = (voiceOpusFetch.data.messages || []).find((m) => m.id === voiceOpus.data.message.id);
+  check('receiver fetch returns the voice note with duration',
+    voiceOpusFetch.status === 200 && voiceOpusMsg && voiceOpusMsg.media_kind === 'voice' && voiceOpusMsg.media_duration === 9, voiceOpusMsg);
+  const voiceOpusData = await get('/api/media/' + voiceOpus.data.message.id, tokB);
+  check('voice bytes served unchanged with an audio content-type',
+    voiceOpusData.status === 200 && voiceOpusData.data.data === FAKE_VOICE && typeof voiceOpusData.data.mimeType === 'string' && voiceOpusData.data.mimeType.indexOf('audio/') === 0, voiceOpusData);
+  // Static guards for the two client-side fixes (same style as the
+  // other static checks in this suite): the render dedupe in
+  // appendMessage, and the captured MIME type in the voice recorder
+  // — the buggy pattern must be gone.
+  const appJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  check('appendMessage dedupes by message id (no double bubble)',
+    appJs.includes('querySelector(\'.msg[data-id="\' + m.id + \'"]\')'));
+  check('voice recorder captures its MIME type before stop()',
+    appJs.includes('const recMimeType = mediaRecorder.mimeType') && appJs.includes('type: recMimeType'));
+  check('voice onstop no longer reads the cleared global recorder',
+    !appJs.includes('type: mediaRecorder.mimeType'));
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
