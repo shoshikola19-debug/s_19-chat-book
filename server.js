@@ -168,8 +168,8 @@ function codeRateLimited(phone) {
 
 async function publicUser(phone) {
   if (phone === SYSTEM_SENDER) return { phone, name: 'S_19 CHAT BOOK' };
-  const u = await db.get('SELECT phone, name FROM users WHERE phone = ?', phone);
-  return u ? { phone: u.phone, name: u.name } : { phone, name: '' };
+  const u = await db.get('SELECT phone, name, avatar, about FROM users WHERE phone = ?', phone);
+  return u ? { phone: u.phone, name: u.name, avatar: u.avatar || '', about: u.about || '' } : { phone, name: '', avatar: '', about: '' };
 }
 
 // A peer identity, except the broadcast sender is accepted as-is:
@@ -349,6 +349,43 @@ app.post('/api/set-name', ah(auth), ah(async (req, res) => {
      ON CONFLICT(phone) DO UPDATE SET name = excluded.name`,
     req.phone, name, now());
   return res.json({ ok: true, phone: req.phone, name });
+}));
+
+// ---- my profile: name, about ("Current mood") and photo ------------------
+// Edited from the Settings screen. The photo is a small square avatar —
+// the client downscales it to 256px before upload, so it stays tiny in
+// the database. (A profile photo is NOT a sent chat photo, so the
+// 100%-original-quality rule does not apply here.) Avatar and about ride
+// along in publicUser(), so contacts see them in the inbox, chat header
+// and contact profile. About is capped at 140 characters, like WhatsApp.
+const AVATAR_MAX_LEN = 150000; // ~112 KB decoded — far above a 256px JPEG, and below the 200 KB global JSON body limit so this check can actually fire
+app.post('/api/profile', ah(auth), ah(async (req, res) => {
+  const body = req.body || {};
+  const updates = {};
+  if (body.name !== undefined) {
+    const name = String(body.name).trim().slice(0, 60);
+    if (!name) return res.status(400).json({ ok: false, error: 'bad_name' });
+    updates.name = name;
+  }
+  if (body.about !== undefined) {
+    updates.about = String(body.about).trim().slice(0, 140);
+  }
+  if (body.avatar !== undefined) {
+    const avatar = String(body.avatar);
+    if (avatar !== '' && !avatar.startsWith('data:image/')) {
+      return res.status(400).json({ ok: false, error: 'bad_avatar' });
+    }
+    if (avatar.length > AVATAR_MAX_LEN) {
+      return res.status(413).json({ ok: false, error: 'avatar_too_big' });
+    }
+    updates.avatar = avatar;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  const sets = Object.keys(updates).map((k) => k + ' = ?').join(', ');
+  await db.run(`UPDATE users SET ${sets} WHERE phone = ?`, ...Object.values(updates), req.phone);
+  return res.json({ ok: true, ...(await publicUser(req.phone)) });
 }));
 
 app.get('/api/me', ah(auth), ah(async (req, res) => {
@@ -621,14 +658,14 @@ app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
   const t = now();
   const mine = await getChatSettings(req.phone, withPhone);
-  const peer = await db.get('SELECT phone, name, created_at FROM users WHERE phone = ?', withPhone);
+  const peer = await db.get('SELECT phone, name, avatar, about, created_at FROM users WHERE phone = ?', withPhone);
   const rows = await db.all(
     `SELECT id, sender, media_kind, media_name, media_type, media_size, media_duration, created_at FROM messages
      WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
        AND media_kind IS NOT NULL AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
      ORDER BY id DESC LIMIT 200`,
     req.phone, withPhone, withPhone, req.phone, t, mine.clearedAt);
-  return res.json({ ok: true, peer: peer || { phone: withPhone, name: '', created_at: 0 }, media: rows });
+  return res.json({ ok: true, peer: peer || { phone: withPhone, name: '', avatar: '', about: '', created_at: 0 }, media: rows });
 }));
 
 // ---- media messages: photo / video / voice note / file ---------------------
@@ -780,7 +817,7 @@ app.get('/api/statuses', ah(auth), ah(async (req, res) => {
     ...visible, t);
   const statuses = [];
   for (const r of rows) {
-    statuses.push({ ...r, mine: r.phone === req.phone, name: (await publicUser(r.phone)).name });
+    statuses.push({ ...r, mine: r.phone === req.phone, ...(await publicUser(r.phone)) });
   }
   return res.json({ ok: true, statuses });
 }));
