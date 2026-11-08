@@ -549,6 +549,17 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 .media-viewer-img { max-width: 100%; max-height: 92dvh; border-radius: 8px; object-fit: contain; }
+/* View-once guard (client-only deterrent — a browser app cannot block
+   the phone's screenshot buttons or screen recording; only a native
+   app can do that). While view-once media is open, a hint sits at the
+   bottom, and the moment the app loses focus the media is hidden for
+   good in that viewing session (.media-hidden) and replaced by a plain
+   "hidden" note. Context menu / dragging is disabled on view-once
+   media only (.media-vo); the normal viewer is untouched. */
+.media-viewer-vo-hint { position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; color: #B9B9B9; font-size: 13px; padding: 0 20px; }
+.media-viewer-vo-hidden { color: #fff; font-size: 15px; text-align: center; padding: 0 24px; }
+.media-viewer.media-hidden #media-viewer-img, .media-viewer.media-hidden #media-viewer-video { visibility: hidden; }
+.media-viewer.media-vo #media-viewer-img, .media-viewer.media-vo #media-viewer-video { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none; }
 
 /* Media preview before sending (WhatsApp-style): dark full-screen
    overlay. Top: cancel, HD toggle (photos only) and view-once "1"
