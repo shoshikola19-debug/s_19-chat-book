@@ -3466,11 +3466,16 @@ $('notif-ringtone-row').addEventListener('click', () => {
   $('ringtone-dialog').classList.remove('hidden');
 });
 $('btn-ringtone-cancel').addEventListener('click', () => $('ringtone-dialog').classList.add('hidden'));
+// + icon in the ringtone picker header: add your own tone from a file
+// (same file input as the "+ Add your own" row at the bottom of the list).
+$('btn-ringtone-add').addEventListener('click', () => { customToneTarget = 'ring'; $('custom-tone-input').click(); });
 $('notif-msgtone-row').addEventListener('click', () => {
   renderMsgToneList();
   $('msgtone-dialog').classList.remove('hidden');
 });
 $('btn-msgtone-cancel').addEventListener('click', () => $('msgtone-dialog').classList.add('hidden'));
+// + icon in the message-tone picker header: same file add as the ringtone one.
+$('btn-msgtone-add').addEventListener('click', () => { customToneTarget = 'msg'; $('custom-tone-input').click(); });
 $('settings-storage-row').addEventListener('click', () => {
   renderAutodlRows();
   renderMeter();
