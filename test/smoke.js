@@ -845,6 +845,15 @@ async function main() {
   check('Silent is a valid ringtone and message tone (no sound, call/message still works)',
     appJs.includes("'silent'") && appJs.includes('Silent') && appJs.includes('ringtoneDisplayName')
     && appJs.includes('msgToneDisplayName'));
+  // Guard: dialog backdrops must sit ABOVE the full-screen settings
+  // overlays (z-index 55). At 40 the ringtone/message-tone pickers
+  // rendered in the DOM but stayed invisible behind Settings, and
+  // taps did nothing (Bijoy reported it 2026-11-08 22:51; a live
+  // browser test reproduced it). 65 also clears the status/photo
+  // viewers (60) and stays below the toast (70) and media viewer (80).
+  const dialogZ = Number((styleCss.match(/\.dialog-backdrop \{[^}]*z-index:\s*(\d+)/) || [])[1] || 0);
+  const overlayZ = Number((styleCss.match(/\.profile-overlay \{[^}]*z-index:\s*(\d+)/) || [])[1] || 0);
+  check('dialog backdrop z-index is above the settings overlay z-index (pickers visible)', dialogZ > overlayZ && dialogZ > 0 && overlayZ > 0, { dialogZ, overlayZ });
   check('Storage and data screen mirrors the meters and splits auto-download by photos/videos',
     idxHtml2.includes('storage2-used') && idxHtml2.includes('meter2-total')
     && idxHtml2.includes('autodl-photos-row') && idxHtml2.includes('autodl-videos-row')
