@@ -72,6 +72,54 @@ function renderMeter() {
   $('meter-fill').style.width = Math.min(100, (total / 10e6) * 100) + '%';
 }
 
+// ---- theme (Tools tab picker) ------------------------------------------------
+// Global theme lives only on this phone (localStorage): light/dark mode +
+// accent colour (green/blue/purple). It restyles the inbox AND the chat
+// screens through CSS variables, and applies before login too.
+const THEME_ACCENTS = ['green', 'blue', 'purple'];
+function loadTheme() {
+  try {
+    const t = JSON.parse(localStorage.getItem('s19_theme') || '{}');
+    return { mode: t.mode === 'dark' ? 'dark' : 'light', accent: THEME_ACCENTS.includes(t.accent) ? t.accent : 'green' };
+  } catch { return { mode: 'light', accent: 'green' }; }
+}
+function applyTheme() {
+  const t = loadTheme();
+  document.documentElement.dataset.theme = t.mode;
+  document.documentElement.dataset.accent = t.accent;
+  document.querySelectorAll('#btn-theme-light, #btn-theme-dark').forEach((b) => {
+    b.classList.toggle('active', (b.id === 'btn-theme-dark') === (t.mode === 'dark'));
+  });
+  document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) => {
+    b.classList.toggle('selected', b.dataset.accent === t.accent);
+  });
+}
+function setTheme(mode, accent) {
+  const t = loadTheme();
+  if (mode) t.mode = mode;
+  if (accent) t.accent = accent;
+  localStorage.setItem('s19_theme', JSON.stringify(t));
+  applyTheme();
+}
+$('btn-theme-light').addEventListener('click', () => setTheme('light'));
+$('btn-theme-dark').addEventListener('click', () => setTheme('dark'));
+document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) =>
+  b.addEventListener('click', () => setTheme(null, b.dataset.accent)));
+
+// ---- media storage (Tools tab) ------------------------------------------------
+// How much of the 1 GB free storage my media uses. Shown on the Tools tab.
+async function loadStorage() {
+  try {
+    const r = await api('/api/storage');
+    const bytes = r.mediaBytes || 0;
+    $('storage-used').textContent = bytes >= 1024 * 1024
+      ? bn((bytes / (1024 * 1024)).toFixed(1)) + ' MB'
+      : bn(Math.round(bytes / 1024)) + ' KB';
+    $('storage-count').textContent = bn(r.mediaCount || 0) + 'টি';
+    $('storage-fill').style.width = Math.min(100, (bytes / (r.limitBytes || 1073741824)) * 100) + '%';
+  } catch { /* offline — keep the last numbers */ }
+}
+
 // ---- screens ----------------------------------------------------------------
 const SCREENS = ['screen-welcome', 'screen-phone', 'screen-code', 'screen-name', 'screen-app', 'screen-chat', 'screen-channel'];
 function showScreen(id) {
@@ -300,7 +348,7 @@ function switchTab(tab) {
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   if (tab === 'updates') loadUpdates();
   if (tab === 'calls') loadCallsTab();
-  if (tab === 'tools') renderMeter();
+  if (tab === 'tools') { renderMeter(); loadStorage(); }
   if (tab === 'admin') loadAdmin();
 }
 document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
@@ -333,7 +381,7 @@ function renderInbox() {
     row.innerHTML =
       '<div class="avatar">' + avatarLetter(c.name, c.phone) + '</div>' +
       '<div class="chat-row-body">' +
-        '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + '</span>' +
+        '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + (c.muted ? ' 🔇' : '') + '</span>' +
         '<span class="chat-row-time">' + (c.lastAt ? fmtTime(c.lastAt) : '') + '</span></div>' +
         '<div class="chat-row-top"><span class="chat-row-msg">' + escapeHtml(c.lastMessage || '') + '</span>' +
         (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
@@ -404,21 +452,161 @@ $('btn-confirm-add').addEventListener('click', async () => {
 });
 
 // ---- 1-to-1 chat ---------------------------------------------------------------
+// ---- per-chat settings (⋮ menu) ----------------------------------------------
+let chatSettings = null; // this chat's settings (mute / disappearing / theme / block)
+function disappearLabel(secs) {
+  return secs === 86400 ? '২৪ ঘণ্টা' : secs === 604800 ? '৭ দিন' : secs === 7776000 ? '৯০ দিন' : 'বন্ধ';
+}
 function openChat(phone, name) {
   activeChat = phone;
   chatAfterId = 0;
+  chatSettings = null;
   $('chat-messages').innerHTML = '';
+  $('chat-messages').className = 'chat-messages';
   $('chat-peer-avatar').textContent = avatarLetter(name, phone);
   $('chat-peer-name').textContent = name || displayId(phone);
   $('chat-peer-phone').textContent = displayId(phone);
+  $('chat-menu').classList.add('hidden');
+  $('attach-menu').classList.add('hidden');
+  updateBlockedNote();
   showScreen('screen-chat');
   fetchChatMessages();
+  loadChatSettings();
   api('/api/messages/read', { method: 'POST', body: JSON.stringify({ with: phone }) }).catch(() => {});
+}
+// My settings for this chat: applies the per-chat theme, the mute/block
+// labels and the blocked note. Fails silently offline — the menu still
+// opens and each action retries on its own.
+async function loadChatSettings() {
+  if (!activeChat) return;
+  try {
+    chatSettings = await api('/api/chat-settings?with=' + encodeURIComponent(activeChat));
+    applyChatTheme();
+    updateChatMenuLabels();
+    updateBlockedNote();
+  } catch { /* offline */ }
+}
+function applyChatTheme() {
+  const box = $('chat-messages');
+  box.classList.remove('chat-theme-green', 'chat-theme-blue', 'chat-theme-purple', 'chat-theme-pink', 'chat-theme-dark');
+  if (chatSettings && chatSettings.chatTheme) box.classList.add('chat-theme-' + chatSettings.chatTheme);
+  // Disappearing indicator next to the peer id.
+  $('chat-peer-phone').textContent = displayId(activeChat) +
+    (chatSettings && chatSettings.disappearing ? ' • ⏳ ' + disappearLabel(chatSettings.disappearing) : '');
+}
+function updateChatMenuLabels() {
+  if (!chatSettings) return;
+  $('menu-mute').textContent = chatSettings.muted ? '🔔 নোটিফিকেশন চালু' : '🔇 নোটিফিকেশন বন্ধ';
+  $('menu-block').textContent = chatSettings.blockedByMe ? '✅ আনব্লক করুন' : '🚫 ব্লক করুন';
+}
+function updateBlockedNote() {
+  const note = $('chat-blocked-note');
+  let disabled = false;
+  if (!chatSettings) {
+    note.classList.add('hidden');
+  } else if (chatSettings.blockedByMe) {
+    note.textContent = 'তুমি এই বন্ধুকে ব্লক করেছো — আনব্লক না করা পর্যন্ত মেসেজ বা কল যাবে না।';
+    note.classList.remove('hidden');
+    disabled = true;
+  } else if (chatSettings.blockedByPeer) {
+    note.textContent = 'এই বন্ধু তোমাকে ব্লক করেছে — তুমি আর মেসেজ বা কল পাঠাতে পারবে না।';
+    note.classList.remove('hidden');
+    disabled = true;
+  } else {
+    note.classList.add('hidden');
+  }
+  $('chat-input').disabled = disabled;
+  $('btn-send-msg').disabled = disabled;
+  $('btn-attach').disabled = disabled;
+  $('btn-call-peer').disabled = disabled;
 }
 $('btn-back-chats').addEventListener('click', () => {
   activeChat = null;
   showScreen('screen-app');
   loadInbox();
+});
+
+$('btn-chat-menu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('chat-menu').classList.toggle('hidden');
+  $('attach-menu').classList.add('hidden');
+});
+document.addEventListener('click', (e) => {
+  if (!$('chat-menu').classList.contains('hidden') && !e.target.closest('#chat-menu') && e.target.id !== 'btn-chat-menu') {
+    $('chat-menu').classList.add('hidden');
+  }
+  if (!$('attach-menu').classList.contains('hidden') && !e.target.closest('#attach-menu') && e.target.id !== 'btn-attach') {
+    $('attach-menu').classList.add('hidden');
+  }
+});
+async function saveChatSettings(patch, doneMsg) {
+  if (!activeChat) return;
+  try {
+    chatSettings = await api('/api/chat-settings', { method: 'POST', body: JSON.stringify({ with: activeChat, ...patch }) });
+    applyChatTheme();
+    updateChatMenuLabels();
+    updateBlockedNote();
+    if (doneMsg) toast(doneMsg);
+    loadInbox();
+  } catch { toast('বদলানো যায়নি — নেট দেখে আবার চেষ্টা করো'); }
+}
+$('menu-mute').addEventListener('click', () => {
+  $('chat-menu').classList.add('hidden');
+  const muted = !(chatSettings && chatSettings.muted);
+  saveChatSettings({ muted }, muted ? 'এই চ্যাটের নোটিফিকেশন বন্ধ করা হয়েছে' : 'এই চ্যাটের নোটিফিকেশন চালু করা হয়েছে');
+});
+$('menu-disappearing').addEventListener('click', () => {
+  if (!activeChat) return;
+  $('chat-menu').classList.add('hidden');
+  document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
+    b.classList.toggle('selected', Number(b.dataset.disappearing) === (chatSettings ? chatSettings.disappearing : 0));
+  });
+  $('disappearing-dialog').classList.remove('hidden');
+});
+$('btn-disappearing-cancel').addEventListener('click', () => $('disappearing-dialog').classList.add('hidden'));
+document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (!activeChat) return;
+    const secs = Number(b.dataset.disappearing);
+    $('disappearing-dialog').classList.add('hidden');
+    saveChatSettings({ disappearing: secs },
+      secs === 0 ? 'গায়েব মেসেজ বন্ধ করা হয়েছে' : 'গায়েব মেসেজ চালু — ' + disappearLabel(secs) + ' পর মেসেজ মুছে যাবে');
+  });
+});
+$('menu-chat-theme').addEventListener('click', () => {
+  if (!activeChat) return;
+  $('chat-menu').classList.add('hidden');
+  document.querySelectorAll('.chat-theme-opt').forEach((b) => {
+    b.classList.toggle('selected', b.dataset.chatTheme === (chatSettings ? chatSettings.chatTheme : ''));
+  });
+  $('chat-theme-dialog').classList.remove('hidden');
+});
+$('btn-chat-theme-cancel').addEventListener('click', () => $('chat-theme-dialog').classList.add('hidden'));
+document.querySelectorAll('.chat-theme-opt').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (!activeChat) return;
+    $('chat-theme-dialog').classList.add('hidden');
+    saveChatSettings({ chatTheme: b.dataset.chatTheme }, 'চ্যাট থিম বদলে গেছে');
+  });
+});
+$('menu-clear').addEventListener('click', async () => {
+  if (!activeChat) return;
+  $('chat-menu').classList.add('hidden');
+  if (!confirm('এই চ্যাটের সব মেসেজ তোমার ফোন থেকে মুছে যাবে। বন্ধুর ফোনে থাকবে। মুছে দেবে?')) return;
+  try {
+    await api('/api/chat-settings/clear', { method: 'POST', body: JSON.stringify({ with: activeChat }) });
+    chatAfterId = 0;
+    $('chat-messages').innerHTML = '';
+    toast('চ্যাট মোছা হয়েছে');
+    loadInbox();
+  } catch { toast('মোছা যায়নি — নেট দেখে আবার চেষ্টা করো'); }
+});
+$('menu-block').addEventListener('click', () => {
+  if (!activeChat) return;
+  $('chat-menu').classList.add('hidden');
+  const blocking = !(chatSettings && chatSettings.blockedByMe);
+  if (blocking && !confirm('এই বন্ধুকে ব্লক করলে সে তোমাকে মেসেজ বা কল করতে পারবে না, তুমিও পারবে না। ব্লক করবে?')) return;
+  saveChatSettings({ blocked: blocking }, blocking ? 'ব্লক করা হয়েছে' : 'আনব্লক করা হয়েছে');
 });
 
 async function fetchChatMessages() {
@@ -427,7 +615,10 @@ async function fetchChatMessages() {
     const r = await api('/api/messages?with=' + encodeURIComponent(activeChat) + '&afterId=' + chatAfterId);
     for (const m of r.messages || []) {
       appendMessage(m);
-      if (m.receiver === session.phone) addMsgBytes(bytesOf(m.body));
+      // Media bytes are counted when the media itself downloads (in
+      // loadMediaInto); text bytes are counted here. The body of a media
+      // message is only its preview label, so it is not counted.
+      if (m.receiver === session.phone && !m.media_kind) addMsgBytes(bytesOf(m.body));
       chatAfterId = Math.max(chatAfterId, m.id);
     }
     // Re-render ticks for my messages from the ticks map — this works
@@ -457,11 +648,95 @@ function appendMessage(m) {
   div.className = 'msg ' + (mine ? 'mine' : 'theirs') + (m.pending ? ' msg-pending' : '');
   div.dataset.id = m.id || ('tmp-' + m.tempId);
   div.dataset.ts = m.created_at || Date.now();
-  div.innerHTML = '<div>' + escapeHtml(m.body) + '</div>' +
-    '<div class="msg-meta">' + fmtTime(m.created_at) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
+  const meta = '<div class="msg-meta">' + fmtTime(m.created_at) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
+  if (m.media_kind) {
+    // A media message the sender just uploaded carries its bytes locally
+    // (localDataUrl), so it renders at once without a round trip.
+    if (m.localDataUrl && m.id) mediaCache.set(m.id, m.localDataUrl);
+    div.innerHTML = mediaHtml(m) + meta;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    if (!m.pending) loadMediaInto(div, m);
+    return;
+  }
+  div.innerHTML = '<div>' + escapeHtml(m.body) + '</div>' + meta;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
+
+// The inside of a media bubble. Pending bubbles (still uploading) show a
+// local preview + progress bar + retry; finished ones show a placeholder
+// until loadMediaInto() fills in the real bytes (lazy fetch).
+function mediaHtml(m) {
+  const kind = m.media_kind;
+  const wrap = '<div class="msg-media">';
+  if (m.pending) {
+    let preview = '';
+    if ((kind === 'image' || kind === 'video') && m.localPreviewUrl) {
+      preview = kind === 'image'
+        ? '<img src="' + m.localPreviewUrl + '" alt="ছবি">'
+        : '<video src="' + m.localPreviewUrl + '" muted playsinline></video>';
+    } else if (kind === 'voice') {
+      preview = '<div>🎤 ভয়েস • ' + fmtCallTime(m.duration || 0) + '</div>';
+    } else {
+      preview = '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></div>';
+    }
+    return wrap + preview +
+      '<div class="media-progress"><div style="width:' + (m.progress || 0) + '%"></div></div>' +
+      '<div class="media-progress-label">আপলোড হচ্ছে… ' + bn(m.progress || 0) + '%</div>' +
+      '<span class="media-retry hidden">আবার চেষ্টা করো</span></div>';
+  }
+  const size = m.media_size ? '<div class="media-size">' + fmtBytes(m.media_size) + '</div>' : '';
+  if (kind === 'image') return wrap + '<div class="media-loading">📷 ছবি লোড হচ্ছে…</div>' + size + '</div>';
+  if (kind === 'video') return wrap + '<div class="media-loading">🎥 ভিডিও লোড হচ্ছে…</div>' + size + '</div>';
+  if (kind === 'voice') return wrap + '<div>🎤 ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + ' লোড হচ্ছে…</div>' + size + '</div>';
+  return wrap + '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></div>' + size + '<div class="media-loading">লোড হচ্ছে…</div></div>';
+}
+
+// Pulls one message's media bytes (once — then cached) and renders the
+// thumbnail / player / download link. The bytes count toward the data
+// meter, like a received message.
+async function loadMediaInto(div, m) {
+  const wrap = div.querySelector('.msg-media');
+  if (!wrap) return;
+  try {
+    let url = mediaCache.get(m.id);
+    if (!url) {
+      const r = await api('/api/media/' + m.id);
+      url = dataUrl(r.mimeType, r.data);
+      mediaCache.set(m.id, url);
+      addMsgBytes(r.size || 0);
+    }
+    const kind = m.media_kind;
+    if (kind === 'image') {
+      wrap.innerHTML = '<img src="' + url + '" alt="ছবি">';
+      wrap.querySelector('img').addEventListener('click', () => openMediaViewer(url));
+    } else if (kind === 'video') {
+      wrap.innerHTML = '<video src="' + url + '" controls preload="metadata" playsinline></video>';
+    } else if (kind === 'voice') {
+      wrap.innerHTML = '<div>🎤 ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div><audio src="' + url + '" controls preload="metadata"></audio>';
+    } else {
+      wrap.innerHTML = '<a class="media-file" href="' + url + '" download="' + escapeHtml(m.media_name || 'file') + '">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></a><div class="media-size">' + fmtBytes(m.media_size || 0) + ' • চাপ দিলে ডাউনলোড হবে</div>';
+    }
+  } catch {
+    wrap.innerHTML = '<div class="media-loading">লোড হয়নি — <span class="media-retry">আবার চেষ্টা করো</span></div>';
+    wrap.querySelector('.media-retry').addEventListener('click', () => loadMediaInto(div, m));
+  }
+}
+function openMediaViewer(url) {
+  $('media-viewer-img').src = url;
+  $('media-viewer').classList.remove('hidden');
+}
+$('btn-close-media').addEventListener('click', () => {
+  $('media-viewer').classList.add('hidden');
+  $('media-viewer-img').src = '';
+});
+$('media-viewer').addEventListener('click', (e) => {
+  if (e.target.id === 'media-viewer') {
+    $('media-viewer').classList.add('hidden');
+    $('media-viewer-img').src = '';
+  }
+});
 
 // Offline outbox: messages typed without network wait here and send
 // themselves as soon as the network returns.
@@ -482,7 +757,14 @@ async function sendMessage() {
     document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
     appendMessage(r.message);
     chatAfterId = Math.max(chatAfterId, r.message.id);
-  } catch {
+  } catch (e) {
+    // A block is final — do NOT park the message in the outbox.
+    if (e.message === 'you_blocked' || e.message === 'blocked_by_peer') {
+      document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
+      toast(e.message === 'you_blocked' ? 'তুমি এই বন্ধুকে ব্লক করেছো' : 'এই বন্ধু তোমাকে ব্লক করেছে');
+      loadChatSettings();
+      return;
+    }
     const outbox = loadOutbox();
     outbox.push({ to: activeChat, body, tempId, created_at: Date.now() });
     saveOutbox(outbox);
@@ -505,12 +787,203 @@ async function flushOutbox() {
         appendMessage(r.message);
         chatAfterId = Math.max(chatAfterId, r.message.id);
       }
-    } catch { remaining.push(item); }
+    } catch (e) {
+      // A block is final — drop the queued message instead of retrying.
+      if (e.message !== 'you_blocked' && e.message !== 'blocked_by_peer') remaining.push(item);
+    }
   }
   saveOutbox(remaining);
   if (remaining.length < outbox.length) loadInbox();
 }
 window.addEventListener('online', () => { toast('নেট ফিরেছে'); flushOutbox(); refreshAll(); });
+
+// ---- media messages (photo / video / voice note / file) ---------------------
+// Original quality, always: the file bytes are sent exactly as picked —
+// no resize, no re-encode, no compression. The caps exist only to protect
+// the 1 GB free storage: photo 10 MB, video 50 MB, voice 10 MB, file 5 MB.
+// A file over its cap is rejected with a clear message — never squeezed
+// to fit, and never silently degraded on a slow network.
+const MEDIA_CAPS = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024, voice: 10 * 1024 * 1024, file: 5 * 1024 * 1024 };
+const MEDIA_CAP_LABEL = { image: '১০ MB', video: '৫০ MB', voice: '১০ MB', file: '৫ MB' };
+const mediaCache = new Map(); // message id -> data URL (already downloaded)
+const pendingMedia = new Map(); // tempId -> { kind, file, fileName, mimeType, duration }
+
+function fmtBytes(n) {
+  if (n >= 1024 * 1024) return bn((n / (1024 * 1024)).toFixed(1)) + ' MB';
+  if (n >= 1024) return bn(Math.round(n / 1024)) + ' KB';
+  return bn(n) + ' B';
+}
+function dataUrl(mime, b64) { return 'data:' + (mime || 'application/octet-stream') + ';base64,' + b64; }
+function mediaLabel(kind, fileName) {
+  if (kind === 'image') return '📷 ছবি';
+  if (kind === 'video') return '🎥 ভিডিও';
+  if (kind === 'voice') return '🎤 ভয়েস';
+  return '📄 ' + (fileName || 'ফাইল');
+}
+
+$('btn-attach').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('attach-menu').classList.toggle('hidden');
+  $('chat-menu').classList.add('hidden');
+});
+$('attach-photo').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-image').click(); });
+$('attach-video').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-video').click(); });
+$('attach-file').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-any').click(); });
+$('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('image', f); });
+$('file-video').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('video', f); });
+$('file-any').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('file', f); });
+
+// Upload with progress (fetch has no upload progress, so XHR). The
+// percentage shows in the bubble; on failure the bubble offers a retry —
+// the file is NEVER shrunk or re-encoded to make the upload faster.
+function uploadMediaXhr(body, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/messages/media');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    if (session && session.token) xhr.setRequestHeader('Authorization', 'Bearer ' + session.token);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401) { clearSession(); session = null; showScreen('screen-welcome'); return reject(new Error('logged_out')); }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      reject(new Error((data && data.error) || ('http_' + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('network'));
+    xhr.send(JSON.stringify(body));
+  });
+}
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(new Error('read_failed'));
+    r.readAsDataURL(file);
+  });
+}
+async function sendMediaFile(kind, file, durationSec) {
+  if (!activeChat) return;
+  const cap = MEDIA_CAPS[kind];
+  if (file.size > cap) {
+    toast('ফাইলটা অনেক বড় — ' + MEDIA_CAP_LABEL[kind] + '-এর বেশি পাঠানো যায় না (ফ্রি স্টোরেজের সীমা)');
+    return;
+  }
+  const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
+  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0 });
+  const previewUrl = (kind === 'image' || kind === 'video') ? URL.createObjectURL(file) : '';
+  appendMessage({
+    tempId, sender: session.phone, created_at: Date.now(),
+    body: mediaLabel(kind, file.name), media_kind: kind, media_name: file.name,
+    media_type: file.type, media_size: file.size, duration: durationSec || 0,
+    localPreviewUrl: previewUrl, pending: true, progress: 0,
+  });
+  document.querySelector('[data-id="tmp-' + tempId + '"] .media-retry')
+    ?.addEventListener('click', () => uploadPendingMedia(tempId));
+  await uploadPendingMedia(tempId);
+}
+async function uploadPendingMedia(tempId) {
+  const p = pendingMedia.get(tempId);
+  if (!p || !activeChat) return;
+  const el = document.querySelector('[data-id="tmp-' + tempId + '"]');
+  const setProgress = (pct, failed) => {
+    if (!el) return;
+    const bar = el.querySelector('.media-progress > div');
+    const lab = el.querySelector('.media-progress-label');
+    if (bar) bar.style.width = pct + '%';
+    if (lab) lab.textContent = failed ? 'পাঠানো যায়নি — নিচে চাপ দিয়ে আবার চেষ্টা করো' : 'আপলোড হচ্ছে… ' + bn(pct) + '%';
+    const retry = el.querySelector('.media-retry');
+    if (retry) retry.classList.toggle('hidden', !failed);
+  };
+  try {
+    const b64 = await fileToBase64(p.file);
+    const r = await uploadMediaXhr({
+      to: activeChat, mediaKind: p.kind, fileName: p.fileName,
+      mimeType: p.mimeType, size: p.file.size, data: b64, duration: p.duration,
+    }, (pct) => setProgress(pct, false));
+    addMsgBytes(p.file.size);
+    pendingMedia.delete(tempId);
+    el?.remove();
+    appendMessage({ ...r.message, localDataUrl: dataUrl(p.mimeType, b64), duration: p.duration });
+    chatAfterId = Math.max(chatAfterId, r.message.id);
+  } catch (e) {
+    if (e.message === 'file_too_big') {
+      el?.remove();
+      pendingMedia.delete(tempId);
+      toast('ফাইলটা অনেক বড় — ' + MEDIA_CAP_LABEL[p.kind] + '-এর বেশি পাঠানো যায় না');
+    } else if (e.message === 'you_blocked') {
+      el?.remove();
+      pendingMedia.delete(tempId);
+      toast('তুমি এই বন্ধুকে ব্লক করেছো');
+      loadChatSettings();
+    } else if (e.message === 'blocked_by_peer') {
+      el?.remove();
+      pendingMedia.delete(tempId);
+      toast('এই বন্ধু তোমাকে ব্লক করেছে');
+      loadChatSettings();
+    } else {
+      setProgress(0, true); // keep the bubble with a retry link
+    }
+  }
+}
+
+// ---- voice messages (record in the app) -------------------------------------
+// A voice MESSAGE is not a voice call: it records with MediaRecorder at
+// good quality (128 kbps, no low-bitrate crush) and sends as a media
+// message, playable in the chat with its duration shown.
+let mediaRecorder = null;
+let recChunks = [];
+let recStartAt = 0;
+let recTimerId = null;
+$('attach-voice').addEventListener('click', async () => {
+  $('attach-menu').classList.add('hidden');
+  if (mediaRecorder && mediaRecorder.state === 'recording') return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch {
+    toast('মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও');
+    return;
+  }
+  try {
+    mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 128000 });
+  } catch {
+    mediaRecorder = new MediaRecorder(stream);
+  }
+  recChunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    const secs = Math.max(1, Math.round((Date.now() - recStartAt) / 1000));
+    if (blob.size > 0) {
+      const file = new File([blob], 'voice-' + Date.now() + '.webm', { type: blob.type });
+      sendMediaFile('voice', file, secs);
+    }
+  };
+  mediaRecorder.start();
+  recStartAt = Date.now();
+  $('voice-rec-bar').classList.remove('hidden');
+  $('voice-rec-time').textContent = '০০:০০';
+  recTimerId = setInterval(() => {
+    $('voice-rec-time').textContent = fmtCallTime(Math.floor((Date.now() - recStartAt) / 1000));
+  }, 500);
+});
+function stopVoiceRec(send) {
+  if (recTimerId) { clearInterval(recTimerId); recTimerId = null; }
+  $('voice-rec-bar').classList.add('hidden');
+  if (!mediaRecorder) return;
+  if (send) {
+    if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+  } else {
+    mediaRecorder.onstop = null; // cancel: do not send the recording
+    if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+    if (mediaRecorder.stream) mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+  }
+  mediaRecorder = null;
+}
+$('btn-voice-stop').addEventListener('click', () => stopVoiceRec(true));
+$('btn-voice-cancel').addEventListener('click', () => stopVoiceRec(false));
 
 // ---- polling (pauses when hidden / offline) -------------------------------------
 let pollTimer = null;
@@ -872,7 +1345,12 @@ setInterval(async () => {
           pendingOffer = s.payload;
           const name = (conversations.find((c) => c.phone === s.from) || {}).name;
           showCallOverlay(name || displayId(s.from), 'কল আসছে…', true);
-          startRinging();
+          // A muted chat gets no sound — the overlay still shows, so the
+          // call can be answered if the user sees it. If the settings
+          // fetch fails, ring anyway: better a sound than a missed call.
+          api('/api/chat-settings?with=' + encodeURIComponent(s.from)).then((st) => {
+            if (!st.muted) startRinging();
+          }).catch(() => startRinging());
         }
         continue;
       }
@@ -1209,6 +1687,7 @@ $('btn-logout').addEventListener('click', async () => {
 
 // ---- init -----------------------------------------------------------------------------
 (function init() {
+  applyTheme();
   fillCountrySelect($('country-select'), localStorage.getItem('s19_last_dial') || '+880');
   // Welcome-screen banner, set by the admin from the Admin panel.
   // Public endpoint, no login needed; empty = hidden.
