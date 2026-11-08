@@ -15,6 +15,17 @@ const fmtTime = (ts) => {
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 };
 const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+// Long date for date separators ("October 26, 2026") and 12-hour clock
+// for "last seen 6:40 AM".
+const fmtDateLong = (ts) => new Date(ts).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+const fmtDateShortYear = (ts) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtTime12 = (ts) => {
+  const d = new Date(ts);
+  let h = d.getHours();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return h + ':' + String(d.getMinutes()).padStart(2, '0') + ' ' + ampm;
+};
 
 function toast(msg) {
   const t = $('toast');
@@ -95,6 +106,10 @@ function applyTheme() {
   const t = loadTheme();
   document.documentElement.dataset.theme = t.mode;
   document.documentElement.dataset.accent = t.accent;
+  // The strip below the bottom nav (Android system area) follows the
+  // theme colour: white in light mode, dark in dark mode — never green.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t.mode === 'dark' ? '#0B141A' : '#FFFFFF');
   document.querySelectorAll('#btn-theme-light, #btn-theme-dark').forEach((b) => {
     b.classList.toggle('active', (b.id === 'btn-theme-dark') === (t.mode === 'dark'));
   });
@@ -374,9 +389,30 @@ $('name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') save
 // ---- main app ----------------------------------------------------------------
 let conversations = [];
 let activeChat = null; // peer phone
+let peerLastSeen = 0; // ms timestamp of the peer's last activity (0 = unknown)
 let chatAfterId = 0;
 let chatSearch = '';
 let channelSearch = '';
+let myGroups = []; // groups I belong to, for the inbox
+let activeGroup = null; // group id when a group chat is open (no group calls)
+let groupInfo = null; // the open group's full info {id, name, members, ...}
+
+// Chat header sub-line: "online" when the peer was active in the last
+// minute, "last seen 6:40 AM" today, "last seen Oct 26, 2026" before
+// that. Unknown (never seen) falls back to the peer's number.
+function formatLastSeen(ts) {
+  if (!ts) return '';
+  if (Date.now() - ts < 60 * 1000) return 'online';
+  const sameDay = new Date(ts).toDateString() === new Date().toDateString();
+  return sameDay ? 'last seen ' + fmtTime12(ts) : 'last seen ' + fmtDateShortYear(ts);
+}
+function updatePeerSubline() {
+  if (!activeChat) return;
+  let s = formatLastSeen(peerLastSeen);
+  if (!s) s = displayId(activeChat);
+  if (chatSettings && chatSettings.disappearing) s += ' • ⏳ ' + disappearLabel(chatSettings.disappearing);
+  $('chat-peer-phone').textContent = s;
+}
 
 function enterApp() {
   $('tools-name').textContent = session.name || 'My name';
@@ -416,16 +452,15 @@ function openSettings() {
   $('settings-name').textContent = myProfile.name || '';
   $('settings-about').textContent = myProfile.about || 'Hey there! I am using S_19 CHAT BOOK.';
   $('settings-phone').textContent = displayId(myProfile.phone);
+  renderAutosaveRow();
   $('settings-overlay').classList.remove('hidden');
 }
-$('btn-app-menu').addEventListener('click', (e) => {
-  e.stopPropagation();
-  $('app-menu').classList.toggle('hidden');
-});
-$('menu-settings').addEventListener('click', () => {
-  $('app-menu').classList.add('hidden');
-  openSettings();
-});
+// Inbox header gear: opens Settings directly (the old ⋮ menu only
+// ever held Settings, so nothing is lost by removing it).
+$('btn-header-settings').addEventListener('click', openSettings);
+// Header camera (WhatsApp-style): opens the photo picker, like the
+// camera button in the chat input bar.
+$('btn-header-camera').addEventListener('click', () => $('file-image').click());
 $('tools-profile-card').addEventListener('click', openSettings);
 $('btn-close-settings').addEventListener('click', () => $('settings-overlay').classList.add('hidden'));
 $('settings-avatar-wrap').addEventListener('click', () => $('settings-avatar-input').click());
@@ -507,35 +542,121 @@ function avatarHtml(name, phone, avatar) {
 function peerName(c) { return c.name || displayId(c.phone); }
 
 // ---- inbox -------------------------------------------------------------------
+let allContacts = [];
 async function loadInbox() {
   try {
     const r = await api('/api/conversations');
     conversations = r.conversations || [];
     renderInbox();
   } catch { /* offline — keep the last list on screen */ }
+  try {
+    const g = await api('/api/groups');
+    myGroups = g.groups || [];
+    renderInbox();
+  } catch { /* offline — keep the last list on screen */ }
+  try {
+    const c = await api('/api/contacts');
+    allContacts = c.contacts || [];
+    renderStartChatting();
+  } catch { /* offline — keep the last list on screen */ }
 }
+const MISSED_PHONE_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/><line x1="23" y1="1" x2="17" y2="7"/><line x1="17" y1="1" x2="23" y2="7"/></svg>';
 function renderInbox() {
   const q = chatSearch.trim().toLowerCase();
   const list = $('chat-list');
   list.innerHTML = '';
-  const rows = conversations.filter((c) => !q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q));
-  if (!rows.length) {
+  // 1-to-1 chats and groups share one list, newest first — exactly
+  // like WhatsApp. A group row shows its name, the last message
+  // prefixed with the sender's name ("Sany: Hi"), and a 👥 avatar.
+  const rows = conversations.filter((c) => !q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q))
+    .map((c) => ({ kind: 'chat', ...c }));
+  const grows = myGroups.filter((g) => !q || g.name.toLowerCase().includes(q))
+    .map((g) => ({ kind: 'group', ...g }));
+  const all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  if (!all.length) {
     list.innerHTML = '<div class="empty-note">Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.</div>';
-    return;
   }
-  for (const c of rows) {
+  for (const c of all) {
+    if (c.kind === 'group') {
+      const row = document.createElement('div');
+      row.className = 'chat-row';
+      const preview = c.lastSenderName
+        ? escapeHtml(c.lastSenderName + ': ' + (c.lastMessage || ''))
+        : escapeHtml(c.lastMessage || '');
+      row.innerHTML =
+        '<div class="avatar">👥</div>' +
+        '<div class="chat-row-body">' +
+          '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(c.name) + '</span>' +
+          '<span class="chat-row-time">' + (c.lastAt ? fmtTime(c.lastAt) : '') + '</span></div>' +
+          '<div class="chat-row-top"><span class="chat-row-msg">' + preview + '</span>' +
+          (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
+        '</div>';
+      row.addEventListener('click', () => openGroup(c.id, c.name));
+      list.appendChild(row);
+      continue;
+    }
     const row = document.createElement('div');
     row.className = 'chat-row';
+    // A missed call newer than the last message takes over the preview,
+    // in red with a red phone icon — exactly like WhatsApp.
+    const missed = c.missedAt && c.missedAt > (c.lastAt || 0);
+    const preview = missed
+      ? '<span class="chat-row-msg missed">' + MISSED_PHONE_SVG + (c.missedVideo ? 'Missed video call' : 'Missed voice call') + '</span>'
+      : '<span class="chat-row-msg">' + escapeHtml(c.lastMessage || '') + '</span>';
+    const rowTime = missed ? fmtTime(c.missedAt) : (c.lastAt ? fmtTime(c.lastAt) : '');
     row.innerHTML =
       '<div class="avatar">' + avatarHtml(c.name, c.phone, c.avatar) + '</div>' +
       '<div class="chat-row-body">' +
         '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + (c.muted ? ' 🔇' : '') + '</span>' +
-        '<span class="chat-row-time">' + (c.lastAt ? fmtTime(c.lastAt) : '') + '</span></div>' +
-        '<div class="chat-row-top"><span class="chat-row-msg">' + escapeHtml(c.lastMessage || '') + '</span>' +
+        '<span class="chat-row-time">' + rowTime + '</span></div>' +
+        '<div class="chat-row-top">' + preview +
         (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
       '</div>';
     row.addEventListener('click', () => openChat(c.phone, c.name));
     list.appendChild(row);
+  }
+  // Total unread on the Chats tab (green circle, hidden at 0) — chats
+  // and groups together.
+  const totalUnread = conversations.reduce((s, c) => s + (c.unread || 0), 0)
+    + myGroups.reduce((s, g) => s + (g.unread || 0), 0);
+  const badge = $('nav-chats-badge');
+  badge.textContent = bn(totalUnread);
+  badge.classList.toggle('hidden', totalUnread === 0);
+  renderStartChatting();
+}
+// "Start chatting": contacts with no conversation yet — a row each with
+// a green Chat pill that opens the chat. Hidden while searching and
+// when there is nobody to start with.
+function renderStartChatting() {
+  const box = $('start-chatting');
+  if (!box) return;
+  const q = chatSearch.trim();
+  const withConvo = new Set(conversations.map((c) => c.phone));
+  const fresh = !q ? allContacts.filter((c) => !withConvo.has(c.phone)) : [];
+  if (!fresh.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'section-title';
+  head.textContent = 'Start chatting';
+  box.appendChild(head);
+  for (const c of fresh) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">' + avatarHtml(c.name, c.phone, c.avatar) + '</div>' +
+      '<div class="chat-row-body"><div class="chat-row-name">' + escapeHtml(peerName(c)) + '</div>' +
+      '<div class="chat-row-msg">' + displayId(c.phone) + '</div></div>' +
+      '<button class="start-chat-btn" type="button">Chat</button>';
+    row.querySelector('.start-chat-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openChat(c.phone, c.name);
+    });
+    row.addEventListener('click', () => openChat(c.phone, c.name));
+    box.appendChild(row);
   }
 }
 $('chat-search').addEventListener('input', (e) => { chatSearch = e.target.value; renderInbox(); });
@@ -607,14 +728,23 @@ function disappearLabel(secs) {
 }
 function openChat(phone, name) {
   activeChat = phone;
+  activeGroup = null;
+  groupInfo = null;
   chatAfterId = 0;
   chatSettings = null;
   $('chat-messages').innerHTML = '';
   $('chat-messages').className = 'chat-messages';
   const peer = conversations.find((c) => c.phone === phone) || {};
+  peerLastSeen = peer.lastSeen || 0;
+  // A group chat hides the call buttons and the ⋮ menu — show them
+  // again for a 1-to-1 chat.
+  $('btn-chat-menu').classList.remove('hidden');
+  $('btn-video-call-peer').classList.remove('hidden');
+  $('btn-call-peer').classList.remove('hidden');
   $('chat-peer-avatar').innerHTML = avatarHtml(name, phone, peer.avatar);
   $('chat-peer-name').textContent = name || displayId(phone);
   $('chat-peer-phone').textContent = displayId(phone);
+  updatePeerSubline();
   $('chat-menu').classList.add('hidden');
   $('attach-menu').classList.add('hidden');
   $('emoji-panel').classList.add('hidden');
@@ -625,6 +755,217 @@ function openChat(phone, name) {
   loadChatSettings();
   api('/api/messages/read', { method: 'POST', body: JSON.stringify({ with: phone }) }).catch(() => {});
 }
+// ---- group chat -----------------------------------------------------------------
+// The group chat reuses the 1-to-1 chat screen and its message bar: same
+// emoji panel, attach menu, camera and voice recording. Differences:
+// incoming bubbles show the sender's name, the header shows the group
+// name + member count, there are NO group calls (the call buttons and
+// the per-chat ⋮ menu are hidden), and tapping the header opens the
+// group info instead of the contact profile.
+function openGroup(id, name) {
+  activeGroup = id;
+  activeChat = null;
+  groupInfo = null;
+  chatAfterId = 0;
+  chatSettings = null;
+  peerLastSeen = 0;
+  $('chat-messages').innerHTML = '';
+  $('chat-messages').className = 'chat-messages';
+  $('chat-peer-avatar').innerHTML = '👥';
+  $('chat-peer-name').textContent = name || 'Group';
+  $('chat-peer-phone').textContent = '';
+  $('btn-chat-menu').classList.add('hidden');
+  $('btn-video-call-peer').classList.add('hidden');
+  $('btn-call-peer').classList.add('hidden');
+  $('chat-menu').classList.add('hidden');
+  $('attach-menu').classList.add('hidden');
+  $('emoji-panel').classList.add('hidden');
+  // A group has no block state — make sure the input is enabled even
+  // when the previous chat was a blocked 1-to-1.
+  $('chat-blocked-note').classList.add('hidden');
+  $('chat-input').disabled = false;
+  $('btn-send-msg').disabled = false;
+  $('btn-attach').disabled = false;
+  $('btn-mic').disabled = false;
+  $('btn-input-camera').disabled = false;
+  $('btn-emoji').disabled = false;
+  $('btn-call-peer').disabled = false;
+  showScreen('screen-chat');
+  updateMicSend();
+  fetchGroupMessages();
+  loadGroupInfo();
+}
+async function loadGroupInfo() {
+  if (!activeGroup) return;
+  try {
+    const r = await api('/api/groups/' + activeGroup);
+    groupInfo = r.group;
+    const n = (groupInfo.members || []).length;
+    $('chat-peer-phone').textContent = n + (n === 1 ? ' member' : ' members');
+  } catch { /* offline — the member count stays blank */ }
+}
+async function fetchGroupMessages() {
+  if (!activeGroup) return;
+  try {
+    const r = await api('/api/groups/' + activeGroup + '/messages?afterId=' + chatAfterId);
+    for (const m of r.messages || []) {
+      appendMessage(m);
+      chatAfterId = Math.max(chatAfterId, m.id);
+    }
+    applyTicks(r.ticks);
+    if (r.group && r.group.memberCount) {
+      const n = r.group.memberCount;
+      $('chat-peer-phone').textContent = n + (n === 1 ? ' member' : ' members');
+    }
+    if (chatSearchQuery) applyChatSearch(chatSearchQuery);
+  } catch { /* offline */ }
+}
+// Tick state for MY messages — shared by the 1-to-1 and group polls.
+function applyTicks(ticks) {
+  const tickMap = {};
+  for (const t of ticks || []) tickMap[t.id] = t;
+  document.querySelectorAll('#chat-messages .msg.mine:not(.msg-deleted)').forEach((el) => {
+    const id = Number(el.dataset.id);
+    const t = tickMap[id];
+    if (t && el.dataset.ts) el.querySelector('.msg-meta').innerHTML = fmtTime(Number(el.dataset.ts)) + ' ' + tickHtml(t);
+  });
+}
+// ---- new group + group info ---------------------------------------------------
+// Create from the + button: the add-contact dialog has a "New group"
+// link. Members are picked from contacts — as many as you want, there
+// is no cap. The creator becomes the group's admin.
+$('btn-new-group').addEventListener('click', () => {
+  $('add-contact-dialog').classList.add('hidden');
+  $('new-group-name').value = '';
+  $('new-group-error').classList.add('hidden');
+  const list = $('new-group-members');
+  list.innerHTML = '';
+  if (!allContacts.length) {
+    list.innerHTML = '<div class="empty-note">Add a contact first, then create a group with them.</div>';
+  }
+  for (const c of allContacts) {
+    const label = document.createElement('label');
+    label.className = 'option-btn';
+    label.innerHTML = '<input type="checkbox" value="' + escapeHtml(c.phone) + '"> ' + escapeHtml(peerName(c));
+    list.appendChild(label);
+  }
+  $('new-group-dialog').classList.remove('hidden');
+});
+$('btn-cancel-group').addEventListener('click', () => $('new-group-dialog').classList.add('hidden'));
+$('btn-confirm-group').addEventListener('click', async () => {
+  const name = $('new-group-name').value.trim();
+  const phones = [...document.querySelectorAll('#new-group-members input:checked')].map((i) => i.value);
+  if (!name) {
+    $('new-group-error').textContent = 'Type the group name';
+    $('new-group-error').classList.remove('hidden');
+    return;
+  }
+  if (!phones.length) {
+    $('new-group-error').textContent = 'Choose at least one member';
+    $('new-group-error').classList.remove('hidden');
+    return;
+  }
+  try {
+    const r = await api('/api/groups', { method: 'POST', body: JSON.stringify({ name, members: phones }) });
+    $('new-group-dialog').classList.add('hidden');
+    await loadInbox();
+    openGroup(r.group.id, r.group.name);
+  } catch {
+    $('new-group-error').textContent = "Couldn't create the group";
+    $('new-group-error').classList.remove('hidden');
+  }
+});
+// Group info: tap the group name in the chat header. Shows the members
+// (admins marked), lets any member add more, lets an admin remove a
+// member, and lets anyone leave.
+async function openGroupInfo() {
+  if (!activeGroup) return;
+  try {
+    const r = await api('/api/groups/' + activeGroup);
+    groupInfo = r.group;
+    renderGroupInfo();
+    $('group-info-overlay').classList.remove('hidden');
+  } catch { toast("Couldn't load the group info"); }
+}
+function renderGroupInfo() {
+  const g = groupInfo;
+  if (!g) return;
+  $('group-info-name').textContent = g.name;
+  const n = (g.members || []).length;
+  $('group-info-count').textContent = n + (n === 1 ? ' member' : ' members');
+  const amAdmin = (g.members || []).some((m) => m.phone === session.phone && m.role === 'admin');
+  const list = $('group-info-members');
+  list.innerHTML = '';
+  for (const m of g.members || []) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">' + avatarHtml(m.name, m.phone, m.avatar) + '</div>' +
+      '<div class="chat-row-body"><div class="chat-row-name">' + escapeHtml(m.name || displayId(m.phone)) + (m.phone === session.phone ? ' (You)' : '') + '</div>' +
+      '<div class="chat-row-msg">' + (m.role === 'admin' ? 'Group admin' : displayId(m.phone)) + '</div></div>' +
+      (amAdmin && m.phone !== session.phone ? '<button class="btn-link" type="button" style="color:#D32F2F">Remove</button>' : '');
+    const btn = row.querySelector('.btn-link');
+    if (btn) btn.addEventListener('click', async () => {
+      if (!confirm('Remove ' + (m.name || displayId(m.phone)) + ' from the group?')) return;
+      try {
+        await api('/api/groups/' + activeGroup + '/members/' + encodeURIComponent(m.phone), { method: 'DELETE' });
+        toast('Removed');
+        openGroupInfo();
+        loadGroups();
+      } catch { toast("Couldn't remove"); }
+    });
+    list.appendChild(row);
+  }
+}
+async function loadGroups() {
+  try {
+    const g = await api('/api/groups');
+    myGroups = g.groups || [];
+    renderInbox();
+  } catch { /* offline */ }
+}
+$('btn-close-group-info').addEventListener('click', () => $('group-info-overlay').classList.add('hidden'));
+$('btn-group-add-member').addEventListener('click', () => {
+  if (!activeGroup || !groupInfo) return;
+  const inGroup = new Set((groupInfo.members || []).map((m) => m.phone));
+  const list = $('add-group-members-list');
+  list.innerHTML = '';
+  const candidates = allContacts.filter((c) => !inGroup.has(c.phone));
+  if (!candidates.length) {
+    list.innerHTML = '<div class="empty-note">Everyone in your contacts is already in the group.</div>';
+  }
+  for (const c of candidates) {
+    const label = document.createElement('label');
+    label.className = 'option-btn';
+    label.innerHTML = '<input type="checkbox" value="' + escapeHtml(c.phone) + '"> ' + escapeHtml(peerName(c));
+    list.appendChild(label);
+  }
+  $('add-group-members-dialog').classList.remove('hidden');
+});
+$('btn-cancel-add-members').addEventListener('click', () => $('add-group-members-dialog').classList.add('hidden'));
+$('btn-confirm-add-members').addEventListener('click', async () => {
+  const phones = [...document.querySelectorAll('#add-group-members-list input:checked')].map((i) => i.value);
+  if (!phones.length) { $('add-group-members-dialog').classList.add('hidden'); return; }
+  try {
+    await api('/api/groups/' + activeGroup + '/members', { method: 'POST', body: JSON.stringify({ phones }) });
+    $('add-group-members-dialog').classList.add('hidden');
+    toast('Members added');
+    openGroupInfo();
+    loadGroups();
+  } catch { toast("Couldn't add members"); }
+});
+$('btn-group-leave').addEventListener('click', async () => {
+  if (!activeGroup) return;
+  if (!confirm('Leave this group?')) return;
+  try {
+    await api('/api/groups/' + activeGroup + '/leave', { method: 'POST' });
+    $('group-info-overlay').classList.add('hidden');
+    activeGroup = null;
+    groupInfo = null;
+    showScreen('screen-app');
+    loadInbox();
+    toast('You left the group');
+  } catch { toast("Couldn't leave the group"); }
+});
 // My settings for this chat: applies the per-chat theme, the mute/block
 // labels and the blocked note. Fails silently offline — the menu still
 // opens and each action retries on its own.
@@ -647,9 +988,8 @@ function applyChatTheme() {
   box.classList.toggle('has-photo', !!photo);
   box.style.backgroundImage = photo ? 'url(' + photo + ')' : '';
   $('btn-chat-bg-remove').classList.toggle('hidden', !photo);
-  // Disappearing indicator next to the peer id.
-  $('chat-peer-phone').textContent = displayId(activeChat) +
-    (chatSettings && chatSettings.disappearing ? ' • ⏳ ' + disappearLabel(chatSettings.disappearing) : '');
+  // Last seen / disappearing indicator under the peer's name.
+  updatePeerSubline();
 }
 function updateChatMenuLabels() {
   if (!chatSettings) return;
@@ -682,6 +1022,8 @@ function updateBlockedNote() {
 }
 $('btn-back-chats').addEventListener('click', () => {
   activeChat = null;
+  activeGroup = null;
+  groupInfo = null;
   showScreen('screen-app');
   loadInbox();
 });
@@ -697,9 +1039,6 @@ document.addEventListener('click', (e) => {
   }
   if (!$('attach-menu').classList.contains('hidden') && !e.target.closest('#attach-menu') && e.target.id !== 'btn-attach') {
     $('attach-menu').classList.add('hidden');
-  }
-  if (!$('app-menu').classList.contains('hidden') && !e.target.closest('#app-menu') && e.target.id !== 'btn-app-menu') {
-    $('app-menu').classList.add('hidden');
   }
   if (!$('emoji-panel').classList.contains('hidden') && !e.target.closest('#emoji-panel') && e.target.id !== 'btn-emoji') {
     $('emoji-panel').classList.add('hidden');
@@ -900,7 +1239,10 @@ async function renderProfileMedia() {
     grid.appendChild(tile);
   }
 }
-$('chat-peer-box').addEventListener('click', openProfile);
+$('chat-peer-box').addEventListener('click', () => {
+  if (activeGroup) openGroupInfo();
+  else openProfile();
+});
 $('btn-close-profile').addEventListener('click', () => $('profile-overlay').classList.add('hidden'));
 $('btn-profile-voice').addEventListener('click', () => {
   const peer = profilePeer, name = $('profile-name').textContent;
@@ -997,15 +1339,14 @@ async function fetchChatMessages() {
     // Re-render ticks for my messages from the ticks map — this works
     // even when this poll brought no new messages, which is how a ✓
     // becomes ✓✓ and then blue (seen) after the friend reads it.
-    const tickMap = {};
-    for (const t of r.ticks || []) tickMap[t.id] = t;
-    document.querySelectorAll('#chat-messages .msg.mine').forEach((el) => {
-      const id = Number(el.dataset.id);
-      const t = tickMap[id];
-      if (t && el.dataset.ts) {
-        el.querySelector('.msg-meta').innerHTML = fmtTime(Number(el.dataset.ts)) + ' ' + tickHtml(t);
-      }
-    });
+    // Deleted placeholders carry no ticks, so they are skipped.
+    applyTicks(r.ticks);
+    // The peer's last activity rides on every poll, so "online" /
+    // "last seen …" in the header stays fresh without another request.
+    if (typeof r.peerLastSeen === 'number') {
+      peerLastSeen = r.peerLastSeen;
+      updatePeerSubline();
+    }
     // A search in progress must also hide newly polled messages.
     if (chatSearchQuery) applyChatSearch(chatSearchQuery);
   } catch { /* offline — messages stay as they are */ }
@@ -1016,6 +1357,113 @@ function tickHtml(m) {
   if (m.delivered) return '✓✓';
   return '✓';
 }
+// ---- WhatsApp chat details: date separators, links, doc cards, delete --
+function sameDay(a, b) { return new Date(a).toDateString() === new Date(b).toDateString(); }
+// Links in a text bubble: escape HTML first, then turn URLs into blue
+// underlined clickable links (http/https or www.).
+function linkify(escaped) {
+  return escaped.replace(/(https?:\/\/[^\s<]+|www\.[^\s<]+)/g, (url) => {
+    const href = url.startsWith('www.') ? 'https://' + url : url;
+    return '<a href="' + href + '" target="_blank" rel="noopener">' + url + '</a>';
+  });
+}
+const DELETED_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>';
+function fileExt(name, mime) {
+  const m = String(name || '').match(/\.([A-Za-z0-9]{1,5})$/);
+  if (m) return m[1].toUpperCase();
+  if (mime) {
+    if (mime.includes('pdf')) return 'PDF';
+    if (mime.includes('word')) return 'DOC';
+    if (mime.includes('sheet') || mime.includes('excel')) return 'XLS';
+    if (mime.includes('powerpoint') || mime.includes('presentation')) return 'PPT';
+    if (mime.includes('zip')) return 'ZIP';
+    if (mime.includes('text')) return 'TXT';
+  }
+  return 'FILE';
+}
+function docColor(ext) {
+  return { PDF: '#E53935', DOC: '#1E88E5', DOCX: '#1E88E5', XLS: '#43A047', XLSX: '#43A047', PPT: '#FB8C00', PPTX: '#FB8C00', ZIP: '#8E24AA', TXT: '#757575' }[ext] || '#757575';
+}
+// WhatsApp-style size: "52 kB", "1.2 MB", "800 B".
+function fmtFileSize(n) {
+  if (n >= 1024 * 1024) return bn((n / (1024 * 1024)).toFixed(1)) + ' MB';
+  if (n >= 1024) return bn(Math.round(n / 1024)) + ' kB';
+  return bn(n) + ' B';
+}
+// WhatsApp document card: coloured file-type icon box with the
+// extension, filename, and a "52 kB • JPG" line. With an href it is a
+// download link; without one it is the still-uploading preview.
+function docCardHtml(m, href) {
+  const ext = fileExt(m.media_name, m.media_type);
+  const inner = '<span class="doc-icon" style="background:' + docColor(ext) + '">' + escapeHtml(ext) + '</span>' +
+    '<span class="doc-body"><span class="doc-name">' + escapeHtml(m.media_name || 'File') + '</span><br>' +
+    '<span class="doc-meta">' + fmtFileSize(m.media_size || 0) + ' • ' + escapeHtml(ext) + '</span></span>';
+  return href
+    ? '<a class="doc-card" href="' + href + '" download="' + escapeHtml(m.media_name || 'file') + '">' + inner + '</a>'
+    : '<span class="doc-card">' + inner + '</span>';
+}
+// Delete message: long-press (~500 ms) or right-click a bubble opens
+// the delete dialog. Pending bubbles have no server id yet, and a
+// placeholder that is already deleted cannot be deleted again.
+let deleteTarget = null; // message row the delete dialog is about
+function attachDeleteHandlers(div, m) {
+  if (!m.id) return;
+  let pressTimer = null;
+  div.addEventListener('pointerdown', () => {
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => openDeleteMenu(m), 500);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) {
+    div.addEventListener(ev, () => clearTimeout(pressTimer));
+  }
+  div.addEventListener('contextmenu', (e) => { e.preventDefault(); openDeleteMenu(m); });
+}
+function openDeleteMenu(m) {
+  if (!m.id) return;
+  const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+  if (el && el.classList.contains('msg-deleted')) return;
+  deleteTarget = m;
+  $('btn-delete-everyone').classList.toggle('hidden', m.sender !== session.phone);
+  $('delete-msg-dialog').classList.remove('hidden');
+}
+function closeDeleteMenu() {
+  $('delete-msg-dialog').classList.add('hidden');
+  deleteTarget = null;
+}
+async function deleteMessage(scope) {
+  const m = deleteTarget;
+  if (!m || !m.id) return;
+  closeDeleteMenu();
+  try {
+    await api('/api/messages/' + m.id + '/delete', { method: 'POST', body: JSON.stringify({ scope }) });
+    const el = document.querySelector('.msg[data-id="' + m.id + '"]');
+    if (scope === 'me') {
+      el?.remove();
+      pruneDateSeps();
+    } else if (el) {
+      const mine = m.sender === session.phone;
+      el.classList.add('msg-deleted');
+      el.innerHTML = '<div class="deleted-msg">' + DELETED_ICON_SVG + '<span>' + (mine ? 'You deleted this message' : 'This message was deleted') + '</span></div><div class="msg-meta">' + fmtTime(Number(el.dataset.ts)) + '</div>';
+    }
+    loadInbox();
+  } catch { toast("Couldn't delete — check your connection and try again"); }
+}
+// A date pill with no message under it (its only message was deleted
+// for me) is removed.
+function pruneDateSeps() {
+  const box = $('chat-messages');
+  const kids = [...box.children];
+  for (let i = 0; i < kids.length; i++) {
+    if (!kids[i].classList.contains('date-sep')) continue;
+    const next = kids[i + 1];
+    if (!next || next.classList.contains('date-sep')) kids[i].remove();
+  }
+}
+$('btn-delete-everyone').addEventListener('click', () => deleteMessage('all'));
+$('btn-delete-me').addEventListener('click', () => deleteMessage('me'));
+$('btn-delete-cancel').addEventListener('click', closeDeleteMenu);
+$('delete-msg-dialog').addEventListener('click', (e) => { if (e.target.id === 'delete-msg-dialog') closeDeleteMenu(); });
+
 function appendMessage(m) {
   const box = $('chat-messages');
   // A message already on screen is never rendered twice. The 3-second
@@ -1025,24 +1473,57 @@ function appendMessage(m) {
   // data-id="tmp-..." so they never collide with a real id.
   if (m.id && box.querySelector('.msg[data-id="' + m.id + '"]')) return;
   const mine = m.sender === session.phone;
+  const ts = m.created_at || Date.now();
+  // Date separator: a centred pill before the first message and
+  // whenever the day changes. The poll only ever appends newer
+  // messages, so comparing with the last bubble on screen is enough.
+  // The extra last-separator check covers the send flow: a pending
+  // bubble inserts the pill, then the upload's success removes the
+  // pending bubble and appends the real one — without it the same
+  // day's pill would appear twice.
+  const prevMsg = [...box.querySelectorAll('.msg')].pop();
+  const lastSep = [...box.querySelectorAll('.date-sep')].pop();
+  if ((!prevMsg || !sameDay(Number(prevMsg.dataset.ts), ts)) &&
+      (!lastSep || lastSep.textContent !== fmtDateLong(ts))) {
+    const sep = document.createElement('div');
+    sep.className = 'date-sep';
+    sep.textContent = fmtDateLong(ts);
+    box.appendChild(sep);
+  }
   const div = document.createElement('div');
   div.className = 'msg ' + (mine ? 'mine' : 'theirs') + (m.pending ? ' msg-pending' : '');
   div.dataset.id = m.id || ('tmp-' + m.tempId);
-  div.dataset.ts = m.created_at || Date.now();
-  const meta = '<div class="msg-meta">' + fmtTime(m.created_at) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
+  div.dataset.ts = ts;
+  const meta = '<div class="msg-meta">' + fmtTime(ts) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
+  // Group chats: an incoming bubble starts with the sender's name, so
+  // you can tell who wrote what. (My own bubbles need no name.)
+  const senderLine = (m.group_id && !mine && m.senderName)
+    ? '<div class="group-sender-name">' + escapeHtml(m.senderName) + '</div>' : '';
+  // A message the sender deleted for everyone: grey italic placeholder
+  // bubble, no content, no ticks, no media — and it cannot be deleted
+  // again (openDeleteMenu guards on .msg-deleted).
+  if (m.deleted_for_all) {
+    div.classList.add('msg-deleted');
+    div.innerHTML = '<div class="deleted-msg">' + DELETED_ICON_SVG + '<span>' + (mine ? 'You deleted this message' : 'This message was deleted') + '</span></div><div class="msg-meta">' + fmtTime(ts) + '</div>';
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
   if (m.media_kind) {
     // A media message the sender just uploaded carries its bytes locally
     // (localDataUrl), so it renders at once without a round trip.
     if (m.localDataUrl && m.id) mediaCache.set(m.id, m.localDataUrl);
-    div.innerHTML = mediaHtml(m) + meta;
+    div.innerHTML = senderLine + mediaHtml(m) + meta;
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     if (!m.pending) loadMediaInto(div, m);
+    attachDeleteHandlers(div, m);
     return;
   }
-  div.innerHTML = '<div>' + escapeHtml(m.body) + '</div>' + meta;
+  div.innerHTML = senderLine + '<div>' + linkify(escapeHtml(m.body)) + '</div>' + meta;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
+  attachDeleteHandlers(div, m);
 }
 
 // The inside of a media bubble. Pending bubbles (still uploading) show a
@@ -1060,7 +1541,7 @@ function mediaHtml(m) {
     } else if (kind === 'voice') {
       preview = '<div>🎤 Voice • ' + fmtCallTime(m.duration || 0) + '</div>';
     } else {
-      preview = '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></div>';
+      preview = docCardHtml(m);
     }
     return wrap + preview +
       '<div class="media-progress"><div style="width:' + (m.progress || 0) + '%"></div></div>' +
@@ -1071,12 +1552,54 @@ function mediaHtml(m) {
   if (kind === 'image') return wrap + '<div class="media-loading">📷 Photo loading…</div>' + size + '</div>';
   if (kind === 'video') return wrap + '<div class="media-loading">🎥 Video loading…</div>' + size + '</div>';
   if (kind === 'voice') return wrap + '<div>🎤 Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + ' loading…</div>' + size + '</div>';
-  return wrap + '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></div>' + size + '<div class="media-loading">Loading…</div></div>';
+  return wrap + docCardHtml(m) + '<div class="media-loading">Loading…</div></div>';
 }
 
 // Pulls one message's media bytes (once — then cached) and renders the
 // thumbnail / player / download link. The bytes count toward the data
 // meter, like a received message.
+// ---- auto-save photos & videos (Settings toggle) ---------------------------
+// On by default. Every RECEIVED (never my own) photo or video is saved
+// to the phone once its bytes have loaded — exactly once per message,
+// so a re-render never downloads it twice. Voice notes and files are
+// never auto-saved: tap them to download, as before. The ids are kept
+// in localStorage (last 500), so the "once" promise survives a restart
+// of the app. Note: Chrome may ask once to allow multiple downloads —
+// that is the browser's own permission, not a bug in the app.
+function autosaveOn() {
+  try { return localStorage.getItem('s19_autosave') !== 'off'; } catch { return true; }
+}
+function wasAutosaved(id) {
+  try { return (JSON.parse(localStorage.getItem('s19_autosaved') || '[]')).includes(id); } catch { return false; }
+}
+function markAutosaved(id) {
+  try {
+    const ids = JSON.parse(localStorage.getItem('s19_autosaved') || '[]');
+    ids.push(id);
+    localStorage.setItem('s19_autosaved', JSON.stringify(ids.slice(-500)));
+  } catch { /* storage full or unavailable — the in-memory cache still guards this session */ }
+}
+function maybeAutosave(m, url) {
+  if (!autosaveOn() || !m.id || m.sender === session.phone) return;
+  if (m.media_kind !== 'image' && m.media_kind !== 'video') return;
+  if (wasAutosaved(m.id)) return;
+  markAutosaved(m.id);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = m.media_name || (m.media_kind === 'video' ? 'video' : 'photo');
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+function renderAutosaveRow() {
+  $('settings-autosave').textContent = autosaveOn() ? 'On' : 'Off';
+}
+$('settings-autosave-row').addEventListener('click', () => {
+  try { localStorage.setItem('s19_autosave', autosaveOn() ? 'off' : 'on'); } catch { /* storage unavailable */ }
+  renderAutosaveRow();
+  toast(autosaveOn() ? 'Auto-save on — photos and videos from friends will be saved to your phone' : 'Auto-save off');
+});
+
 async function loadMediaInto(div, m) {
   const wrap = div.querySelector('.msg-media');
   if (!wrap) return;
@@ -1097,8 +1620,10 @@ async function loadMediaInto(div, m) {
     } else if (kind === 'voice') {
       wrap.innerHTML = '<div>🎤 Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div><audio src="' + url + '" controls preload="metadata"></audio>';
     } else {
-      wrap.innerHTML = '<a class="media-file" href="' + url + '" download="' + escapeHtml(m.media_name || 'file') + '">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></a><div class="media-size">' + fmtBytes(m.media_size || 0) + ' • Tap to download</div>';
+      wrap.innerHTML = docCardHtml(m, url);
     }
+    // Auto-save only photos and videos, only received ones, only once.
+    maybeAutosave(m, url);
   } catch {
     wrap.innerHTML = '<div class="media-loading">Didn\'t load — <span class="media-retry">Try again</span></div>';
     wrap.querySelector('.media-retry').addEventListener('click', () => loadMediaInto(div, m));
@@ -1143,18 +1668,30 @@ function saveOutbox(o) { localStorage.setItem('s19_outbox', JSON.stringify(o)); 
 
 async function sendMessage() {
   const body = $('chat-input').value.trim();
-  if (!body || !activeChat) return;
+  if (!body || (!activeChat && !activeGroup)) return;
   $('chat-input').value = '';
   updateMicSend();
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-  appendMessage({ body, sender: session.phone, created_at: Date.now(), pending: true, tempId });
+  appendMessage({ body, sender: session.phone, created_at: Date.now(), pending: true, tempId, group_id: activeGroup || undefined });
   try {
-    const r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: activeChat, body }) });
+    let r;
+    if (activeGroup) {
+      r = await api('/api/groups/' + activeGroup + '/messages', { method: 'POST', body: JSON.stringify({ body }) });
+    } else {
+      r = await api('/api/messages', { method: 'POST', body: JSON.stringify({ to: activeChat, body }) });
+    }
     addMsgBytes(bytesOf(body));
     document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
     appendMessage(r.message);
     chatAfterId = Math.max(chatAfterId, r.message.id);
   } catch (e) {
+    // Groups have no offline outbox in this build: a failed send just
+    // drops the pending bubble and says so.
+    if (activeGroup) {
+      document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
+      toast("No connection — try again when you're back online");
+      return;
+    }
     // A block is final — do NOT park the message in the outbox.
     if (e.message === 'you_blocked' || e.message === 'blocked_by_peer') {
       document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
@@ -1257,7 +1794,7 @@ $('btn-attach').addEventListener('click', (e) => {
 $('attach-photo').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-image').click(); });
 $('attach-video').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-video').click(); });
 $('attach-file').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); $('file-any').click(); });
-$('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('image', f); });
+$('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; if (!activeChat && !activeGroup) { toast('Open a chat first to send a photo'); return; } sendMediaFile('image', f); });
 $('file-video').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('video', f); });
 $('file-any').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('file', f); });
 
@@ -1291,20 +1828,20 @@ function fileToBase64(file) {
   });
 }
 async function sendMediaFile(kind, file, durationSec) {
-  if (!activeChat) return;
+  if (!activeChat && !activeGroup) return;
   const cap = MEDIA_CAPS[kind];
   if (file.size > cap) {
     toast("That file is too big — you can't send more than " + MEDIA_CAP_LABEL[kind] + ' (free storage limit)');
     return;
   }
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0 });
+  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0, groupId: activeGroup || 0 });
   const previewUrl = (kind === 'image' || kind === 'video') ? URL.createObjectURL(file) : '';
   appendMessage({
     tempId, sender: session.phone, created_at: Date.now(),
     body: mediaLabel(kind, file.name), media_kind: kind, media_name: file.name,
     media_type: file.type, media_size: file.size, duration: durationSec || 0,
-    localPreviewUrl: previewUrl, pending: true, progress: 0,
+    localPreviewUrl: previewUrl, pending: true, progress: 0, group_id: activeGroup || undefined,
   });
   document.querySelector('[data-id="tmp-' + tempId + '"] .media-retry')
     ?.addEventListener('click', () => uploadPendingMedia(tempId));
@@ -1312,7 +1849,7 @@ async function sendMediaFile(kind, file, durationSec) {
 }
 async function uploadPendingMedia(tempId) {
   const p = pendingMedia.get(tempId);
-  if (!p || !activeChat) return;
+  if (!p || (!activeChat && !p.groupId)) return;
   const el = document.querySelector('[data-id="tmp-' + tempId + '"]');
   const setProgress = (pct, failed) => {
     if (!el) return;
@@ -1325,14 +1862,17 @@ async function uploadPendingMedia(tempId) {
   };
   try {
     const b64 = await fileToBase64(p.file);
-    const r = await uploadMediaXhr({
-      to: activeChat, mediaKind: p.kind, fileName: p.fileName,
+    const uploadBody = {
+      mediaKind: p.kind, fileName: p.fileName,
       mimeType: p.mimeType, size: p.file.size, data: b64, duration: p.duration,
       // Idempotency key: if this upload is retried after a lost
       // response, the server returns the row it already stored
       // instead of inserting a second copy of the photo/video/file.
       clientKey: tempId,
-    }, (pct) => setProgress(pct, false));
+    };
+    if (p.groupId) uploadBody.groupId = p.groupId;
+    else uploadBody.to = activeChat;
+    const r = await uploadMediaXhr(uploadBody, (pct) => setProgress(pct, false));
     addMsgBytes(p.file.size);
     pendingMedia.delete(tempId);
     el?.remove();
@@ -1431,11 +1971,13 @@ function startPolling() {
     if (document.hidden || !navigator.onLine) return; // save data + battery
     loadInbox();
     if (activeChat) fetchChatMessages();
+    if (activeGroup) fetchGroupMessages();
   }, 3000);
 }
 async function refreshAll() {
   await loadInbox();
   if (activeChat) fetchChatMessages();
+  if (activeGroup) fetchGroupMessages();
 }
 
 // ---- web push notifications ---------------------------------------------------
