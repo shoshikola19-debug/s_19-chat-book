@@ -203,11 +203,11 @@
   <section id="screen-chat" class="screen hidden">
     <header class="chat-header">
       <button id="btn-back-chats" class="back-btn">‹</button>
-      <div class="chat-peer"><div class="avatar" id="chat-peer-avatar">?</div>
+      <div class="chat-peer" id="chat-peer-box"><div class="avatar" id="chat-peer-avatar">?</div>
         <div><div id="chat-peer-name" class="chat-peer-name"></div><div id="chat-peer-phone" class="chat-peer-phone"></div></div>
       </div>
-      <button id="btn-call-peer" class="call-btn" title="ভয়েস কল">📞</button>
       <button id="btn-video-call-peer" class="call-btn" title="ভিডিও কল">🎥</button>
+      <button id="btn-call-peer" class="call-btn" title="ভয়েস কল">📞</button>
       <button id="btn-chat-menu" class="call-btn" title="সেটিংস">⋮</button>
       <div id="chat-menu" class="chat-menu hidden">
         <button id="menu-chat-theme" type="button">🎨 চ্যাট থিম</button>
@@ -217,6 +217,11 @@
         <button id="menu-block" type="button">🚫 ব্লক করুন</button>
       </div>
     </header>
+    <div id="chat-search-bar" class="chat-search-bar hidden">
+      <input id="chat-search-input" type="search" placeholder="মেসেজ খুঁজুন…">
+      <span id="chat-search-count"></span>
+      <button id="btn-close-search" class="btn-link" type="button">✕</button>
+    </div>
     <div id="chat-messages" class="chat-messages"></div>
     <div id="chat-blocked-note" class="blocked-note hidden"></div>
     <div id="attach-menu" class="attach-menu hidden">
@@ -354,11 +359,15 @@
     </div>
   </div>
 
-  <!-- ===== Per-chat theme dialog ===== -->
+  <!-- ===== Per-chat theme dialog (preview first, apply after) ===== -->
   <div id="chat-theme-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
       <h3>চ্যাট থিম</h3>
-      <p class="hint">শুধু এই চ্যাটের পটভূমি বদলাবে।</p>
+      <p class="hint">আগে দেখে নাও, তারপর বসাও। শুধু এই চ্যাটের পটভূমি বদলাবে।</p>
+      <div id="chat-theme-preview" class="chat-theme-preview">
+        <div class="msg theirs">হাই, কেমন আছো?</div>
+        <div class="msg mine">ভালো আছি! 😊</div>
+      </div>
       <div class="theme-row theme-swatches">
         <button class="theme-swatch chat-theme-opt" data-chat-theme="" type="button" style="background:#ECE5DD;color:#111">ডিফল্ট</button>
         <button class="theme-swatch chat-theme-opt" data-chat-theme="green" type="button" style="background:#D9FDD3;color:#075E54">সবুজ</button>
@@ -374,14 +383,42 @@
       <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
       <div class="dialog-buttons">
         <button id="btn-chat-theme-cancel" class="btn-link">বাতিল</button>
+        <button id="btn-chat-theme-apply" class="btn-primary">বসাও</button>
       </div>
     </div>
+  </div>
+
+  <!-- ===== Contact profile (WhatsApp-style) ===== -->
+  <div id="profile-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-profile" class="back-btn">‹</button>
+    </div>
+    <div class="profile-avatar" id="profile-avatar">?</div>
+    <div class="profile-name" id="profile-name"></div>
+    <div class="profile-phone" id="profile-phone"></div>
+    <div class="profile-joined" id="profile-joined"></div>
+    <div class="profile-actions">
+      <button id="btn-profile-voice" class="profile-action" type="button">📞<span>ভয়েস</span></button>
+      <button id="btn-profile-video" class="profile-action" type="button">🎥<span>ভিডিও</span></button>
+      <button id="btn-profile-search" class="profile-action" type="button">🔍<span>খুঁজুন</span></button>
+    </div>
+    <button id="profile-media-row" class="profile-row" type="button">
+      <span>📷 মিডিয়া, লিংক আর ফাইল</span><span><b id="profile-media-count">০</b> ›</span>
+    </button>
+    <div id="profile-media-grid" class="profile-media-grid hidden"></div>
+    <button id="profile-mute-row" class="profile-row" type="button">
+      <span>🔔 নোটিফিকেশন</span><span id="profile-mute-state"></span>
+    </button>
+    <button id="profile-disappearing-row" class="profile-row" type="button">
+      <span>⏳ গায়েব মেসেজ</span><span id="profile-disappearing-state"></span>
+    </button>
   </div>
 
   <!-- ===== Full photo viewer ===== -->
   <div id="media-viewer" class="media-viewer hidden">
     <button id="btn-close-media" class="status-close">✕</button>
     <img id="media-viewer-img" class="media-viewer-img" alt="ছবি">
+    <video id="media-viewer-video" class="media-viewer-img hidden" controls playsinline></video>
   </div>
 
   <div id="toast" class="toast hidden"></div>
