@@ -48,7 +48,24 @@ CREATE TABLE IF NOT EXISTS messages (
   body TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   delivered INTEGER NOT NULL DEFAULT 0,
-  read INTEGER NOT NULL DEFAULT 0
+  read INTEGER NOT NULL DEFAULT 0,
+  -- Disappearing messages: ms timestamp when this message expires
+  -- (0 = never). Expired rows are hidden from every read and deleted
+  -- by the hourly cleanup.
+  expires_at INTEGER NOT NULL DEFAULT 0,
+  -- Media (photo / video / voice note / file): sent at 100% original
+  -- quality, never compressed. The body holds the inbox preview label
+  -- ("📷 ছবি", "🎥 ভিডিও", "🎤 ভয়েস", "📄 নাম") and these columns
+  -- hold the media itself (base64 in media_data, never on disk —
+  -- Render's disk is ephemeral). Caps are enforced in server.js:
+  -- photo 10 MB, video 50 MB, voice 10 MB, file 5 MB.
+  media_kind TEXT,
+  media_name TEXT NOT NULL DEFAULT '',
+  media_type TEXT NOT NULL DEFAULT '',
+  media_size INTEGER NOT NULL DEFAULT 0,
+  media_data TEXT,
+  -- Voice-note length in seconds (0 for other kinds).
+  media_duration INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
 CREATE TABLE IF NOT EXISTS statuses (
@@ -104,6 +121,26 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
 );
+-- Per-chat settings, one row per (owner, peer) direction — each side
+-- keeps their own mute / disappearing / theme / block choice:
+--   muted         1 = no push notification and no sound for this chat
+--   disappearing  seconds until messages in this chat expire
+--                 (0 = off, 86400 = 24h, 604800 = 7d, 7776000 = 90d)
+--   chat_theme    per-chat background theme ('' = default)
+--   blocked       1 = I blocked this peer (they cannot message/call me,
+--                 and I cannot message/call them either)
+--   cleared_at    ms timestamp: messages at or before this are hidden
+--                 for me only (Clear chat) — the other side keeps them.
+CREATE TABLE IF NOT EXISTS chat_settings (
+  owner_phone TEXT NOT NULL,
+  peer_phone TEXT NOT NULL,
+  muted INTEGER NOT NULL DEFAULT 0,
+  disappearing INTEGER NOT NULL DEFAULT 0,
+  chat_theme TEXT NOT NULL DEFAULT '',
+  blocked INTEGER NOT NULL DEFAULT 0,
+  cleared_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner_phone, peer_phone)
+);
 `;
 
 // Postgres equivalent of the schema above. Differences from SQLite:
@@ -145,7 +182,14 @@ CREATE TABLE IF NOT EXISTS messages (
   body TEXT NOT NULL,
   created_at BIGINT NOT NULL,
   delivered BOOLEAN NOT NULL DEFAULT FALSE,
-  read BOOLEAN NOT NULL DEFAULT FALSE
+  read BOOLEAN NOT NULL DEFAULT FALSE,
+  expires_at BIGINT NOT NULL DEFAULT 0,
+  media_kind TEXT,
+  media_name TEXT NOT NULL DEFAULT '',
+  media_type TEXT NOT NULL DEFAULT '',
+  media_size BIGINT NOT NULL DEFAULT 0,
+  media_data TEXT,
+  media_duration BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
 CREATE TABLE IF NOT EXISTS statuses (
@@ -199,6 +243,16 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS chat_settings (
+  owner_phone TEXT NOT NULL,
+  peer_phone TEXT NOT NULL,
+  muted BOOLEAN NOT NULL DEFAULT FALSE,
+  disappearing BIGINT NOT NULL DEFAULT 0,
+  chat_theme TEXT NOT NULL DEFAULT '',
+  blocked BOOLEAN NOT NULL DEFAULT FALSE,
+  cleared_at BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner_phone, peer_phone)
+);
 `;
 
 // Neon's pooler (PgBouncer) does not support channel binding, so that
@@ -248,6 +302,17 @@ async function createDb({ dbPath }) {
     // table needs the blocked flag. IF NOT EXISTS keeps this safe to run
     // on every boot (fresh DBs already have the column from the schema).
     await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE');
+    // Migration for databases created before chat settings / media /
+    // disappearing messages: new messages columns. Same pattern — safe
+    // on every boot, fresh DBs already have them from the schema.
+    await pool.query(`ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS media_kind TEXT,
+      ADD COLUMN IF NOT EXISTS media_name TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS media_size BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS media_data TEXT,
+      ADD COLUMN IF NOT EXISTS media_duration BIGINT NOT NULL DEFAULT 0`);
     return {
       engine: 'postgres',
       label: 'Neon Postgres',
@@ -280,6 +345,21 @@ async function createDb({ dbPath }) {
   const userCols = db.prepare('PRAGMA table_info(users)').all();
   if (!userCols.some((c) => c.name === 'blocked')) {
     db.exec('ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
+  }
+  // Migration for databases created before chat settings / media /
+  // disappearing messages: new messages columns, same check-first way.
+  const msgCols = db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name);
+  const msgAdds = [
+    ['expires_at', 'INTEGER NOT NULL DEFAULT 0'],
+    ['media_kind', 'TEXT'],
+    ['media_name', "TEXT NOT NULL DEFAULT ''"],
+    ['media_type', "TEXT NOT NULL DEFAULT ''"],
+    ['media_size', 'INTEGER NOT NULL DEFAULT 0'],
+    ['media_data', 'TEXT'],
+    ['media_duration', 'INTEGER NOT NULL DEFAULT 0'],
+  ];
+  for (const [col, def] of msgAdds) {
+    if (!msgCols.includes(col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${def}`);
   }
   return {
     engine: 'sqlite',
