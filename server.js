@@ -1150,6 +1150,14 @@ app.get('/api/banner', ah(async (req, res) => {
 
 // ---- static frontend + start -------------------------------------------------
 
+// The web app manifest, served with its proper content type so Chrome
+// offers "Add to Home screen" / Install — the installed app opens
+// fullscreen with no browser address bar on top.
+app.get('/manifest.json', (req, res) => {
+  res.type('application/manifest+json');
+  res.sendFile(path.join(__dirname, 'public', 'manifest.json'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
