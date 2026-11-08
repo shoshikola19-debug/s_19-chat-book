@@ -52,23 +52,32 @@ async function api(path, opts = {}) {
 
 // ---- daily data meter (Tools tab) ------------------------------------------
 // Estimate only: message bytes counted exactly, voice calls at ~16 kbps
-// (2 KB per second — the low-bandwidth Opus setting). Target: 5–10 MB/day.
+// (2 KB per second — the low-bandwidth Opus setting), video calls at
+// ~1.5 Mbps (720p, ~187 KB per second — about 11 MB a minute).
+// Target: 5–10 MB/day for messages + voice; video is counted separately.
 const CALL_BYTES_PER_SEC = 2000;
+const VCALL_BYTES_PER_SEC = 187500;
 function usageKey() { return 's19_usage_' + new Date().toISOString().slice(0, 10); }
 function loadUsage() {
-  try { return JSON.parse(localStorage.getItem(usageKey()) || '{"msg":0,"callSec":0}'); } catch { return { msg: 0, callSec: 0 }; }
+  try { return JSON.parse(localStorage.getItem(usageKey()) || '{"msg":0,"callSec":0,"videoSec":0}'); } catch { return { msg: 0, callSec: 0, videoSec: 0 }; }
 }
 function saveUsage(u) { localStorage.setItem(usageKey(), JSON.stringify(u)); }
 function addMsgBytes(n) { const u = loadUsage(); u.msg += n; saveUsage(u); renderMeter(); }
-function addCallSeconds(n) { const u = loadUsage(); u.callSec += n; saveUsage(u); renderMeter(); }
-function usageTotalBytes() { const u = loadUsage(); return u.msg + u.callSec * CALL_BYTES_PER_SEC; }
+function addCallSeconds(n, isVideo) {
+  const u = loadUsage();
+  if (isVideo) u.videoSec = (u.videoSec || 0) + n; else u.callSec += n;
+  saveUsage(u); renderMeter();
+}
+function usageTotalBytes() { const u = loadUsage(); return u.msg + u.callSec * CALL_BYTES_PER_SEC + (u.videoSec || 0) * VCALL_BYTES_PER_SEC; }
 function renderMeter() {
   const u = loadUsage();
   const total = usageTotalBytes();
   const callBytes = u.callSec * CALL_BYTES_PER_SEC;
+  const vcallBytes = (u.videoSec || 0) * VCALL_BYTES_PER_SEC;
   $('meter-total').textContent = bn((total / 1e6).toFixed(2)) + ' MB';
   $('meter-msg').textContent = bn(Math.round(u.msg / 1024)) + ' KB';
   $('meter-call').textContent = bn(Math.round(callBytes / 1024)) + ' KB (' + bn(Math.floor(u.callSec / 60)) + ' মিনিট)';
+  $('meter-vcall').textContent = bn(Math.round(vcallBytes / 1024)) + ' KB (' + bn(Math.floor((u.videoSec || 0) / 60)) + ' মিনিট)';
   $('meter-fill').style.width = Math.min(100, (total / 10e6) * 100) + '%';
 }
 
@@ -1088,24 +1097,38 @@ let callDir = 'out'; // 'out' = I called, 'in' = I answered
 let callStartAt = 0;
 let callTimerId = null;
 let callSeconds = 0;
+let callIsVideo = false; // this call carries a camera picture
+let facingMode = 'user'; // front camera first; 🔄 flips to the back one
+let camOn = true;
 let callConnected = false; // true once media actually connects (ICE / answer)
 let iceRestarts = 0;
 let pendingOffer = null;
 const MAX_ICE_RESTARTS = 3;
 
 // ---- ringtone (WebAudio, no audio file) -------------------------------------
-// The caller hears nothing while the overlay says "ডাকছে…" unless we ring
-// ourselves — there is no ringtone in the app. Two sine tones (941 + 1209 Hz,
-// the classic phone-ring pair) play in a 1.2 s on / 0.8 s off cadence.
-// Browsers block audio without a user gesture: the caller taps the call
-// button (a gesture, fine), but an incoming call only arrives through a
-// poll, so the AudioContext is also created on the first tap anywhere in
-// the app — then it is already running when a call comes in. If playback
-// is still blocked, everything here fails silently and the call works
-// exactly as before, just without sound.
+// A short ORIGINAL melody, synthesized — never a copied ringtone file.
+// The same tune rings on BOTH sides, at two volumes: the CALLER hears a
+// soft, quiet ringback while "ডাকছে…", the CALLEE hears the full, louder
+// ringtone when the call arrives. Browsers block audio without a user
+// gesture: the caller taps the call button (a gesture, fine), but an
+// incoming call only arrives through a poll, so the AudioContext is also
+// created on the first tap anywhere in the app — then it is already
+// running when a call comes in. If playback is still blocked, everything
+// here fails silently and the call works exactly as before, just without
+// sound.
+// The melody — a gentle original arc (E–G–A–C–A–G–E–D, ~3.5 s a loop):
+// each note is a soft sine with a warm triangle overtone and a quick
+// fade-in/out envelope, so it sounds like a phone ring, not a beep.
+const RING_MELODY = [
+  [659.25, 0.30], [783.99, 0.30], [880.00, 0.30], [1046.50, 0.42],
+  [880.00, 0.30], [783.99, 0.30], [659.25, 0.30], [587.33, 0.42],
+];
+const RING_PAUSE = 0.9; // silence between loops (seconds)
+const RING_VOL = { soft: 0.05, full: 0.22 }; // caller ringback / callee ringtone
 let ringCtx = null;
 let ringGain = null;
 let ringTimerId = null;
+let ringMode = null;
 function ensureRingAudio() {
   try {
     if (!ringCtx) {
@@ -1113,38 +1136,57 @@ function ensureRingAudio() {
       if (!AC) return false;
       ringCtx = new AC();
       ringGain = ringCtx.createGain();
-      ringGain.gain.value = 0;
+      ringGain.gain.value = 1;
       ringGain.connect(ringCtx.destination);
-      const o1 = ringCtx.createOscillator();
-      o1.type = 'sine';
-      o1.frequency.value = 941;
-      const o2 = ringCtx.createOscillator();
-      o2.type = 'sine';
-      o2.frequency.value = 1209;
-      o1.connect(ringGain);
-      o2.connect(ringGain);
-      o1.start();
-      o2.start();
     }
     if (ringCtx.state === 'suspended') ringCtx.resume().catch(() => {});
     return true;
   } catch { return false; }
 }
-function startRinging() {
-  if (ringTimerId) return;
+function ringNote(freq, startAt, dur, peak) {
+  try {
+    const o1 = ringCtx.createOscillator();
+    o1.type = 'sine';
+    o1.frequency.value = freq;
+    const o2 = ringCtx.createOscillator();
+    o2.type = 'triangle';
+    o2.frequency.value = freq;
+    const g = ringCtx.createGain();
+    g.gain.setValueAtTime(0, startAt);
+    g.gain.linearRampToValueAtTime(peak, startAt + 0.03);
+    g.gain.setValueAtTime(peak, startAt + Math.max(0.05, dur - 0.06));
+    g.gain.linearRampToValueAtTime(0, startAt + dur);
+    const g2 = ringCtx.createGain();
+    g2.gain.value = 0.35; // quiet warm overtone, same pitch
+    o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(ringGain);
+    o1.start(startAt); o2.start(startAt);
+    o1.stop(startAt + dur + 0.05); o2.stop(startAt + dur + 0.05);
+  } catch { /* no sound, call still works */ }
+}
+function ringPhrase() {
+  try {
+    if (!ringCtx || !ringGain) return;
+    if (ringGain.gain.value === 0) ringGain.gain.setTargetAtTime(1, ringCtx.currentTime, 0.02);
+    const peak = RING_VOL[ringMode] || RING_VOL.full;
+    let t = ringCtx.currentTime + 0.05;
+    for (const [freq, dur] of RING_MELODY) { ringNote(freq, t, dur, peak); t += dur; }
+  } catch { /* no sound, call still works */ }
+}
+function startRinging(mode) {
+  // mode 'soft' = quiet ringback for the caller, 'full' = loud ringtone
+  // for the callee. Anything else (or no argument) rings full.
+  const m = mode === 'soft' ? 'soft' : 'full';
+  if (ringTimerId && ringMode === m) return; // already ringing this way
+  ringMode = m;
   if (!ensureRingAudio()) return;
-  const ringOnce = () => {
-    try {
-      if (!ringCtx || !ringGain) return;
-      ringGain.gain.setTargetAtTime(0.12, ringCtx.currentTime, 0.02);
-      setTimeout(() => { try { if (ringGain) ringGain.gain.setTargetAtTime(0, ringCtx.currentTime, 0.02); } catch {} }, 1200);
-    } catch { /* no sound, call still works */ }
-  };
-  ringOnce();
-  ringTimerId = setInterval(ringOnce, 2000);
+  if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
+  ringPhrase();
+  const loopMs = (RING_MELODY.reduce((s, n) => s + n[1], 0) + RING_PAUSE) * 1000;
+  ringTimerId = setInterval(ringPhrase, loopMs);
 }
 function stopRinging() {
   if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
+  ringMode = null;
   try { if (ringGain && ringCtx) ringGain.gain.setTargetAtTime(0, ringCtx.currentTime, 0.02); } catch {}
 }
 // First tap anywhere unlocks audio, so a later incoming call can ring even
@@ -1154,12 +1196,36 @@ window.addEventListener('pointerdown', () => { ensureRingAudio(); }, { once: tru
 function tuneSdp(sdp) {
   // Opus: maxaveragebitrate=16000, stereo=0, usedtx=1 (DTX: almost no data
   // in silence) + application-specific bandwidth cap b=AS:20.
+  // AUDIO IS SACRED: the audio track is capped low and given top
+  // priority (see prioritiseCallTracks), so on a weak network the
+  // VIDEO softens first — the voice must never break up or drop.
   let out = sdp.replace(/a=fmtp:111[^\r\n]*/g, 'a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;stereo=0;maxaveragebitrate=16000');
   if (!/a=fmtp:111/.test(out)) {
     out = out.replace(/(a=rtpmap:111 opus\/48000\/2\r\n)/, '$1a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;stereo=0;maxaveragebitrate=16000\r\n');
   }
   out = out.replace(/(m=audio[^\r\n]*\r\n)/, '$1b=AS:20\r\n');
+  // Video: 720p, good quality (~1.5 Mbps cap). The browser adapts below
+  // this when the network drops — video first, never the audio.
+  out = out.replace(/(m=video[^\r\n]*\r\n)/, '$1b=AS:1500\r\n');
   return out;
+}
+// Audio first, video second: on a weak network the video encoder must
+// soften (lower bitrate / resolution / framerate) before the audio is
+// ever starved. The audio sender gets top priority; the video sender
+// gets a 1.5 Mbps ceiling and a balanced degradation preference.
+function prioritiseCallTracks(pc) {
+  try {
+    for (const s of pc.getSenders()) {
+      if (!s.track) continue;
+      const params = s.getParameters() || {};
+      const enc = (params.encodings && params.encodings[0]) || {};
+      if (s.track.kind === 'audio') {
+        s.setParameters({ ...params, encodings: [{ ...enc, priority: 'high', networkPriority: 'high' }] }).catch(() => {});
+      } else if (s.track.kind === 'video') {
+        s.setParameters({ ...params, encodings: [{ ...enc, maxBitrate: 1500000, priority: 'medium', networkPriority: 'medium', degradationPreference: 'balanced' }] }).catch(() => {});
+      }
+    }
+  } catch { /* priorities are best-effort — the call works without them */ }
 }
 function makePc() {
   // STUN alone often cannot connect two phones on mobile data (both sit
@@ -1177,8 +1243,17 @@ function makePc() {
     }
   };
   peer.ontrack = (e) => {
+    const stream = e.streams[0];
+    if (e.track.kind === 'video') {
+      // The friend's camera: full-screen remote video. The same stream
+      // also carries their audio, which goes to the audio element below.
+      const v = $('remote-video');
+      v.srcObject = stream;
+      v.play().catch(() => {});
+      return;
+    }
     const a = $('remote-audio');
-    a.srcObject = e.streams[0];
+    a.srcObject = stream;
     a.muted = false;
     a.volume = 1;
     // The stream alone is not enough on mobile Chrome: playback must be
@@ -1207,12 +1282,22 @@ function startCallTimer() {
     $('call-timer').textContent = fmtCallTime(callSeconds);
   }, 1000);
 }
-function showCallOverlay(name, status, incoming) {
+function showCallOverlay(name, status, incoming, isVideo) {
   $('call-peer-name').textContent = name;
   $('call-status').textContent = status;
   $('call-timer').textContent = '০০:০০';
   $('btn-mute').textContent = '🎙️';
   $('btn-mute').classList.remove('muted');
+  // Video call: the friend's video fills the screen, my preview sits
+  // small in the corner, and the camera buttons appear. Audio calls
+  // look exactly as before.
+  $('call-overlay').classList.toggle('video', Boolean(isVideo));
+  $('call-video-wrap').classList.toggle('hidden', !isVideo);
+  $('btn-cam-toggle').classList.toggle('hidden', !isVideo);
+  $('btn-cam-switch').classList.toggle('hidden', !isVideo);
+  $('btn-cam-toggle').textContent = '📷';
+  $('btn-cam-toggle').title = 'ক্যামেরা বন্ধ করো';
+  camOn = true;
   let ans = $('btn-answer');
   if (!ans) {
     ans = document.createElement('button');
@@ -1223,6 +1308,7 @@ function showCallOverlay(name, status, incoming) {
     ans.addEventListener('click', answerCall);
     document.querySelector('.call-buttons').prepend(ans);
   }
+  if (incoming) ans.textContent = isVideo ? '🎥' : '📞'; // answer a video call with the video button
   ans.classList.toggle('hidden', !incoming);
   $('btn-mute').classList.toggle('hidden', Boolean(incoming));
   $('call-overlay').classList.remove('hidden');
@@ -1230,12 +1316,17 @@ function showCallOverlay(name, status, incoming) {
 function hideCallOverlay() {
   stopRinging();
   $('call-overlay').classList.add('hidden');
+  $('call-overlay').classList.remove('video');
+  $('call-video-wrap').classList.add('hidden');
   if (callTimerId) { clearInterval(callTimerId); callTimerId = null; }
 }
 function stopCallTracks() {
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   if (pc) { pc.close(); pc = null; }
   $('remote-audio').srcObject = null;
+  $('remote-video').srcObject = null;
+  $('local-video').srcObject = null;
+  callIsVideo = false;
 }
 function logCallHistory(peer, dir, seconds, answered = true) {
   const h = JSON.parse(localStorage.getItem('s19_call_history') || '[]');
@@ -1243,48 +1334,64 @@ function logCallHistory(peer, dir, seconds, answered = true) {
   localStorage.setItem('s19_call_history', JSON.stringify(h.slice(0, 20)));
 }
 
-async function startCall(peer, name) {
+async function startCall(peer, name, isVideo) {
   if (pc) { toast('একটা কল ইতিমধ্যে চলছে'); return; }
+  // Video quality FIRST (Bijoy's rule): 720p when the connection
+  // allows it, a clean picture — never blurry. MB does not matter.
+  // Audio stays sacred even on a weak network: Opus FEC/DTX + top
+  // sender priority (see prioritiseCallTracks) — the video softens
+  // first, the voice never breaks up.
+  const constraints = isVideo
+    ? { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode } }
+    : { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false };
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
-    });
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch {
-    toast('মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও, তারপর আবার চেষ্টা করো');
+    toast(isVideo ? 'ক্যামেরা আর মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও, তারপর আবার চেষ্টা করো'
+      : 'মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও, তারপর আবার চেষ্টা করো');
     return;
   }
   callPeer = peer;
   callDir = 'out';
+  callIsVideo = Boolean(isVideo);
   iceRestarts = 0;
   callStartAt = 0;
   callSeconds = 0;
   callConnected = false;
   pc = makePc();
   localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-  const offer = await pc.createOffer({ offerToReceiveAudio: true });
+  prioritiseCallTracks(pc);
+  const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: Boolean(isVideo) });
   offer.sdp = tuneSdp(offer.sdp);
   await pc.setLocalDescription(offer);
-  await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type } }) });
-  showCallOverlay(name || displayId(peer), 'ডাকছে…', false);
-  startRinging();
+  // video:true tells the callee this is a VIDEO call, so their incoming
+  // screen shows it and opens the video UI when they answer.
+  await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type, video: Boolean(isVideo) } }) });
+  showCallOverlay(name || displayId(peer), 'ডাকছে…', false, isVideo);
+  if (isVideo) $('local-video').srcObject = localStream; // my own preview, small in the corner
+  startRinging('soft'); // caller hears a quiet ringback while waiting
   callStartAt = Date.now();
 }
 async function answerCall() {
   if (!pendingOffer || !callPeer) return;
+  const isVideo = Boolean(pendingOffer.video);
+  const constraints = isVideo
+    ? { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode } }
+    : { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false };
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
-    });
-  } catch { toast('মাইক্রোফোনের অনুমতি লাগবে'); return; }
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch { toast(isVideo ? 'ক্যামেরা আর মাইক্রোফোনের অনুমতি লাগবে' : 'মাইক্রোফোনের অনুমতি লাগবে'); return; }
   try {
     iceRestarts = 0;
     callDir = 'in';
+    callIsVideo = isVideo;
     callConnected = false;
     callStartAt = Date.now();
     pc = makePc();
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    prioritiseCallTracks(pc);
     // pendingOffer is the whole { sdp, type } payload — RTCSessionDescription
     // needs that dictionary, not just the sdp string. Passing the string
     // threw a TypeError in Chrome, so the answer signal never went out:
@@ -1293,10 +1400,11 @@ async function answerCall() {
     const answer = await pc.createAnswer();
     answer.sdp = tuneSdp(answer.sdp);
     await pc.setLocalDescription(answer);
-    await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type } }) });
+    await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type, video: isVideo } }) });
     pendingOffer = null;
     stopRinging();
-    showCallOverlay($('call-peer-name').textContent, 'কথা হচ্ছে…', false);
+    showCallOverlay($('call-peer-name').textContent, isVideo ? 'ভিডিও কল চলছে…' : 'কথা হচ্ছে…', false, isVideo);
+    if (isVideo) $('local-video').srcObject = localStream;
     startCallTimer();
   } catch (e) {
     // Any step failing here used to die silently and leave the caller
@@ -1324,7 +1432,7 @@ async function endCall(sendSignal = true) {
   // answered and ended within a second still counts as answered.
   if (callPeer) {
     const answered = callConnected || callSeconds > 0;
-    if (callSeconds > 0) addCallSeconds(callSeconds);
+    if (callSeconds > 0) addCallSeconds(callSeconds, callIsVideo);
     logCallHistory(callPeer, callDir, callSeconds, answered);
   }
   stopCallTracks();
@@ -1348,6 +1456,38 @@ $('btn-mute').addEventListener('click', () => {
 $('btn-call-peer').addEventListener('click', () => {
   if (activeChat) startCall(activeChat, $('chat-peer-name').textContent);
 });
+$('btn-video-call-peer').addEventListener('click', () => {
+  if (activeChat) startCall(activeChat, $('chat-peer-name').textContent, true);
+});
+$('btn-cam-toggle').addEventListener('click', () => {
+  if (!localStream) return;
+  const vt = localStream.getVideoTracks()[0];
+  if (!vt) return;
+  camOn = !camOn;
+  vt.enabled = camOn;
+  $('btn-cam-toggle').textContent = camOn ? '📷' : '📵';
+  $('btn-cam-toggle').title = camOn ? 'ক্যামেরা বন্ধ করো' : 'ক্যামেরা চালু করো';
+  toast(camOn ? 'ক্যামেরা চালু আছে' : 'ক্যামেরা বন্ধ — শুধু তোমার আওয়াজ যাবে');
+});
+$('btn-cam-switch').addEventListener('click', async () => {
+  if (!localStream || !pc || !callIsVideo) return;
+  const next = facingMode === 'user' ? 'environment' : 'user';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: next }, audio: false,
+    });
+    const newTrack = stream.getVideoTracks()[0];
+    const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+    if (sender) await sender.replaceTrack(newTrack);
+    const oldTrack = localStream.getVideoTracks()[0];
+    if (oldTrack) { oldTrack.stop(); localStream.removeTrack(oldTrack); }
+    localStream.addTrack(newTrack);
+    facingMode = next;
+    $('local-video').srcObject = localStream;
+  } catch {
+    toast('ক্যামেরা বদলানো যায়নি — অনুমতি দেখে আবার চেষ্টা করো');
+  }
+});
 // Signals arriving while a call is already up (answer / ICE / end).
 setInterval(async () => {
   if (!session || document.hidden || !navigator.onLine) return;
@@ -1359,13 +1499,14 @@ setInterval(async () => {
           callPeer = s.from;
           pendingOffer = s.payload;
           const name = (conversations.find((c) => c.phone === s.from) || {}).name;
-          showCallOverlay(name || displayId(s.from), 'কল আসছে…', true);
+          const isVideo = Boolean(s.payload && s.payload.video);
+          showCallOverlay(name || displayId(s.from), isVideo ? 'ভিডিও কল আসছে…' : 'কল আসছে…', true, isVideo);
           // A muted chat gets no sound — the overlay still shows, so the
           // call can be answered if the user sees it. If the settings
           // fetch fails, ring anyway: better a sound than a missed call.
           api('/api/chat-settings?with=' + encodeURIComponent(s.from)).then((st) => {
-            if (!st.muted) startRinging();
-          }).catch(() => startRinging());
+            if (!st.muted) startRinging('full'); // callee hears the full ringtone
+          }).catch(() => startRinging('full'));
         }
         continue;
       }
