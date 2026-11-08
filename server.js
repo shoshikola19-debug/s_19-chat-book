@@ -649,18 +649,40 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   const expiresAt = await disappearingExpiresAt(req.phone, to, t);
   const duration = Math.max(0, Math.floor(Number(body.duration || 0)));
   const label = kind === 'file' && fileName ? '📄 ' + fileName : MEDIA_LABELS[kind];
-  const inserted = await db.get(
-    `INSERT INTO messages (sender, receiver, body, created_at, expires_at,
-       media_kind, media_name, media_type, media_size, media_data, media_duration)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    req.phone, to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration);
-  // The reply leaves the bytes out — the sender already has them, and
-  // the receiver pulls them on demand from GET /api/media/:id.
-  const row = await db.get(
+  const fetchRow = (id) => db.get(
     `SELECT id, sender, receiver, body, created_at, delivered, read,
        media_kind, media_name, media_type, media_size, media_duration, expires_at
      FROM messages WHERE id = ?`,
-    inserted.id);
+    id);
+  // Idempotency: the client sends its tempId as clientKey. A retry of
+  // an upload whose response was lost (flaky network) re-sends the
+  // same key — return the row that already exists instead of
+  // inserting a second copy (the receiver used to get the same photo
+  // twice). No second push: the first insert already sent one.
+  const clientKey = String(body.clientKey || '').trim().slice(0, 100);
+  if (clientKey) {
+    const existing = await db.get('SELECT id FROM messages WHERE sender = ? AND client_key = ?', req.phone, clientKey);
+    if (existing) return res.json({ ok: true, message: await fetchRow(existing.id), duplicate: true });
+  }
+  let inserted;
+  try {
+    inserted = await db.get(
+      `INSERT INTO messages (sender, receiver, body, created_at, expires_at,
+         media_kind, media_name, media_type, media_size, media_data, media_duration, client_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      req.phone, to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration, clientKey || null);
+  } catch (e) {
+    // Two identical uploads raced each other and the unique index let
+    // only one through — return that row instead of failing.
+    if (clientKey) {
+      const existing = await db.get('SELECT id FROM messages WHERE sender = ? AND client_key = ?', req.phone, clientKey);
+      if (existing) return res.json({ ok: true, message: await fetchRow(existing.id), duplicate: true });
+    }
+    throw e;
+  }
+  // The reply leaves the bytes out — the sender already has them, and
+  // the receiver pulls them on demand from GET /api/media/:id.
+  const row = await fetchRow(inserted.id);
   const sender = await publicUser(req.phone);
   await pushUnlessMuted(to, req.phone, {
     title: sender.name || req.phone,
