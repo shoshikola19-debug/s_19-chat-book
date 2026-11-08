@@ -230,6 +230,63 @@ body {
 .chat-messages.chat-theme-purple { background: #EADCF8; }
 .chat-messages.chat-theme-pink { background: #FCE4EC; }
 .chat-messages.chat-theme-dark { background: #0B141A; }
+/* Theme preview inside the dialog: the same backgrounds as the real
+   chat, with two sample bubbles — so a theme or photo can be compared
+   before "বসাও" applies it. */
+.chat-theme-preview {
+  display: flex; flex-direction: column; gap: 8px; padding: 14px;
+  border-radius: 12px; background: #ECE5DD; margin: 4px 0 12px;
+  background-size: cover; background-position: center;
+}
+.chat-theme-preview.chat-theme-green { background: #D9FDD3; }
+.chat-theme-preview.chat-theme-blue { background: #D6EAF8; }
+.chat-theme-preview.chat-theme-purple { background: #EADCF8; }
+.chat-theme-preview.chat-theme-pink { background: #FCE4EC; }
+.chat-theme-preview.chat-theme-dark { background: #0B141A; }
+.chat-theme-preview.chat-theme-dark .msg.theirs { background: #202C33; color: #E9EDEF; }
+.chat-theme-preview.chat-theme-dark .msg.mine { background: #005C4B; color: #E9EDEF; }
+/* In-chat search bar (from the profile's Search button). */
+.chat-search-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--green-pale); border-bottom: 1px solid var(--border); }
+.chat-search-bar input { flex: 1; border: 1px solid var(--border); border-radius: 20px; padding: 8px 12px; font-size: 15px; font-family: inherit; background: #fff; }
+.chat-search-bar span { font-size: 13px; color: var(--muted); white-space: nowrap; }
+/* Contact profile (WhatsApp-style): big avatar, name, number, Voice /
+   Video / Search buttons, shared media grid, and settings rows. */
+.profile-overlay {
+  position: fixed; inset: 0; z-index: 55; background: #fff; color: #111;
+  overflow-y: auto; display: flex; flex-direction: column; align-items: center;
+}
+.profile-top { width: 100%; display: flex; justify-content: flex-start; padding: 10px 12px 0; }
+.profile-top .back-btn { color: #111; }
+.profile-avatar {
+  width: 120px; height: 120px; border-radius: 50%; background: #FADBD8; color: #7B4B45;
+  display: flex; align-items: center; justify-content: center; font-size: 52px; font-weight: 700; margin-top: 8px;
+}
+.profile-name { font-size: 24px; font-weight: 700; margin-top: 14px; }
+.profile-phone { font-size: 16px; color: #555; margin-top: 4px; }
+.profile-joined { font-size: 14px; color: #888; margin-top: 8px; }
+.profile-actions { display: flex; gap: 36px; margin: 22px 0 8px; }
+.profile-action {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  border: 0; background: none; font-size: 24px; cursor: pointer; color: #111;
+}
+.profile-action span { font-size: 14px; color: #333; }
+.profile-row {
+  width: 100%; display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border: 0; border-top: 1px solid #eee; background: none;
+  font-size: 16px; cursor: pointer; text-align: left; color: #111; font-family: inherit;
+}
+.profile-row span:last-child { color: #888; }
+.profile-media-grid {
+  width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px;
+}
+.profile-media-tile {
+  aspect-ratio: 1; background: #f0f0f0; border-radius: 8px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 13px; text-align: center; padding: 4px;
+}
+.profile-media-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.profile-media-kind { font-size: 26px; }
+.profile-media-name { font-size: 12px; color: #444; word-break: break-all; }
 /* Gallery photo as a background (this phone only): the picture covers
    the area; the message bubbles keep their own colours, so text stays
    readable on any photo. */
