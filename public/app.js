@@ -408,13 +408,25 @@ async function fetchChatMessages() {
       if (m.receiver === session.phone) addMsgBytes(bytesOf(m.body));
       chatAfterId = Math.max(chatAfterId, m.id);
     }
-    // Re-render ticks for my messages (delivered state may have changed).
+    // Re-render ticks for my messages from the ticks map — this works
+    // even when this poll brought no new messages, which is how a ✓
+    // becomes ✓✓ and then blue (seen) after the friend reads it.
+    const tickMap = {};
+    for (const t of r.ticks || []) tickMap[t.id] = t;
     document.querySelectorAll('#chat-messages .msg.mine').forEach((el) => {
       const id = Number(el.dataset.id);
-      const m = (r.messages || []).find((x) => x.id === id);
-      if (m) el.querySelector('.msg-meta').textContent = fmtTime(m.created_at) + ' ' + (m.delivered ? '✓✓' : '✓');
+      const t = tickMap[id];
+      if (t && el.dataset.ts) {
+        el.querySelector('.msg-meta').innerHTML = fmtTime(Number(el.dataset.ts)) + ' ' + tickHtml(t);
+      }
     });
   } catch { /* offline — messages stay as they are */ }
+}
+// Tick marks: ✓ sent, ✓✓ delivered, blue ✓✓ seen (read).
+function tickHtml(m) {
+  if (m.read) return '<span class="tick-read">✓✓</span>';
+  if (m.delivered) return '✓✓';
+  return '✓';
 }
 function appendMessage(m) {
   const box = $('chat-messages');
@@ -422,8 +434,9 @@ function appendMessage(m) {
   const div = document.createElement('div');
   div.className = 'msg ' + (mine ? 'mine' : 'theirs') + (m.pending ? ' msg-pending' : '');
   div.dataset.id = m.id || ('tmp-' + m.tempId);
+  div.dataset.ts = m.created_at || Date.now();
   div.innerHTML = '<div>' + escapeHtml(m.body) + '</div>' +
-    '<div class="msg-meta">' + fmtTime(m.created_at) + ' ' + (mine ? (m.pending ? '🕐' : (m.delivered ? '✓✓' : '✓')) : '') + '</div>';
+    '<div class="msg-meta">' + fmtTime(m.created_at) + ' ' + (mine ? (m.pending ? '🕐' : tickHtml(m)) : '') + '</div>';
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -519,13 +532,29 @@ function tuneSdp(sdp) {
   return out;
 }
 function makePc() {
-  const peer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  // STUN alone often cannot connect two phones on mobile data (both sit
+  // behind the operator's NAT), so a free TURN relay is included as a
+  // fallback. Without it the call connects in signalling but no voice
+  // flows — and the timer, which starts on ICE connect, never starts.
+  const peer = new RTCPeerConnection({ iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443'],
+      username: 'openrelayproject', credential: 'openrelayproject' },
+  ] });
   peer.onicecandidate = (e) => {
     if (e.candidate && callPeer) {
       api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'ice', payload: e.candidate }) }).catch(() => {});
     }
   };
-  peer.ontrack = (e) => { $('remote-audio').srcObject = e.streams[0]; };
+  peer.ontrack = (e) => {
+    const a = $('remote-audio');
+    a.srcObject = e.streams[0];
+    a.muted = false;
+    a.volume = 1;
+    // The stream alone is not enough on mobile Chrome: playback must be
+    // started explicitly, or the other side stays silent.
+    a.play().catch(() => {});
+  };
   peer.oniceconnectionstatechange = () => {
     const st = peer.iceConnectionState;
     if ((st === 'disconnected' || st === 'failed') && iceRestarts < MAX_ICE_RESTARTS) {
@@ -627,6 +656,7 @@ async function answerCall() {
   await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type } }) });
   pendingOffer = null;
   showCallOverlay($('call-peer-name').textContent, 'কথা হচ্ছে…', false);
+  startCallTimer();
 }
 async function endCall(sendSignal = true) {
   if (sendSignal && callPeer) {
@@ -675,6 +705,7 @@ setInterval(async () => {
         await pc.setRemoteDescription(new RTCSessionDescription(s.payload));
         callStartAt = callStartAt || Date.now();
         $('call-status').textContent = 'কথা হচ্ছে…';
+        startCallTimer();
       } else if (s.kind === 'ice') {
         try { await pc.addIceCandidate(new RTCIceCandidate(s.payload)); } catch { /* ignore */ }
       } else if (s.kind === 'end') {
