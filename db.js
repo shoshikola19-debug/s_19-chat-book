@@ -21,6 +21,8 @@ const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   phone TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
+  avatar TEXT NOT NULL DEFAULT '',
+  about TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   blocked INTEGER NOT NULL DEFAULT 0
 );
@@ -160,6 +162,8 @@ const PG_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   phone TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
+  avatar TEXT NOT NULL DEFAULT '',
+  about TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL,
   blocked BOOLEAN NOT NULL DEFAULT FALSE
 );
@@ -307,7 +311,10 @@ async function createDb({ dbPath }) {
     // Migration for databases created before the admin panel: the users
     // table needs the blocked flag. IF NOT EXISTS keeps this safe to run
     // on every boot (fresh DBs already have the column from the schema).
-    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE');
+    await pool.query(`ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS about TEXT NOT NULL DEFAULT ''`);
     // Migration for databases created before chat settings / media /
     // disappearing messages: new messages columns. Same pattern — safe
     // on every boot, fresh DBs already have them from the schema.
@@ -359,6 +366,12 @@ async function createDb({ dbPath }) {
   const userCols = db.prepare('PRAGMA table_info(users)').all();
   if (!userCols.some((c) => c.name === 'blocked')) {
     db.exec('ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userCols.some((c) => c.name === 'avatar')) {
+    db.exec("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''");
+  }
+  if (!userCols.some((c) => c.name === 'about')) {
+    db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
   }
   // Migration for databases created before chat settings / media /
   // disappearing messages: new messages columns, same check-first way.
