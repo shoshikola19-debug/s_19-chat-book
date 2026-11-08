@@ -1587,6 +1587,86 @@ async function doForward(selected) {
 $('btn-forward-cancel').addEventListener('click', () => { $('forward-dialog').classList.add('hidden'); forwardTarget = null; });
 $('forward-dialog').addEventListener('click', (e) => { if (e.target.id === 'forward-dialog') { $('forward-dialog').classList.add('hidden'); forwardTarget = null; } });
 
+// ---- share button on a photo/video bubble ---------------------------------
+// The ⤴ button sits on the media itself (bottom-right), so sharing a
+// video/photo is one tap instead of a long-press. It opens a small sheet
+// with two options: "Share to chat" (the same forward flow as the
+// long-press menu) and "Share outside" (the phone's system share sheet).
+// View-once media is never shareable: the button is never added for it
+// (loadMediaInto returns early), openMediaShare refuses it, and the
+// server's forward endpoint rejects it too.
+function addMediaShareBtn(wrap, m) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'media-share-btn';
+  btn.setAttribute('aria-label', 'Share');
+  btn.textContent = '⤴';
+  btn.addEventListener('click', (e) => { e.stopPropagation(); openMediaShare(m); });
+  wrap.appendChild(btn);
+}
+let mediaShareTarget = null;
+function openMediaShare(m) {
+  if (!m || m.view_once || m.deleted_for_all) return;
+  mediaShareTarget = m;
+  $('media-share-dialog').classList.remove('hidden');
+}
+function closeMediaShare() {
+  $('media-share-dialog').classList.add('hidden');
+  mediaShareTarget = null;
+}
+$('btn-share-to-chat').addEventListener('click', () => { const m = mediaShareTarget; closeMediaShare(); if (m) openForward(m); });
+$('btn-share-outside').addEventListener('click', () => { const m = mediaShareTarget; closeMediaShare(); if (m) shareOutside(m); });
+$('btn-media-share-cancel').addEventListener('click', closeMediaShare);
+$('media-share-dialog').addEventListener('click', (e) => { if (e.target.id === 'media-share-dialog') closeMediaShare(); });
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name || 'file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+// Share a photo/video outside the app through the phone's own share
+// sheet. Prefers bytes already on the phone (mediaCache) so it stays
+// quick; otherwise fetches them once from the server (sender/receiver
+// only — the endpoint enforces that). If file sharing is not supported
+// here, the file is downloaded instead and the toast says so plainly.
+// A user-cancelled share stays silent; a genuine failure gets a toast.
+async function shareOutside(m) {
+  if (!m || m.view_once) return;
+  let file;
+  try {
+    const cached = mediaCache.get(m.id);
+    if (cached) {
+      const blob = await (await fetch(cached)).blob();
+      file = new File([blob], m.media_name || (m.media_kind === 'video' ? 'video' : 'photo'), { type: blob.type || 'application/octet-stream' });
+    } else {
+      const r = await api('/api/media/' + m.id);
+      const url = dataUrl(r.mimeType, r.data);
+      mediaCache.set(m.id, url);
+      const blob = await (await fetch(url)).blob();
+      file = new File([blob], r.fileName || m.media_name || (m.media_kind === 'video' ? 'video' : 'photo'), { type: r.mimeType || 'application/octet-stream' });
+    }
+  } catch {
+    toast("Couldn't share it — check your connection and try again");
+    return;
+  }
+  if (!navigator.share || !(navigator.canShare && navigator.canShare({ files: [file] }))) {
+    downloadBlob(file, file.name);
+    toast('Sharing is not supported here — the file was downloaded instead');
+    return;
+  }
+  try {
+    await navigator.share({ files: [file] });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // user cancelled the share sheet — stay silent
+    toast("Couldn't share it — try again");
+  }
+}
+
 // ---- starred messages (chat ⋮ menu / contact info) --------------------------
 // Newest first. Tapping a row jumps to that message in the chat — if it
 // is loaded (the chat view holds the recent history).
@@ -3514,6 +3594,12 @@ async function loadMediaInto(div, m) {
     } else {
       wrap.innerHTML = docCardHtml(m, url);
     }
+    // Share button on the bubble itself (photo + video only). View-once
+    // never reaches here (early return above), deleted messages never
+    // reach loadMediaInto, and pending bubbles are not loaded — so the
+    // button only ever appears on a real, shareable photo/video, own or
+    // received, in 1-to-1 chats and groups alike.
+    if (kind === 'image' || kind === 'video') addMediaShareBtn(wrap, m);
     // Auto-save only photos and videos, only received ones, only once.
     maybeAutosave(m, url);
   } catch {
