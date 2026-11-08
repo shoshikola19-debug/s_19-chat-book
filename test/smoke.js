@@ -88,6 +88,17 @@ async function loginEmail(email, name) {
 }
 
 async function main() {
+  // The suite runs the server with a FAKE SMTP config (host 127.0.0.1,
+  // port 1 = nothing listening) so the Gmail-login flow exercises the
+  // real-email path's failure fallback end to end: the SMTP send fails
+  // cleanly, the endpoint must not crash, and it falls back to the
+  // test code (the server's designed fallback — see server.js). No real
+  // email is ever sent by this suite; real sends need real credentials.
+  process.env.EMAIL_PROVIDER = 'smtp';
+  process.env.EMAIL_SMTP_HOST = '127.0.0.1';
+  process.env.EMAIL_SMTP_PORT = '1';
+  process.env.EMAIL_SMTP_USER = 'smtp.test@gmail.com';
+  process.env.EMAIL_SMTP_PASS = 'fake-app-password-xxxx';
   if (PG_URL) {
     console.log('== engine: Postgres (DATABASE_URL) ==');
     const { Client } = require('pg');
@@ -193,6 +204,60 @@ async function main() {
   const tokG = await loginEmail(GMAIL_USER, 'Gmail Bondhu');
   const meG = await get('/api/me', tokG);
   check('GET /api/me returns Gmail user', meG.status === 200 && meG.data.name === 'Gmail Bondhu' && meG.data.phone === GMAIL_USER, meG);
+  // End to end: the server runs with the fake (unreachable) SMTP config,
+  // so the real-email send must fail cleanly and the endpoint must fall
+  // back to the test code instead of crashing or hanging.
+  const smtpFail = await post('/api/request-code', { email: 'smtp.fallback@gmail.com' });
+  check('request-code with failing SMTP falls back to test code, no crash',
+    smtpFail.status === 200 && smtpFail.data.ok && smtpFail.data.email === false
+    && typeof smtpFail.data.testCode === 'string' && smtpFail.data.testCode.length === 6, smtpFail);
+
+  // Static + unit checks for the Gmail SMTP provider (email.js).
+  // These run in the test process only; the server already has its own
+  // copy of the env, so changing process.env here cannot affect it.
+  console.log('== email smtp provider ==');
+  const emailSrc = fs.readFileSync(path.join(__dirname, '..', 'email.js'), 'utf8');
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  check('email.js has the smtp provider via nodemailer (Gmail defaults 587/STARTTLS)',
+    emailSrc.includes("'smtp'") && emailSrc.includes('nodemailer')
+    && emailSrc.includes('EMAIL_SMTP_USER') && emailSrc.includes('EMAIL_SMTP_PASS')
+    && emailSrc.includes('smtp.gmail.com') && emailSrc.includes('587')
+    && emailSrc.includes('smtpConfig'), null);
+  check('nodemailer is a dependency and npm run check-email exists',
+    Boolean(pkg.dependencies && pkg.dependencies.nodemailer)
+    && pkg.scripts && pkg.scripts['check-email'] === 'node scripts/email-check.js'
+    && fs.existsSync(path.join(__dirname, '..', 'scripts', 'email-check.js')), null);
+  check('.env.example + README document the Gmail App Password steps',
+    envExample.includes('EMAIL_SMTP_PASS') && envExample.includes('App Password')
+    && envExample.includes('2-Step Verification')
+    && readme.includes('App Password') && readme.includes('smtp'), null);
+  const emailMod = require('../email');
+  check('smtp isConfigured() is true with user + pass set', emailMod.isConfigured() === true);
+  const smtpCfg = emailMod.smtpConfig();
+  check('smtpConfig() reads the fake test host/port (defaults are Gmail 587)',
+    smtpCfg.host === '127.0.0.1' && smtpCfg.port === 1 && smtpCfg.secure === false
+    && smtpCfg.user === 'smtp.test@gmail.com', smtpCfg);
+  const savedPass = process.env.EMAIL_SMTP_PASS;
+  delete process.env.EMAIL_SMTP_PASS;
+  check('smtp isConfigured() is false without the App Password', emailMod.isConfigured() === false);
+  process.env.EMAIL_SMTP_PASS = savedPass;
+  const savedUser = process.env.EMAIL_SMTP_USER;
+  delete process.env.EMAIL_SMTP_USER;
+  check('smtp isConfigured() is false without the Gmail user', emailMod.isConfigured() === false);
+  process.env.EMAIL_SMTP_USER = savedUser;
+  const savedProvider = process.env.EMAIL_PROVIDER;
+  process.env.EMAIL_PROVIDER = 'resend';
+  delete process.env.EMAIL_API_URL;
+  delete process.env.EMAIL_API_KEY;
+  check('resend isConfigured() is false without API url + key', emailMod.isConfigured() === false);
+  process.env.EMAIL_PROVIDER = savedProvider;
+  const t0 = Date.now();
+  const smtpSend = await emailMod.sendOtp('smtp.test@gmail.com', '123456');
+  check('sendOtp to an unreachable SMTP host fails cleanly with { sent:false } (no throw, no hang)',
+    smtpSend && smtpSend.sent === false && typeof smtpSend.reason === 'string'
+    && Date.now() - t0 < 10000, { ...smtpSend, ms: Date.now() - t0 });
 
   console.log('== contacts + direct messages ==');
   const add = await post('/api/contacts', { phone: FRIEND }, tokA);
