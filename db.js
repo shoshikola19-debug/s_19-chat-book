@@ -21,7 +21,8 @@ const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   phone TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  blocked INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -96,6 +97,13 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions (user_phone);
+-- Admin panel settings (key/value, e.g. key 'banner' = welcome-screen
+-- announcement text; empty/missing = hidden). One small table on purpose:
+-- the admin panel has exactly one setting, the banner.
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
 `;
 
 // Postgres equivalent of the schema above. Differences from SQLite:
@@ -110,7 +118,8 @@ const PG_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   phone TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
-  created_at BIGINT NOT NULL
+  created_at BIGINT NOT NULL,
+  blocked BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -186,6 +195,10 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions (user_phone);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
 `;
 
 // Neon's pooler (PgBouncer) does not support channel binding, so that
@@ -231,6 +244,10 @@ async function createDb({ dbPath }) {
       max: 5,
     });
     await pool.query(PG_SCHEMA);
+    // Migration for databases created before the admin panel: the users
+    // table needs the blocked flag. IF NOT EXISTS keeps this safe to run
+    // on every boot (fresh DBs already have the column from the schema).
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE');
     return {
       engine: 'postgres',
       label: 'Neon Postgres',
@@ -258,6 +275,12 @@ async function createDb({ dbPath }) {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SQLITE_SCHEMA);
+  // Migration for databases created before the admin panel: SQLite has
+  // no ADD COLUMN IF NOT EXISTS, so check the table first.
+  const userCols = db.prepare('PRAGMA table_info(users)').all();
+  if (!userCols.some((c) => c.name === 'blocked')) {
+    db.exec('ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
+  }
   return {
     engine: 'sqlite',
     label: 'SQLite (local file)',
