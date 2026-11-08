@@ -47,17 +47,33 @@ let session = loadSession();
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (session && session.token) headers.Authorization = 'Bearer ' + session.token;
-  const res = await fetch(path, { ...opts, headers });
-  let data = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  if (res.status === 401) { // session expired/invalid -> log out locally
-    clearSession();
-    session = null;
-    showScreen('screen-welcome');
-    throw new Error('logged_out');
+  // Opt-in timeout (ms): abort a hung request so the caller can fail
+  // fast and retry instead of waiting forever. Default 0 = no timeout.
+  const timeoutMs = opts.timeoutMs || 0;
+  const fetchOpts = { ...opts, headers };
+  delete fetchOpts.timeoutMs;
+  let ctrl = null;
+  let timer = null;
+  if (timeoutMs > 0) {
+    ctrl = new AbortController();
+    fetchOpts.signal = ctrl.signal;
+    timer = setTimeout(() => ctrl.abort(), timeoutMs);
   }
-  if (!res.ok) throw new Error((data && data.error) || ('http_' + res.status));
-  return data;
+  try {
+    const res = await fetch(path, fetchOpts);
+    let data = null;
+    try { data = await res.json(); } catch { /* ignore */ }
+    if (res.status === 401) { // session expired/invalid -> log out locally
+      clearSession();
+      session = null;
+      showScreen('screen-welcome');
+      throw new Error('logged_out');
+    }
+    if (!res.ok) throw new Error((data && data.error) || ('http_' + res.status));
+    return data;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ---- daily data meter (Tools tab) ------------------------------------------
@@ -108,8 +124,12 @@ function applyTheme() {
   document.documentElement.dataset.accent = t.accent;
   // The strip below the bottom nav (Android system area) follows the
   // theme colour: white in light mode, dark in dark mode — never green.
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', t.mode === 'dark' ? '#0B141A' : '#FFFFFF');
+  // Both theme-color metas (the light/dark media pair in index.html)
+  // are set to the app theme, so the strip follows the app theme even
+  // when it differs from the OS preference. Before JS runs, the pair
+  // gives the OS-correct colour on its own.
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) =>
+    m.setAttribute('content', t.mode === 'dark' ? '#0B141A' : '#FFFFFF'));
   document.querySelectorAll('#btn-theme-light, #btn-theme-dark').forEach((b) => {
     b.classList.toggle('active', (b.id === 'btn-theme-dark') === (t.mode === 'dark'));
   });
@@ -546,12 +566,56 @@ function peerName(c) { return c.name || displayId(c.phone); }
 
 // ---- inbox -------------------------------------------------------------------
 let allContacts = [];
+// Inbox first-load state: the list must never look silently empty.
+// inboxLoaded turns true the first time /api/conversations succeeds;
+// until then the list shows "Loading chats…", and once the retries
+// below are exhausted it shows a tap-to-retry error row instead. A
+// failed fetch is never mistaken for an empty inbox.
+let inboxLoaded = false;
+let inboxLoading = false;
+let inboxLoadFailed = false;
+let inboxLoadAttempts = 0;
+let inboxRetryTimer = null;
+const INBOX_MAX_RETRIES = 3;
+const INBOX_RETRY_DELAY_MS = 3000;
+const INBOX_FETCH_TIMEOUT_MS = 30000;
+// One fetch at a time (the 3-second poll can overlap a retry), and a
+// fresh burst of up to 3 automatic retries, 3s apart, when the first
+// load fails — e.g. right after a deploy restarts the server, when the
+// first request can take 20s+ or fail outright. The 3-second poll
+// keeps trying in the background too, so the list recovers on its own
+// once the server is back.
 async function loadInbox() {
-  try {
-    const r = await api('/api/conversations');
-    conversations = r.conversations || [];
-    renderInbox();
-  } catch { /* offline — keep the last list on screen */ }
+  if (!inboxLoading) {
+    if (!inboxLoaded && !inboxLoadFailed) renderInbox(); // "Loading chats…" while the first fetch is in flight
+    inboxLoading = true;
+    try {
+      const r = await api('/api/conversations', { timeoutMs: INBOX_FETCH_TIMEOUT_MS });
+      conversations = r.conversations || [];
+      inboxLoaded = true;
+      inboxLoadFailed = false;
+      inboxLoadAttempts = 0;
+      if (inboxRetryTimer) { clearTimeout(inboxRetryTimer); inboxRetryTimer = null; }
+      renderInbox();
+    } catch (e) {
+      if (e && e.message === 'logged_out') return; // api() already logged out
+      if (!inboxLoaded) {
+        if (inboxLoadAttempts < INBOX_MAX_RETRIES) {
+          inboxLoadAttempts++;
+          renderInbox(); // still "Loading chats…" — not failed yet
+          if (!inboxRetryTimer) {
+            inboxRetryTimer = setTimeout(() => { inboxRetryTimer = null; loadInbox(); }, INBOX_RETRY_DELAY_MS);
+          }
+        } else {
+          inboxLoadFailed = true;
+          renderInbox(); // tap-to-retry error row
+        }
+      }
+      // If we loaded once already, keep the last list on screen.
+    } finally {
+      inboxLoading = false;
+    }
+  }
   try {
     const g = await api('/api/groups');
     myGroups = g.groups || [];
@@ -563,6 +627,13 @@ async function loadInbox() {
     renderStartChatting();
   } catch { /* offline — keep the last list on screen */ }
 }
+// Tap-to-retry from the inbox error row: a fresh burst of retries.
+function retryInboxLoad() {
+  inboxLoadAttempts = 0;
+  inboxLoadFailed = false;
+  renderInbox(); // back to "Loading chats…" while the fresh fetch runs
+  loadInbox();
+}
 const MISSED_PHONE_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/><line x1="23" y1="1" x2="17" y2="7"/><line x1="17" y1="1" x2="23" y2="7"/></svg>';
 // Favorites filter: when on, the inbox shows only favorited 1-to-1
 // chats (groups cannot be favorited — the chat ⋮ menu that sets the
@@ -572,6 +643,19 @@ function renderInbox() {
   const q = chatSearch.trim().toLowerCase();
   const list = $('chat-list');
   list.innerHTML = '';
+  // Before the first successful load, never show the empty note: a
+  // failed fetch is not an empty inbox. While the first fetch (and its
+  // automatic retries) is still trying, show "Loading chats…"; once
+  // the retries are exhausted, show the tap-to-retry error row.
+  if (!inboxLoaded) {
+    if (inboxLoadFailed) {
+      list.innerHTML = '<div class="inbox-error" id="inbox-error">Couldn\'t load chats. Tap to retry.</div>';
+      $('inbox-error').addEventListener('click', retryInboxLoad);
+    } else {
+      list.innerHTML = '<div class="inbox-loading">Loading chats…</div>';
+    }
+    return;
+  }
   // Locked chats are hidden from the list entirely (see the chat-lock
   // section) — they only surface through the "Locked chats" row below.
   const lockedSet = new Set(getLockedChats());
