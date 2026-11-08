@@ -97,7 +97,7 @@ async function main() {
       ssl: { rejectUnauthorized: false },
     });
     await client.connect();
-    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings CASCADE');
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings, groups, group_members CASCADE');
     await client.end();
   } else {
     console.log('== engine: SQLite (local file) ==');
@@ -640,6 +640,251 @@ async function main() {
     appJs.includes('const recMimeType = mediaRecorder.mimeType') && appJs.includes('type: recMimeType'));
   check('voice onstop no longer reads the cleared global recorder',
     !appJs.includes('type: mediaRecorder.mimeType'));
+
+  console.log('== delete message + last seen + missed call ==');
+  // Last seen: every authenticated request touches it (throttled to
+  // once a minute per user), and the peer's value rides in the inbox
+  // and in the message fetch.
+  const meSeen = await get('/api/me', tokA);
+  check('my last_seen is set after authenticated requests',
+    meSeen.status === 200 && typeof meSeen.data.lastSeen === 'number' && meSeen.data.lastSeen > 0, meSeen);
+  const convsSeen = await get('/api/conversations', tokB);
+  const seenConv = (convsSeen.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('friend sees my last_seen in the inbox',
+    convsSeen.status === 200 && seenConv && seenConv.lastSeen > 0, seenConv);
+  const msgsSeen = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('message fetch carries the peer last_seen',
+    msgsSeen.status === 200 && typeof msgsSeen.data.peerLastSeen === 'number' && msgsSeen.data.peerLastSeen > 0, { peerLastSeen: msgsSeen.data && msgsSeen.data.peerLastSeen });
+  // Delete for me: my copy goes away, the friend still sees it.
+  const delMe = await post('/api/messages', { to: FRIEND, body: 'delete-me test' }, tokA);
+  const delMeId = delMe.data.message.id;
+  const delMeRes = await post('/api/messages/' + delMeId + '/delete', { scope: 'me' }, tokA);
+  check('delete for me works', delMeRes.status === 200 && delMeRes.data.scope === 'me', delMeRes);
+  const delMeFetchA = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('my fetch no longer includes the message I deleted for me',
+    delMeFetchA.status === 200 && !(delMeFetchA.data.messages || []).some((m) => m.id === delMeId), { found: (delMeFetchA.data.messages || []).some((m) => m.id === delMeId) });
+  const delMeFetchB = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('friend still sees the message I deleted for me',
+    delMeFetchB.status === 200 && (delMeFetchB.data.messages || []).some((m) => m.id === delMeId), { n: (delMeFetchB.data.messages || []).length });
+  // Delete for everyone: the friend sees a placeholder, and the media
+  // endpoint refuses the bytes afterwards.
+  const delAll = await post('/api/messages', { to: FRIEND, body: 'delete-all test' }, tokA);
+  const delAllId = delAll.data.message.id;
+  const delAllPhoto = await sendMedia(FRIEND, 'image', 'del-photo.png', 'image/png', PNG_1X1, tokA);
+  const delAllPhotoId = delAllPhoto.data.message.id;
+  const delAllRes = await post('/api/messages/' + delAllId + '/delete', { scope: 'all' }, tokA);
+  check('delete for everyone works', delAllRes.status === 200 && delAllRes.data.scope === 'all', delAllRes);
+  const delAllFetchB = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const delAllMsgB = (delAllFetchB.data.messages || []).find((m) => m.id === delAllId);
+  check('friend fetch shows the deleted-for-all flag, not the text',
+    delAllFetchB.status === 200 && delAllMsgB && delAllMsgB.deleted_for_all === 1, delAllMsgB);
+  const delAllPhotoRes = await post('/api/messages/' + delAllPhotoId + '/delete', { scope: 'all' }, tokA);
+  check('delete for everyone works for a photo too', delAllPhotoRes.status === 200, delAllPhotoRes);
+  const delPhotoMediaB = await get('/api/media/' + delAllPhotoId, tokB);
+  check('deleted photo bytes refused for the receiver (404)', delPhotoMediaB.status === 404, delPhotoMediaB);
+  const delPhotoMediaA = await get('/api/media/' + delAllPhotoId, tokA);
+  check('deleted photo bytes refused for the sender too (404)', delPhotoMediaA.status === 404, delPhotoMediaA);
+  const delPhotoMediaGrid = await get('/api/chat-media?with=' + FRIEND, tokA);
+  check('deleted photo is gone from the profile media grid',
+    delPhotoMediaGrid.status === 200 && !(delPhotoMediaGrid.data.media || []).some((m) => m.id === delAllPhotoId), { n: (delPhotoMediaGrid.data.media || []).length });
+  // Only the sender may delete for everyone; strangers may not delete
+  // at all; bad input is rejected.
+  const delAllByReceiver = await post('/api/messages/' + delAllId + '/delete', { scope: 'all' }, tokB);
+  check('receiver cannot delete for everyone', delAllByReceiver.status === 403 && delAllByReceiver.data.error === 'not_owner', delAllByReceiver);
+  const delByStranger = await post('/api/messages/' + delAllId + '/delete', { scope: 'me' }, tokG);
+  check('stranger cannot delete the message', delByStranger.status === 403, delByStranger);
+  const delBadScope = await post('/api/messages/' + delAllId + '/delete', { scope: 'both' }, tokA);
+  check('bad delete scope rejected', delBadScope.status === 400, delBadScope);
+  const delMsgMissing = await post('/api/messages/999999/delete', { scope: 'me' }, tokA);
+  check('deleting a missing message is 404', delMsgMissing.status === 404, delMsgMissing);
+  const delAnon = await post('/api/messages/' + delAllId + '/delete', { scope: 'me' });
+  check('delete needs a session', delAnon.status === 401, delAnon);
+  // Missed call: an unanswered offer shows in the receiver's inbox as
+  // "Missed voice call" / "Missed video call"; once answered, it stops.
+  const offerVoice = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'x', type: 'offer', video: false } }, tokA);
+  check('voice offer posts', offerVoice.status === 200, offerVoice);
+  const convsMissedVoice = await get('/api/conversations', tokB);
+  const missedVoice = (convsMissedVoice.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('unanswered voice offer shows as a missed call in the inbox',
+    convsMissedVoice.status === 200 && missedVoice && missedVoice.missedAt > 0 && missedVoice.missedVideo === 0, missedVoice);
+  const offerVideo = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'x', type: 'offer', video: true } }, tokA);
+  check('video offer posts', offerVideo.status === 200, offerVideo);
+  const convsMissedVideo = await get('/api/conversations', tokB);
+  const missedVideo = (convsMissedVideo.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('unanswered video offer shows as a missed VIDEO call',
+    convsMissedVideo.status === 200 && missedVideo && missedVideo.missedAt > 0 && missedVideo.missedVideo === 1, missedVideo);
+  const answerBack = await post('/api/calls/signal', { to: BIJOY, kind: 'answer', payload: { sdp: 'y', type: 'answer' } }, tokB);
+  check('answer posts', answerBack.status === 200, answerBack);
+  const convsAnswered = await get('/api/conversations', tokB);
+  const answeredConv = (convsAnswered.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('an answered call no longer shows as missed',
+    convsAnswered.status === 200 && answeredConv && answeredConv.missedAt === 0, answeredConv);
+  // Static guards for the WhatsApp-copy build: white header (no logo
+  // in it), camera button, search magnifier, SVG nav in WhatsApp
+  // order (Updates before Calls), Chats badge, SVG input bar, white
+  // theme colour, and the client-side pieces (date pills, linkify,
+  // doc cards, delete menu, last seen, start chatting). idxHtml and
+  // appJs2 are the on-disk files read earlier in this suite.
+  check('app header has no logo image', !idxHtml.includes('alt="S_19"'));
+  check('app header has a camera button', idxHtml.includes('id="btn-header-camera"'));
+  check('app header has a small gear for Settings and no ⋮ menu',
+    idxHtml.includes('id="btn-header-settings"') && !idxHtml.includes('id="btn-app-menu"') && !idxHtml.includes('id="app-menu"') && appJs2.includes('btn-header-settings'));
+  check('search bar has a magnifier icon', idxHtml.includes('class="search-icon"'));
+  check('bottom nav order is Chats, Updates, Calls',
+    idxHtml.indexOf('data-tab="updates"') > idxHtml.indexOf('data-tab="chats"') &&
+    idxHtml.indexOf('data-tab="calls"') > idxHtml.indexOf('data-tab="updates"'));
+  check('Chats tab has an unread badge', idxHtml.includes('id="nav-chats-badge"'));
+  check('bottom nav uses outline SVG icons, not emoji',
+    (() => {
+      const nav = idxHtml.slice(idxHtml.indexOf('<nav class="bottom-nav">'), idxHtml.indexOf('</nav>'));
+      return nav.includes('<svg') && !['💬', '📞', '⭕', '🛠️', '🛡️'].some((e) => nav.includes(e));
+    })());
+  check('input bar uses SVG icons, not emoji',
+    !idxHtml.includes('>😊<') && !idxHtml.includes('>📎<') && !idxHtml.includes('>🎤</button>') && !idxHtml.includes('>➤</button>'));
+  check('theme-color meta is white', idxHtml.includes('name="theme-color" content="#FFFFFF"'));
+  const manifest2 = await fetch(BASE + '/manifest.json');
+  const manifestData2 = await manifest2.json().catch(() => null);
+  check('manifest theme and background are white',
+    manifestData2 && manifestData2.theme_color === '#FFFFFF' && manifestData2.background_color === '#FFFFFF', manifestData2);
+  check('client renders date separators', appJs2.includes('date-sep') && appJs2.includes('fmtDateLong'));
+  check('client linkifies URLs in text bubbles', appJs2.includes('function linkify'));
+  check('client renders WhatsApp document cards', appJs2.includes('docCardHtml') && appJs2.includes('doc-card'));
+  check('client has the delete-message menu', idxHtml.includes('Delete for everyone') && idxHtml.includes('Delete for me') && appJs2.includes('/delete'));
+  check('client shows last seen / online in the chat header', appJs2.includes('formatLastSeen') && appJs2.includes("'online'"));
+  check('client renders the Start chatting section', appJs2.includes('start-chatting') && appJs2.includes('Start chatting'));
+  check('client renders the missed-call preview', appJs2.includes('Missed voice call') && appJs2.includes('Missed video call'));
+  check('theme-color follows the theme (white light, dark in dark mode)',
+    appJs2.includes("meta[name=\"theme-color\"]") && appJs2.includes("'#0B141A'") && appJs2.includes("'#FFFFFF'"));
+  check('Settings has the auto-save photos & videos toggle',
+    idxHtml.includes('id="settings-autosave-row"') && idxHtml.includes('Auto-save photos &amp; videos'));
+  check('client auto-saves received photos/videos once (never voice/files)',
+    appJs2.includes('s19_autosave') && appJs2.includes('maybeAutosave') && appJs2.includes('s19_autosaved') &&
+    appJs2.includes("m.media_kind !== 'image' && m.media_kind !== 'video'"));
+  check('client has the new-group flow and group info',
+    idxHtml.includes('id="new-group-dialog"') && idxHtml.includes('id="group-info-overlay"') && idxHtml.includes('New group') &&
+    appJs2.includes('openGroup') && appJs2.includes('fetchGroupMessages') && appJs2.includes('group-sender-name'));
+
+  console.log('== group chats ==');
+  const STRANGER = '8801911000004'; // a fresh number (8801911000003 is CHARLIE in the block tests)
+  const tokS = await login(STRANGER, 'Stranger Test');
+  // Create: creator becomes admin, members are added, no cap.
+  const grp = await post('/api/groups', { name: 'Test Group', members: [FRIEND, GMAIL_USER] }, tokA);
+  check('create a group with two members',
+    grp.status === 200 && grp.data.group && grp.data.group.id > 0 && grp.data.group.members.length === 3 &&
+    grp.data.group.members.find((m) => m.phone === BIJOY).role === 'admin', grp.data && grp.data.group);
+  const gid = grp.data.group.id;
+  const badGrp = await post('/api/groups', { name: '   ', members: [] }, tokA);
+  check('group without a name is rejected', badGrp.status === 400, badGrp);
+  const groupsB = await get('/api/groups', tokB);
+  check('a member sees the group in their list',
+    groupsB.status === 200 && (groupsB.data.groups || []).some((g) => g.id === gid), { n: (groupsB.data.groups || []).length });
+  const groupsS = await get('/api/groups', tokS);
+  check('a non-member does not see the group',
+    groupsS.status === 200 && !(groupsS.data.groups || []).some((g) => g.id === gid), { n: (groupsS.data.groups || []).length });
+  const grpMsgS = await get('/api/groups/' + gid + '/messages?afterId=0', tokS);
+  check('non-member cannot read group messages', grpMsgS.status === 403, grpMsgS);
+  const grpSendS = await post('/api/groups/' + gid + '/messages', { body: 'I should not be here' }, tokS);
+  check('non-member cannot send to the group', grpSendS.status === 403, grpSendS);
+  const grpInfoS = await get('/api/groups/' + gid, tokS);
+  check('non-member cannot read the group info', grpInfoS.status === 403, grpInfoS);
+  // Text: sender names ride along, so the client can label bubbles.
+  const gMsgA = await post('/api/groups/' + gid + '/messages', { body: 'Hello group' }, tokA);
+  check('send a group text message', gMsgA.status === 200 && gMsgA.data.message.body === 'Hello group' && gMsgA.data.message.senderName === 'Bijoy Test', gMsgA.data && gMsgA.data.message);
+  const gFetchB = await get('/api/groups/' + gid + '/messages?afterId=0', tokB);
+  const gMsgB = (gFetchB.data.messages || []).find((m) => m.body === 'Hello group');
+  check('member fetches the group text with the sender name',
+    gFetchB.status === 200 && gMsgB && gMsgB.senderName === 'Bijoy Test', gMsgB);
+  const gReplyB = await post('/api/groups/' + gid + '/messages', { body: 'Hi Bijoy' }, tokB);
+  check('member replies in the group', gReplyB.status === 200 && gReplyB.data.message.senderName === 'Friend Test', gReplyB.data && gReplyB.data.message);
+  const gFetchA = await get('/api/groups/' + gid + '/messages?afterId=0', tokA);
+  check('creator fetches the reply with the sender name',
+    gFetchA.status === 200 && (gFetchA.data.messages || []).some((m) => m.body === 'Hi Bijoy' && m.senderName === 'Friend Test'), { n: (gFetchA.data.messages || []).length });
+  // Media in a group: same original-quality upload, members can fetch
+  // the bytes, non-members get 403.
+  const gPhoto = await post('/api/messages/media', { groupId: gid, mediaKind: 'image', fileName: 'group-photo.png', mimeType: 'image/png', size: Buffer.from(PNG_1X1, 'base64').length, data: PNG_1X1, clientKey: 'gphoto1' }, tokA);
+  check('send a group photo (original bytes)',
+    gPhoto.status === 200 && gPhoto.data.message.media_kind === 'image' && gPhoto.data.message.group_id === gid, gPhoto.data && gPhoto.data.message);
+  const gPhotoId = gPhoto.data.message.id;
+  const gPhotoDataB = await get('/api/media/' + gPhotoId, tokB);
+  check('member downloads the group photo bytes',
+    gPhotoDataB.status === 200 && gPhotoDataB.data.data === PNG_1X1, gPhotoDataB);
+  const gPhotoDataS = await get('/api/media/' + gPhotoId, tokS);
+  check('non-member cannot download group media', gPhotoDataS.status === 403, gPhotoDataS);
+  // Group messages must never leak into the 1-to-1 inbox or chat.
+  const convsAfterGrp = await get('/api/conversations', tokA);
+  check('group messages do not create a 1-to-1 inbox row',
+    convsAfterGrp.status === 200 && !(convsAfterGrp.data.conversations || []).some((c) => !c.phone), { n: (convsAfterGrp.data.conversations || []).length });
+  const oneToOneAfterGrp = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('group texts do not appear in the 1-to-1 chat',
+    oneToOneAfterGrp.status === 200 && !(oneToOneAfterGrp.data.messages || []).some((m) => m.body === 'Hello group'), { n: (oneToOneAfterGrp.data.messages || []).length });
+  // Inbox preview: group name + last message prefixed with the sender.
+  const groupsA = await get('/api/groups', tokA);
+  const grpRow = (groupsA.data.groups || []).find((g) => g.id === gid);
+  check('group inbox row has the last message and sender name',
+    groupsA.status === 200 && grpRow && grpRow.lastSenderName === 'Bijoy Test' && grpRow.unread === 0, grpRow);
+  // Any member may add members — no cap: 25 more in one call.
+  const addByMember = await post('/api/groups/' + gid + '/members', { phones: [STRANGER] }, tokB);
+  check('a non-admin member can add a member',
+    addByMember.status === 200 && addByMember.data.added === 1 && addByMember.data.group.memberCount === 4, addByMember.data && addByMember.data.group);
+  const many = [];
+  for (let i = 0; i < 25; i++) many.push('8801911000' + String(100 + i));
+  const addMany = await post('/api/groups/' + gid + '/members', { phones: many }, tokA);
+  check('25 members added at once — no cap',
+    addMany.status === 200 && addMany.data.added === 25 && addMany.data.group.memberCount === 29, addMany.data && addMany.data.group);
+  const grpInfo = await get('/api/groups/' + gid, tokA);
+  check('group info lists all 29 members',
+    grpInfo.status === 200 && grpInfo.data.group.members.length === 29, { n: grpInfo.data.group && grpInfo.data.group.members.length });
+  // Remove: only an admin may remove, and never themselves.
+  const removeByMember = await fetch(BASE + '/api/groups/' + gid + '/members/' + encodeURIComponent(many[0]), { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokB } });
+  check('a non-admin member cannot remove anyone', removeByMember.status === 403, { status: removeByMember.status });
+  const removeSelf = await fetch(BASE + '/api/groups/' + gid + '/members/' + encodeURIComponent(BIJOY), { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
+  check('an admin cannot remove themselves', removeSelf.status === 400, { status: removeSelf.status });
+  const removeByAdmin = await fetch(BASE + '/api/groups/' + gid + '/members/' + encodeURIComponent(many[0]), { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
+  check('the admin removes a member', removeByAdmin.status === 200, { status: removeByAdmin.status });
+  const grpInfoAfterRemove = await get('/api/groups/' + gid, tokA);
+  check('removed member is gone from the group',
+    grpInfoAfterRemove.status === 200 && !(grpInfoAfterRemove.data.group.members || []).some((m) => m.phone === many[0]), { n: grpInfoAfterRemove.data.group.members.length });
+  // Leave: the member is out and cannot read or send anymore.
+  const leaveB = await post('/api/groups/' + gid + '/leave', {}, tokB);
+  check('a member leaves the group', leaveB.status === 200, leaveB);
+  const grpMsgAfterLeave = await get('/api/groups/' + gid + '/messages?afterId=0', tokB);
+  check('after leaving, the member cannot read group messages', grpMsgAfterLeave.status === 403, grpMsgAfterLeave);
+  const groupsAfterLeave = await get('/api/groups', tokB);
+  check('after leaving, the group is gone from the member list',
+    groupsAfterLeave.status === 200 && !(groupsAfterLeave.data.groups || []).some((g) => g.id === gid), { n: (groupsAfterLeave.data.groups || []).length });
+  // Seen ticks: a message counts as seen only when EVERY member who
+  // was in the group when it was sent has read it. A small two-member
+  // group keeps the check exact.
+  const grp2 = await post('/api/groups', { name: 'Seen Test', members: [FRIEND] }, tokA);
+  const gid2 = grp2.data.group.id;
+  const seenMsg = await post('/api/groups/' + gid2 + '/messages', { body: 'seen test' }, tokA);
+  const seenId = seenMsg.data.message.id;
+  const seenBefore = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokA);
+  const seenTickBefore = (seenBefore.data.ticks || []).find((t) => t.id === seenId);
+  check('group message is not seen before the other member reads it',
+    seenBefore.status === 200 && seenTickBefore && seenTickBefore.read === 0, seenTickBefore);
+  await get('/api/groups/' + gid2 + '/messages?afterId=0', tokB);
+  const seenAfter = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokA);
+  const seenTickAfter = (seenAfter.data.ticks || []).find((t) => t.id === seenId);
+  check('group message is seen once every member has read it',
+    seenAfter.status === 200 && seenTickAfter && seenTickAfter.delivered === 1 && seenTickAfter.read === 1, seenTickAfter);
+  // Delete in a group: the sender can delete for everyone; a member
+  // can delete for themselves; a non-member cannot delete at all.
+  const gDel = await post('/api/groups/' + gid2 + '/messages', { body: 'delete me please' }, tokA);
+  const gDelId = gDel.data.message.id;
+  const gDelMe = await post('/api/messages/' + gDelId + '/delete', { scope: 'me' }, tokB);
+  check('group member deletes for themselves', gDelMe.status === 200 && gDelMe.data.scope === 'me', gDelMe);
+  const gDelFetchB = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokB);
+  check('group message deleted for me is hidden from that member',
+    gDelFetchB.status === 200 && !(gDelFetchB.data.messages || []).some((m) => m.id === gDelId), { n: (gDelFetchB.data.messages || []).length });
+  const gDelAll = await post('/api/messages/' + gDelId + '/delete', { scope: 'all' }, tokA);
+  check('group sender deletes for everyone', gDelAll.status === 200 && gDelAll.data.scope === 'all', gDelAll);
+  const gDelFetchA = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokA);
+  const gDelMsgA = (gDelFetchA.data.messages || []).find((m) => m.id === gDelId);
+  check('group delete-for-all shows the flag, not the text',
+    gDelFetchA.status === 200 && gDelMsgA && gDelMsgA.deleted_for_all === 1, gDelMsgA);
+  const gDelByStranger = await post('/api/messages/' + gDelId + '/delete', { scope: 'me' }, tokS);
+  check('non-member cannot delete a group message', gDelByStranger.status === 403, gDelByStranger);
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
