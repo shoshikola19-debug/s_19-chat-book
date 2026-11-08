@@ -192,6 +192,15 @@ async function publicUser(phone) {
     : { phone, name: '', avatar: '', about: '', lastSeen: 0 };
 }
 
+// Identity display: phone numbers show with a +, Gmail addresses as-is.
+// (This was used by the group endpoints but never defined — a nameless
+// group sender would have crashed the fetch with a ReferenceError.)
+function displayId(id) {
+  if (!id) return '';
+  if (id === SYSTEM_SENDER) return id;
+  return String(id).includes('@') ? String(id) : '+' + id;
+}
+
 // Is this message row deleted for one particular user? deleted_for is a
 // JSON array of phones (see db.js). A bad value is treated as "not
 // deleted" — a corrupt row must never hide a message by accident.
@@ -200,6 +209,76 @@ function deletedForUser(row, phone) {
     const arr = JSON.parse(row.deleted_for || '[]');
     return Array.isArray(arr) && arr.includes(phone);
   } catch { return false; }
+}
+
+// May this user see / act on this message row? Sender, 1-to-1
+// receiver, or a member of the group it was sent in.
+async function messageAccess(req, row) {
+  if (!row) return false;
+  if (row.sender === req.phone || row.receiver === req.phone) return true;
+  if (row.group_id) {
+    const mem = await db.get('SELECT 1 FROM group_members WHERE group_id = ? AND phone = ?', row.group_id, req.phone);
+    return !!mem;
+  }
+  return false;
+}
+
+// Reactions + stars for a batch of message rows, attached as
+// m.reactions = [{emoji, phone, name}] and m.starred = 0/1 (mine).
+// One IN query per table, so a 200-message fetch stays two queries.
+async function attachExtras(req, rows) {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => r.id);
+  const ph = ids.map(() => '?').join(',');
+  const reactRows = await db.all(
+    `SELECT message_id, phone, emoji FROM reactions WHERE message_id IN (${ph}) ORDER BY created_at`,
+    ...ids);
+  const byMsg = new Map();
+  const nameCache = new Map();
+  for (const rr of reactRows) {
+    if (!nameCache.has(rr.phone)) {
+      const u = await publicUser(rr.phone);
+      nameCache.set(rr.phone, u.name || displayId(rr.phone));
+    }
+    if (!byMsg.has(rr.message_id)) byMsg.set(rr.message_id, []);
+    byMsg.get(rr.message_id).push({ emoji: rr.emoji, phone: rr.phone, name: nameCache.get(rr.phone) });
+  }
+  const starRows = await db.all(
+    `SELECT message_id FROM stars WHERE phone = ? AND message_id IN (${ph})`,
+    req.phone, ...ids);
+  const starred = new Set(starRows.map((r) => r.message_id));
+  for (const r of rows) {
+    r.reactions = byMsg.get(r.id) || [];
+    r.starred = starred.has(r.id) ? 1 : 0;
+  }
+  return rows;
+}
+
+// Build the reply snapshot for a quoted message id. Returns null when
+// the quoted message does not exist or is not in this conversation —
+// the send then fails with bad_reply instead of quoting a stranger's
+// message. The snapshot is what renders; the original may be deleted
+// or expired later.
+async function quoteSnapshot(req, replyTo, peer, groupId) {
+  const q = await db.get('SELECT id, sender, body, media_kind, media_name, deleted_for_all, receiver, group_id FROM messages WHERE id = ?', replyTo);
+  if (!q) return null;
+  if (groupId) {
+    if (q.group_id !== groupId) return null;
+  } else {
+    if (q.group_id) return null;
+    const pair = (q.sender === req.phone && q.receiver === peer) || (q.sender === peer && q.receiver === req.phone);
+    if (!pair) return null;
+  }
+  const sender = await publicUser(q.sender);
+  const label = q.media_kind
+    ? (q.media_kind === 'file' && q.media_name ? '📄 ' + q.media_name : (MEDIA_LABELS[q.media_kind] || ''))
+    : q.body;
+  return {
+    reply_to: q.id,
+    reply_body: q.deleted_for_all ? 'This message was deleted' : String(label || '').slice(0, 500),
+    reply_sender: sender.name || displayId(q.sender),
+    reply_media_kind: q.deleted_for_all ? '' : (q.media_kind || ''),
+  };
 }
 
 // A peer identity, except the broadcast sender is accepted as-is:
@@ -560,8 +639,9 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   const rows = await db.all(
     `SELECT id, sender, receiver, body, created_at, delivered, read,
        media_kind, media_name, media_type, media_size, media_duration,
-       (media_data IS NOT NULL) AS has_media, expires_at,
-       deleted_for_all, deleted_for FROM messages
+       (media_data IS NOT NULL OR media_ref IS NOT NULL) AS has_media, expires_at,
+       deleted_for_all, deleted_for, reply_to, reply_body, reply_sender,
+       reply_media_kind, forwarded, view_once, viewed, edited_at FROM messages
      WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
        AND id > ? AND (expires_at = 0 OR expires_at > ?) AND created_at > ? AND group_id IS NULL
      ORDER BY id ASC LIMIT 200`,
@@ -570,6 +650,15 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   // side still gets them). Messages deleted for everyone stay in the
   // list with the flag — the client renders the placeholder bubble.
   const visible = rows.filter((r) => !deletedForUser(r, req.phone));
+  // Reactions + my stars ride on the fetch, so every device that has
+  // the message shows them without another request.
+  await attachExtras(req, visible);
+  // View-once status for MY messages: the fetch is incremental, so a
+  // viewed flag that changed on an old message would never arrive —
+  // this list tells the sender's bubbles to flip to "Opened".
+  const viewedOnce = await db.all(
+    'SELECT id FROM messages WHERE sender = ? AND receiver = ? AND view_once = TRUE AND viewed = TRUE AND group_id IS NULL',
+    req.phone, withPhone);
   // Messages from the peer that I just received count as delivered now.
   await db.run(
     'UPDATE messages SET delivered = TRUE WHERE sender = ? AND receiver = ? AND delivered = FALSE',
@@ -585,7 +674,7 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   // The peer's last activity, so the chat header can show "online" /
   // "last seen …" and keep it fresh on every poll.
   const peerRow = await db.get('SELECT last_seen FROM users WHERE phone = ?', withPhone);
-  return res.json({ ok: true, messages: visible, ticks, peerLastSeen: peerRow ? (peerRow.last_seen || 0) : 0 });
+  return res.json({ ok: true, messages: visible, ticks, peerLastSeen: peerRow ? (peerRow.last_seen || 0) : 0, viewedOnce: viewedOnce.map((r) => r.id) });
 }));
 
 // Delete a message (WhatsApp-style). scope "me" = only my copy goes
@@ -626,6 +715,172 @@ app.post('/api/messages/:id/delete', ah(auth), ah(async (req, res) => {
   return res.json({ ok: true, id, scope });
 }));
 
+app.post('/api/messages/:id/react', ah(auth), ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const emoji = String((req.body && req.body.emoji) || '').trim();
+  if (!id || !emoji || emoji.length > 12) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  const row = await db.get('SELECT id, sender, receiver, deleted_for_all, group_id, expires_at FROM messages WHERE id = ?', id);
+  if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (!(await messageAccess(req, row))) return res.status(403).json({ ok: false, error: 'not_allowed' });
+  if (row.deleted_for_all) return res.status(400).json({ ok: false, error: 'deleted' });
+  if (row.expires_at && row.expires_at <= now()) return res.status(400).json({ ok: false, error: 'expired' });
+  // One reaction per (message, user): the same emoji again removes it,
+  // another one replaces it.
+  const existing = await db.get('SELECT emoji FROM reactions WHERE message_id = ? AND phone = ?', id, req.phone);
+  if (existing && existing.emoji === emoji) {
+    await db.run('DELETE FROM reactions WHERE message_id = ? AND phone = ?', id, req.phone);
+    return res.json({ ok: true, id, reacted: false, emoji: null });
+  }
+  await db.run(
+    `INSERT INTO reactions (message_id, phone, emoji, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(message_id, phone) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at`,
+    id, req.phone, emoji, now());
+  return res.json({ ok: true, id, reacted: true, emoji });
+}));
+
+// Star / unstar a message. Stars are per-user — my stars never affect
+// the other side's view of the chat.
+app.post('/api/messages/:id/star', ah(auth), ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const star = !!(req.body && req.body.star);
+  if (!id) return res.status(400).json({ ok: false, error: 'bad_input' });
+  const row = await db.get('SELECT id, sender, receiver, deleted_for_all, group_id, expires_at FROM messages WHERE id = ?', id);
+  if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (!(await messageAccess(req, row))) return res.status(403).json({ ok: false, error: 'not_allowed' });
+  if (row.deleted_for_all) return res.status(400).json({ ok: false, error: 'deleted' });
+  if (star) {
+    await db.run('INSERT INTO stars (message_id, phone, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', id, req.phone, now());
+  } else {
+    await db.run('DELETE FROM stars WHERE message_id = ? AND phone = ?', id, req.phone);
+  }
+  return res.json({ ok: true, id, starred: star ? 1 : 0 });
+}));
+
+// Starred messages in one chat (1-to-1 ?with= or group ?groupId=),
+// newest first. Respects Clear-chat, disappearing expiry and
+// delete-for-me, exactly like the chat view.
+app.get('/api/messages/starred', ah(auth), ah(async (req, res) => {
+  const withPhone = normalizePeerOrSystem(req.query.with || '');
+  const groupId = Number(req.query.groupId || 0);
+  if (!withPhone && !groupId) return res.status(400).json({ ok: false, error: 'bad_peer' });
+  const t = now();
+  const cols = `m.id, m.sender, m.receiver, m.body, m.created_at, m.delivered, m.read,
+    m.media_kind, m.media_name, m.media_type, m.media_size, m.media_duration,
+    (m.media_data IS NOT NULL OR m.media_ref IS NOT NULL) AS has_media, m.expires_at,
+    m.deleted_for_all, m.deleted_for, m.group_id, m.reply_to, m.reply_body, m.reply_sender,
+    m.reply_media_kind, m.forwarded, m.view_once, m.viewed, m.edited_at`;
+  let rows;
+  if (groupId) {
+    const found = await requireGroupMember(req, res, groupId);
+    if (!found) return;
+    rows = await db.all(
+      `SELECT ${cols} FROM messages m JOIN stars s ON s.message_id = m.id AND s.phone = ?
+       WHERE m.group_id = ? AND m.created_at >= ? AND (m.expires_at = 0 OR m.expires_at > ?)
+       ORDER BY m.id DESC LIMIT 100`,
+      req.phone, groupId, found.member.joined_at, t);
+  } else {
+    const mine = await getChatSettings(req.phone, withPhone);
+    rows = await db.all(
+      `SELECT ${cols} FROM messages m JOIN stars s ON s.message_id = m.id AND s.phone = ?
+       WHERE ((m.sender = ? AND m.receiver = ?) OR (m.sender = ? AND m.receiver = ?))
+         AND m.group_id IS NULL AND (m.expires_at = 0 OR m.expires_at > ?) AND m.created_at > ?
+       ORDER BY m.id DESC LIMIT 100`,
+      req.phone, req.phone, withPhone, withPhone, req.phone, t, mine.clearedAt);
+  }
+  const visible = rows.filter((r) => !deletedForUser(r, req.phone) && !r.deleted_for_all);
+  await attachExtras(req, visible);
+  for (const r of visible) {
+    if (r.group_id) {
+      const s = await publicUser(r.sender);
+      r.senderName = s.name || displayId(r.sender);
+      r.senderAvatar = s.avatar || '';
+    }
+  }
+  return res.json({ ok: true, messages: visible });
+}));
+
+// Edit my own text message: only within 15 minutes of sending, only
+// text (not media/voice), and never a deleted message. The bubble keeps
+// its original time and gains an "Edited" mark.
+app.post('/api/messages/:id/edit', ah(auth), ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const body = String((req.body && req.body.body) || '').trim().slice(0, 4000);
+  if (!id || !body) return res.status(400).json({ ok: false, error: 'bad_input' });
+  const row = await db.get('SELECT id, sender, receiver, body, created_at, media_kind, deleted_for_all, group_id FROM messages WHERE id = ?', id);
+  if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (row.sender !== req.phone) return res.status(403).json({ ok: false, error: 'not_owner' });
+  if (row.media_kind) return res.status(400).json({ ok: false, error: 'not_text' });
+  if (row.deleted_for_all) return res.status(400).json({ ok: false, error: 'deleted' });
+  if (now() - row.created_at > 15 * 60 * 1000) return res.status(403).json({ ok: false, error: 'too_old' });
+  await db.run('UPDATE messages SET body = ?, edited_at = ? WHERE id = ?', body, now(), id);
+  const updated = await db.get('SELECT * FROM messages WHERE id = ?', id);
+  await attachExtras(req, [updated]);
+  return res.json({ ok: true, message: updated });
+}));
+
+// Forward a message to up to 5 chats (1-to-1 or groups). The copy
+// carries a "Forwarded" label and no reply quote. Media is NOT
+// re-uploaded: the copy points at the original row (media_ref), so the
+// bytes are stored once. View-once media cannot be forwarded at all.
+app.post('/api/messages/:id/forward', ah(auth), ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const targets = Array.isArray(req.body && req.body.targets) ? req.body.targets : [];
+  if (!id || !targets.length || targets.length > 5) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  const src = await db.get('SELECT * FROM messages WHERE id = ?', id);
+  if (!src) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (!(await messageAccess(req, src))) return res.status(403).json({ ok: false, error: 'not_allowed' });
+  if (src.deleted_for_all) return res.status(400).json({ ok: false, error: 'deleted' });
+  if (src.view_once) return res.status(400).json({ ok: false, error: 'view_once' });
+  if (src.expires_at && src.expires_at <= now()) return res.status(400).json({ ok: false, error: 'expired' });
+  const t = now();
+  const sent = [];
+  const sender = await publicUser(req.phone);
+  for (const tg of targets) {
+    const gid = Number((tg && tg.groupId) || 0);
+    let to = '';
+    let group = null;
+    if (gid) {
+      group = await groupOrNull(gid);
+      if (!group) continue;
+      const mem = await db.get('SELECT 1 FROM group_members WHERE group_id = ? AND phone = ?', gid, req.phone);
+      if (!mem) continue;
+    } else {
+      to = normalizePeerOrSystem((tg && (tg.to || tg.email)), (tg && tg.dial));
+      if (!validIdentity(to) || to === req.phone) continue;
+      const block = await blockState(req.phone, to);
+      if (block.byMe || block.byPeer) continue;
+    }
+    const expiresAt = group ? 0 : await disappearingExpiresAt(req.phone, to, t);
+    const mediaRef = src.media_kind ? (src.media_ref || src.id) : null;
+    const inserted = await db.get(
+      `INSERT INTO messages (sender, receiver, body, created_at, expires_at,
+         media_kind, media_name, media_type, media_size, media_duration,
+         media_ref, forwarded, group_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?) RETURNING id`,
+      req.phone, group ? '' : to, src.body, t, expiresAt,
+      src.media_kind, src.media_name, src.media_type, src.media_size, src.media_duration,
+      mediaRef, group ? gid : null);
+    const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
+    row.reactions = [];
+    row.starred = 0;
+    sent.push(row);
+    if (group) {
+      const others = (await db.all('SELECT phone FROM group_members WHERE group_id = ? AND phone != ?', gid, req.phone)).map((r) => r.phone);
+      for (const p of others) {
+        push.sendPushToUser(db, p, { title: (sender.name || req.phone) + ' • ' + group.name, body: 'New message', tag: 'grp-' + gid, type: 'message', peer: req.phone }).catch(() => {});
+      }
+    } else {
+      await pushUnlessMuted(to, req.phone, { title: sender.name || req.phone, body: 'New message', tag: 'msg-' + req.phone, type: 'message', peer: req.phone });
+    }
+  }
+  if (!sent.length) return res.status(400).json({ ok: false, error: 'no_target' });
+  return res.json({ ok: true, messages: sent });
+}));
+
 app.post('/api/messages', ah(auth), ah(async (req, res) => {
   const to = normalizePeerOrSystem(req.body && (req.body.to || req.body.email), req.body && req.body.dial);
   const body = String((req.body && req.body.body) || '').trim().slice(0, 4000);
@@ -637,12 +892,24 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
   const block = await blockState(req.phone, to);
   if (block.byMe) return res.status(403).json({ ok: false, error: 'you_blocked' });
   if (block.byPeer) return res.status(403).json({ ok: false, error: 'blocked_by_peer' });
+  // A reply quotes a message from this same conversation — the server
+  // snapshots the quoted text/sender/mediaKind so the bubble renders
+  // even after the original is deleted or expires.
+  let reply = null;
+  const replyTo = Number((req.body && req.body.replyTo) || 0);
+  if (replyTo) {
+    reply = await quoteSnapshot(req, replyTo, to, 0);
+    if (!reply) return res.status(400).json({ ok: false, error: 'bad_reply' });
+  }
   const t = now();
   const expiresAt = await disappearingExpiresAt(req.phone, to, t);
   const inserted = await db.get(
-    'INSERT INTO messages (sender, receiver, body, created_at, expires_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
-    req.phone, to, body, t, expiresAt);
+    'INSERT INTO messages (sender, receiver, body, created_at, expires_at, reply_to, reply_body, reply_sender, reply_media_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    req.phone, to, body, t, expiresAt,
+    reply ? reply.reply_to : null, reply ? reply.reply_body : '', reply ? reply.reply_sender : '', reply ? reply.reply_media_kind : '');
   const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
+  row.reactions = [];
+  row.starred = 0;
   // Notify the receiver even if their app is closed (Web Push). The
   // notification never carries the message text — only the sender's name.
   // Fire-and-forget: a push failure must never fail or delay this reply.
@@ -825,11 +1092,12 @@ app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
     `SELECT id, sender, media_kind, media_name, media_type, media_size, media_duration, created_at,
        deleted_for_all, deleted_for FROM messages
      WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
-       AND media_kind IS NOT NULL AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+       AND media_kind IS NOT NULL AND view_once = FALSE AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
      ORDER BY id DESC LIMIT 200`,
     req.phone, withPhone, withPhone, req.phone, t, mine.clearedAt);
   // Deleted media never shows in the profile grid — not the
   // deleted-for-everyone ones, and not the ones I deleted for myself.
+  // View-once media never shows either: it is gone after one view.
   const visible = rows.filter((r) => !r.deleted_for_all && !deletedForUser(r, req.phone));
   return res.json({ ok: true, peer: peer || { phone: withPhone, name: '', avatar: '', about: '', created_at: 0, last_seen: 0 }, media: visible });
 }));
@@ -889,9 +1157,20 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   const label = kind === 'file' && fileName ? '📄 ' + fileName : MEDIA_LABELS[kind];
   const fetchRow = (id) => db.get(
     `SELECT id, sender, receiver, body, created_at, delivered, read,
-       media_kind, media_name, media_type, media_size, media_duration, expires_at, group_id
+       media_kind, media_name, media_type, media_size, media_duration, expires_at, group_id,
+       reply_to, reply_body, reply_sender, reply_media_kind, forwarded, view_once, viewed, edited_at
      FROM messages WHERE id = ?`,
     id);
+  // A reply on a photo/video too: same snapshot rules as a text reply.
+  let reply = null;
+  const replyTo = Number(body.replyTo || 0);
+  if (replyTo) {
+    reply = await quoteSnapshot(req, replyTo, targetGroup ? '' : to, targetGroup ? groupId : 0);
+    if (!reply) return res.status(400).json({ ok: false, error: 'bad_reply' });
+  }
+  // View-once is photo/video only. The toggle lives in the attach menu;
+  // the server only trusts it for image/video kinds.
+  const viewOnce = (kind === 'image' || kind === 'video') && !!body.viewOnce;
   // Idempotency: the client sends its tempId as clientKey. A retry of
   // an upload whose response was lost (flaky network) re-sends the
   // same key — return the row that already exists instead of
@@ -906,9 +1185,11 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   try {
     inserted = await db.get(
       `INSERT INTO messages (sender, receiver, body, created_at, expires_at,
-         media_kind, media_name, media_type, media_size, media_data, media_duration, client_key, group_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-      req.phone, targetGroup ? '' : to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration, clientKey || null, targetGroup ? groupId : null);
+         media_kind, media_name, media_type, media_size, media_data, media_duration, client_key, group_id,
+         reply_to, reply_body, reply_sender, reply_media_kind, view_once)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      req.phone, targetGroup ? '' : to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration, clientKey || null, targetGroup ? groupId : null,
+      reply ? reply.reply_to : null, reply ? reply.reply_body : '', reply ? reply.reply_sender : '', reply ? reply.reply_media_kind : '', viewOnce);
   } catch (e) {
     // Two identical uploads raced each other and the unique index let
     // only one through — return that row instead of failing.
@@ -921,6 +1202,8 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   // The reply leaves the bytes out — the sender already has them, and
   // the receiver pulls them on demand from GET /api/media/:id.
   const row = await fetchRow(inserted.id);
+  row.reactions = [];
+  row.starred = 0;
   const sender = await publicUser(req.phone);
   if (targetGroup) {
     const others = (await db.all('SELECT phone FROM group_members WHERE group_id = ? AND phone != ?', groupId, req.phone)).map((r) => r.phone);
@@ -946,13 +1229,25 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
 }));
 
 // Fetch one message's media bytes (on demand, when the chat renders it).
-// Only the sender or the receiver may fetch it.
+// Only the sender or the receiver may fetch it. Forwarded media reuses
+// the original row's bytes (media_ref) — the forward itself stores no
+// copy. View-once media can be fetched exactly once, by the receiver
+// only: the first fetch marks it viewed AND wipes the bytes in the same
+// request, so a second fetch — by anyone — finds nothing. The sender
+// can never re-open their own view-once photo. (Screenshot blocking is
+// impossible in a browser — the app never claims otherwise.)
 app.get('/api/media/:id', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
   const row = await db.get(
-    'SELECT id, sender, receiver, media_kind, media_name, media_type, media_size, media_data, media_duration, expires_at, deleted_for_all, deleted_for, group_id FROM messages WHERE id = ?',
+    'SELECT id, sender, receiver, media_kind, media_name, media_type, media_size, media_data, media_duration, expires_at, deleted_for_all, deleted_for, group_id, media_ref, view_once, viewed FROM messages WHERE id = ?',
     id);
-  if (!row || !row.media_data) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
+  // Forwarded media: resolve to the original row for the bytes.
+  let src = row;
+  if (row.media_ref) {
+    src = await db.get('SELECT id, sender, receiver, media_kind, media_name, media_type, media_size, media_data, media_duration, expires_at, deleted_for_all, group_id, view_once, viewed FROM messages WHERE id = ?', row.media_ref);
+    if (!src) return res.status(404).json({ ok: false, error: 'not_found' });
+  }
   // Only the sender, the 1-to-1 receiver, or a member of the group the
   // message was sent in may fetch its bytes.
   let allowed = row.sender === req.phone || row.receiver === req.phone;
@@ -966,18 +1261,40 @@ app.get('/api/media/:id', ah(auth), ah(async (req, res) => {
   // A message deleted for everyone (or just for me) has no media to
   // fetch anymore — the bytes were dropped on delete-for-all, and a
   // delete-for-me hides them from my side too.
-  if (row.deleted_for_all) return res.status(404).json({ ok: false, error: 'deleted' });
+  if (row.deleted_for_all || src.deleted_for_all) return res.status(404).json({ ok: false, error: 'deleted' });
   if (deletedForUser(row, req.phone)) return res.status(404).json({ ok: false, error: 'deleted' });
   if (row.expires_at && row.expires_at <= now()) return res.status(404).json({ ok: false, error: 'expired' });
+  // View-once, already viewed: the first view wiped the bytes, so the
+  // media_data check below would say 404 — but "already opened" is a
+  // 410, and it must win over the missing bytes.
+  if ((row.view_once || src.view_once) && (row.viewed || src.viewed)) {
+    return res.status(410).json({ ok: false, error: 'view_once_gone' });
+  }
+  if (!src.media_data) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (row.view_once || src.view_once) {
+    if (row.sender === req.phone) return res.status(410).json({ ok: false, error: 'view_once_gone' });
+    const data = src.media_data;
+    await db.run('UPDATE messages SET viewed = TRUE, media_data = NULL WHERE id = ?', src.id);
+    return res.json({
+      ok: true,
+      id: row.id,
+      mediaKind: src.media_kind,
+      fileName: src.media_name,
+      mimeType: src.media_type,
+      size: src.media_size,
+      duration: src.media_duration,
+      data,
+    });
+  }
   return res.json({
     ok: true,
     id: row.id,
-    mediaKind: row.media_kind,
-    fileName: row.media_name,
-    mimeType: row.media_type,
-    size: row.media_size,
-    duration: row.media_duration,
-    data: row.media_data,
+    mediaKind: src.media_kind,
+    fileName: src.media_name,
+    mimeType: src.media_type,
+    size: src.media_size,
+    duration: src.media_duration,
+    data: src.media_data,
   });
 }));
 
@@ -1297,13 +1614,18 @@ app.get('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
   const rows = await db.all(
     `SELECT id, sender, receiver, body, created_at, delivered, read,
        media_kind, media_name, media_type, media_size, media_duration,
-       (media_data IS NOT NULL) AS has_media, expires_at,
-       deleted_for_all, deleted_for, group_id FROM messages
+       (media_data IS NOT NULL OR media_ref IS NOT NULL) AS has_media, expires_at,
+       deleted_for_all, deleted_for, group_id, reply_to, reply_body, reply_sender,
+       reply_media_kind, forwarded, view_once, viewed, edited_at FROM messages
      WHERE group_id = ? AND id > ? AND created_at >= ?
        AND (expires_at = 0 OR expires_at > ?)
      ORDER BY id ASC LIMIT 200`,
     id, afterId, me.joined_at, t);
   const visible = rows.filter((r) => !deletedForUser(r, req.phone));
+  await attachExtras(req, visible);
+  const viewedOnce = await db.all(
+    'SELECT id FROM messages WHERE sender = ? AND group_id = ? AND view_once = TRUE AND viewed = TRUE',
+    req.phone, id);
   // My fetch delivers the messages from others to me.
   await db.run('UPDATE messages SET delivered = TRUE WHERE group_id = ? AND sender != ? AND delivered = FALSE AND created_at >= ?', id, req.phone, me.joined_at);
   if (visible.length) {
@@ -1329,7 +1651,7 @@ app.get('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
   const myRows = await db.all('SELECT id, delivered, created_at FROM messages WHERE group_id = ? AND sender = ? AND created_at >= ? ORDER BY id DESC LIMIT 100', id, req.phone, me.joined_at);
   const ticks = myRows.map((r) => ({ id: r.id, delivered: r.delivered, read: groupRead(allMembers, r, req.phone) ? 1 : 0 }));
   const members = await groupMembers(id);
-  return res.json({ ok: true, messages, ticks, group: { id, name: found.group.name, memberCount: members.length } });
+  return res.json({ ok: true, messages, ticks, group: { id, name: found.group.name, memberCount: members.length }, viewedOnce: viewedOnce.map((r) => r.id) });
 }));
 app.post('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
@@ -1337,11 +1659,20 @@ app.post('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
   if (!found) return;
   const body = String((req.body && req.body.body) || '').trim().slice(0, 4000);
   if (!body) return res.status(400).json({ ok: false, error: 'bad_input' });
+  let reply = null;
+  const replyTo = Number((req.body && req.body.replyTo) || 0);
+  if (replyTo) {
+    reply = await quoteSnapshot(req, replyTo, '', id);
+    if (!reply) return res.status(400).json({ ok: false, error: 'bad_reply' });
+  }
   const t = now();
   const inserted = await db.get(
-    `INSERT INTO messages (sender, receiver, body, created_at, group_id) VALUES (?, '', ?, ?, ?) RETURNING id`,
-    req.phone, body, t, id);
+    `INSERT INTO messages (sender, receiver, body, created_at, group_id, reply_to, reply_body, reply_sender, reply_media_kind) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    req.phone, body, t, id,
+    reply ? reply.reply_to : null, reply ? reply.reply_body : '', reply ? reply.reply_sender : '', reply ? reply.reply_media_kind : '');
   const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
+  row.reactions = [];
+  row.starred = 0;
   const me = await publicUser(req.phone);
   const others = (await db.all('SELECT phone FROM group_members WHERE group_id = ? AND phone != ?', id, req.phone)).map((r) => r.phone);
   for (const p of others) {
@@ -1612,6 +1943,14 @@ setInterval(async () => {
     // Disappearing messages: expired rows — and their media with them —
     // are deleted for everyone, not just hidden.
     await db.run('DELETE FROM messages WHERE expires_at > 0 AND expires_at <= ?', now());
+    // Reactions and stars on rows that no longer exist (deleted /
+    // expired) are orphans — drop them so they never resurface.
+    await db.run('DELETE FROM reactions WHERE message_id NOT IN (SELECT id FROM messages)');
+    await db.run('DELETE FROM stars WHERE message_id NOT IN (SELECT id FROM messages)');
+    // View-once media whose bytes were already served once: if the
+    // wipe was interrupted (a crash between serving and marking), the
+    // viewed flag still says viewed — drop the bytes here.
+    await db.run('UPDATE messages SET media_data = NULL WHERE view_once = TRUE AND viewed = TRUE AND media_data IS NOT NULL');
   } catch (e) {
     console.error('[cleanup]', e && e.message);
   }
