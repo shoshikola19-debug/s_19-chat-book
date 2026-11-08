@@ -128,8 +128,9 @@
         <div class="meter-rows">
           <div>মেসেজ <span id="meter-msg">০ KB</span></div>
           <div>ভয়েস কল <span id="meter-call">০ KB</span></div>
+          <div>ভিডিও কল <span id="meter-vcall">০ KB</span></div>
         </div>
-        <p class="meter-note">মেসেজে খুব কম ডেটা লাগে; কলে প্রতি মিনিটে প্রায় ১২০ KB। সারাদিনের লক্ষ্য ৫–১০ MB।</p>
+        <p class="meter-note">মেসেজে খুব কম ডেটা লাগে; ভয়েস কলে প্রতি মিনিটে প্রায় ১২০ KB, ভিডিও কলে (৭২০p) প্রতি মিনিটে প্রায় ১১ MB। সারাদিনের লক্ষ্য ৫–১০ MB।</p>
       </div>
       <button id="btn-logout" class="btn-danger">লগ আউট করো</button>
       <div class="section-title">থিম</div>
@@ -200,6 +201,7 @@
         <div><div id="chat-peer-name" class="chat-peer-name"></div><div id="chat-peer-phone" class="chat-peer-phone"></div></div>
       </div>
       <button id="btn-call-peer" class="call-btn" title="ভয়েস কল">📞</button>
+      <button id="btn-video-call-peer" class="call-btn" title="ভিডিও কল">🎥</button>
       <button id="btn-chat-menu" class="call-btn" title="সেটিংস">⋮</button>
       <div id="chat-menu" class="chat-menu hidden">
         <button id="menu-chat-theme" type="button">🎨 চ্যাট থিম</button>
@@ -249,12 +251,18 @@
 
   <!-- ===== Call overlay ===== -->
   <div id="call-overlay" class="call-overlay hidden">
+    <div id="call-video-wrap" class="call-video-wrap hidden">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+    </div>
     <img src="logo.webp" class="logo-medium" alt="">
     <div id="call-peer-name" class="call-name"></div>
     <div id="call-status" class="call-status">ডাকছে…</div>
     <div id="call-timer" class="call-timer">০০:০০</div>
     <div class="call-buttons">
       <button id="btn-mute" class="call-round">🎙️</button>
+      <button id="btn-cam-toggle" class="call-round hidden" title="ক্যামেরা বন্ধ করো">📷</button>
+      <button id="btn-cam-switch" class="call-round hidden" title="সামনে/পেছনের ক্যামেরা">🔄</button>
       <button id="btn-end-call" class="call-round call-end">📞</button>
     </div>
   </div>
