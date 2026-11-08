@@ -824,11 +824,20 @@ async function main() {
     && idxHtml2.includes('settings-access-overlay') && idxHtml2.includes('settings-help-overlay'));
   const ringBlock = (appJs.match(/const RING_MELODIES = \{([\s\S]*?)\n\};/) || [])[1] || '';
   const ringKeys = (ringBlock.match(/^\s{2}[a-z]+:/gm) || []).length;
-  check('15 built-in call ringtones (Classic, Gentle, Bright + 12 more)', ringKeys === 15, { ringKeys });
+  check('22 built-in call ringtones (15 + 8-bit Bounce, Alien, Alpha, Asteroid, Atomic Bell, Aurora, Beep Once)', ringKeys === 22, { ringKeys });
+  check('7 new ringtones exist with the same names as the phone tone list (original melodies, not system files)',
+    ['bitbounce', 'alien', 'alpha', 'asteroid', 'atomicbell', 'aurora', 'beeponce'].every((k) => ringBlock.includes(k + ':'))
+    && appJs.includes("'8-bit Bounce'") && appJs.includes("'Alien'") && appJs.includes("'Alpha'")
+    && appJs.includes("'Asteroid'") && appJs.includes("'Atomic Bell'") && appJs.includes("'Aurora'") && appJs.includes("'Beep Once'"));
+  check('ringtone volume slider in Notifications: slider + % label in the markup, volume setting key, previews + full ring scale with it (soft ringback unchanged)',
+    idxHtml2.includes('notif-volume-slider') && idxHtml2.includes('notif-volume-state')
+    && appJs.includes('ringtoneVolume') && appJs.includes('ringtoneVolumeFactor')
+    && appJs.includes('RING_VOL.full * ringtoneVolumeFactor()')
+    && appJs.includes("ringMode === 'full' ? RING_VOL.full * ringtoneVolumeFactor()"));
   const msgBlock = (appJs.match(/const MSG_TONES = \{([\s\S]*?)\n\};/) || [])[1] || '';
   const msgKeys = (msgBlock.match(/^\s{2}[a-z]+:/gm) || []).length;
   check('6 built-in message tones', msgKeys === 6, { msgKeys });
-  check('Notifications screen: per-device sound toggles, 15 ringtones + 6 message tones + custom tones + Silent, preview, and the call/message paths respect them',
+  check('Notifications screen: per-device sound toggles, 22 ringtones + 6 message tones + custom tones + Silent, preview, and the call/message paths respect them',
     appJs.includes('s19_notif') && appJs.includes('loadNotifSettings') && appJs.includes('saveNotifSettings')
     && appJs.includes('RING_MELODIES') && appJs.includes('sunrise') && appJs.includes('starlight') && appJs.includes('festival')
     && appJs.includes('MSG_TONES') && appJs.includes('chirp') && appJs.includes('whistle')
