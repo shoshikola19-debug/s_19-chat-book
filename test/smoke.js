@@ -1183,6 +1183,19 @@ async function main() {
   const otherId = otherChat.data.message.id;
   const crossReply = await post('/api/messages', { to: BIJOY, body: 'cross chat quote', replyTo: otherId }, tokB);
   check('reply cannot quote a message from another chat', crossReply.status === 400 && crossReply.data.error === 'bad_reply', crossReply);
+  // Swipe-to-reply is detected during pointermove (not only at
+  // pointerup): on a real phone pointerleave fires when the finger
+  // slides off the bubble and pointercancel fires when the browser
+  // claims the touch for scrolling, so pointerup almost never saw a
+  // valid swipe (Bijoy reported it 2026-11-08 23:10). Leave/cancel now
+  // clear only the long-press timer, and the bubble declares
+  // touch-action pan-y so horizontal pointer events are not hijacked.
+  const swipeBlock = (appJs.match(/function attachDeleteHandlers[\s\S]*?\n\}/) || [])[0] || '';
+  const leaveBlock = (swipeBlock.match(/for \(const ev of \['pointerleave', 'pointercancel'\]\) \{[\s\S]*?\n  \}/) || [])[0] || '';
+  check('swipe-to-reply is detected on pointermove; leave/cancel only clear the long-press timer; bubble has touch-action pan-y',
+    swipeBlock.includes("addEventListener('pointermove'") && swipeBlock.includes('startReply(m)')
+    && swipeBlock.includes('swipeDone') && !leaveBlock.includes('swipeStart = null')
+    && /\.msg \{[^}]*touch-action: pan-y/.test(styleCss));
 
   // --- forward ---
   const fwd = await post('/api/messages/' + baseId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokB);
