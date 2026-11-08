@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="bn">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -14,12 +14,12 @@
   <!-- ===== Welcome ===== -->
   <section id="screen-welcome" class="screen">
     <div class="welcome-box">
-      <img src="logo.webp" alt="S_19 CHAT BOOK লোগো" class="logo-big">
+      <img src="logo.webp" alt="S_19 CHAT BOOK logo" class="logo-big">
       <h1>S_19 CHAT BOOK</h1>
-      <p class="welcome-sub">বন্ধুদের সাথে ফ্রিতে মেসেজ আর ভয়েস কল</p>
+      <p class="welcome-sub">Free messages and voice calls with friends</p>
       <p id="welcome-banner" class="welcome-banner hidden"></p>
-      <p class="welcome-note">মেসেজ, কল, স্ট্যাটাস আর চ্যানেল — সব এক জায়গায়।</p>
-      <button id="btn-agree" class="btn-primary">সম্মত আছি, চালিয়ে যাও</button>
+      <p class="welcome-note">Messages, calls, status and channels — all in one place.</p>
+      <button id="btn-agree" class="btn-primary">Agree and continue</button>
     </div>
   </section>
 
@@ -27,29 +27,29 @@
   <section id="screen-phone" class="screen hidden">
     <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
     <div class="form-box">
-      <h2 id="login-title">ফোন নম্বর দাও</h2>
-      <p class="hint">ফোন নম্বর বা Gmail — যেকোনো একটা দিয়ে লগইন করো।</p>
+      <h2 id="login-title">Enter your phone number</h2>
+      <p class="hint">Log in with a phone number or Gmail — either one works.</p>
       <div class="method-toggle">
-        <button id="btn-method-phone" class="method-btn active" type="button">📱 ফোন নম্বর</button>
+        <button id="btn-method-phone" class="method-btn active" type="button">📱 Phone number</button>
         <button id="btn-method-email" class="method-btn" type="button">✉️ Gmail</button>
       </div>
       <div id="phone-form">
-        <p class="hint">তোমার দেশটা বেছে নাও, তারপর নম্বরটা লেখো।</p>
-        <label class="field-label" for="country-select">দেশ</label>
+        <p class="hint">Choose your country, then type your number.</p>
+        <label class="field-label" for="country-select">Country</label>
         <select id="country-select" class="input"></select>
-        <label class="field-label" for="phone-input">ফোন নম্বর</label>
+        <label class="field-label" for="phone-input">Phone number</label>
         <div class="phone-row">
           <span id="dial-prefix" class="dial-prefix">+880</span>
           <input id="phone-input" class="input phone-input" type="tel" inputmode="numeric" autocomplete="tel" placeholder="1XXXXXXXXX">
         </div>
       </div>
       <div id="email-form" class="hidden">
-        <p class="hint">তোমার Gmail ঠিকানাটা লেখো — কোডটা ওই Gmail-এ যাবে (ফ্রি)।</p>
-        <label class="field-label" for="email-input">Gmail ঠিকানা</label>
-        <input id="email-input" class="input" type="email" inputmode="email" autocomplete="email" placeholder="tomar@gmail.com">
+        <p class="hint">Type your Gmail address — the code will go to that Gmail (free).</p>
+        <label class="field-label" for="email-input">Gmail address</label>
+        <input id="email-input" class="input" type="email" inputmode="email" autocomplete="email" placeholder="you@gmail.com">
       </div>
       <p id="phone-error" class="error hidden"></p>
-      <button id="btn-send-code" class="btn-primary">কোড পাঠাও</button>
+      <button id="btn-send-code" class="btn-primary">Send code</button>
     </div>
   </section>
 
@@ -57,14 +57,14 @@
   <section id="screen-code" class="screen hidden">
     <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
     <div class="form-box">
-      <h2>কোডটা লেখো</h2>
-      <p class="hint" id="code-hint"><span id="code-phone-label"></span>-এ ৬ সংখ্যার কোড পাঠানো হয়েছে।</p>
-      <div id="test-code-box" class="test-code hidden">পরীক্ষার কোড: <b id="test-code"></b><br><small>আসল কোড পাঠানো এখনো যুক্ত হয়নি, তাই কোডটা এখানেই দেখানো হচ্ছে।</small></div>
+      <h2>Enter the code</h2>
+      <p class="hint" id="code-hint">A 6-digit code was sent to <span id="code-phone-label"></span>.</p>
+      <div id="test-code-box" class="test-code hidden">Test code: <b id="test-code"></b><br><small>Real codes aren't connected yet, so the code is shown here.</small></div>
       <input id="code-input" class="input code-input" type="text" inputmode="numeric" maxlength="6" placeholder="______" autocomplete="one-time-code">
       <p id="code-error" class="error hidden"></p>
-      <button id="btn-verify-code" class="btn-primary">লগইন করো</button>
-      <button id="btn-resend-code" class="btn-link">কোড আবার পাঠাও</button>
-      <button id="btn-change-number" class="btn-link">নম্বর বদলাও</button>
+      <button id="btn-verify-code" class="btn-primary">Log in</button>
+      <button id="btn-resend-code" class="btn-link">Resend code</button>
+      <button id="btn-change-number" class="btn-link">Change number</button>
     </div>
   </section>
 
@@ -72,11 +72,11 @@
   <section id="screen-name" class="screen hidden">
     <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
     <div class="form-box">
-      <h2>তোমার নাম কী?</h2>
-      <p class="hint">বন্ধুরা তোমাকে এই নামে চিনবে।</p>
-      <input id="name-input" class="input" type="text" maxlength="60" placeholder="তোমার নাম লেখো">
+      <h2>What's your name?</h2>
+      <p class="hint">Your friends will know you by this name.</p>
+      <input id="name-input" class="input" type="text" maxlength="60" placeholder="Type your name">
       <p id="name-error" class="error hidden"></p>
-      <button id="btn-save-name" class="btn-primary">শুরু করো</button>
+      <button id="btn-save-name" class="btn-primary">Start</button>
     </div>
   </section>
 
@@ -89,29 +89,29 @@
 
     <!-- Chats -->
     <div id="tab-chats" class="tab-page">
-      <div class="search-row"><input id="chat-search" class="input search-input" type="search" placeholder="খুঁজো"></div>
+      <div class="search-row"><input id="chat-search" class="input search-input" type="search" placeholder="Search"></div>
       <div id="chat-list" class="chat-list"></div>
-      <button id="btn-add-contact" class="fab" title="নম্বর যোগ করো">+</button>
+      <button id="btn-add-contact" class="fab" title="Add a number">+</button>
     </div>
 
     <!-- Calls -->
     <div id="tab-calls" class="tab-page hidden">
-      <div class="section-title">কল করো</div>
+      <div class="section-title">Make a call</div>
       <div id="call-list" class="chat-list"></div>
-      <div class="section-title">সাম্প্রতিক কল</div>
+      <div class="section-title">Recent calls</div>
       <div id="call-history" class="chat-list"></div>
     </div>
 
     <!-- Updates -->
     <div id="tab-updates" class="tab-page hidden">
-      <div class="section-title">স্ট্যাটাস</div>
+      <div class="section-title">Status</div>
       <div id="status-list" class="status-list"></div>
       <div class="status-add-row">
-        <input id="status-input" class="input" type="text" maxlength="500" placeholder="স্ট্যাটাস লেখো…">
-        <button id="btn-post-status" class="btn-primary btn-small">দাও</button>
+        <input id="status-input" class="input" type="text" maxlength="500" placeholder="Write a status…">
+        <button id="btn-post-status" class="btn-primary btn-small">Post</button>
       </div>
-      <div class="section-title">চ্যানেল <button id="btn-new-channel" class="btn-link">+ নতুন চ্যানেল</button></div>
-      <div class="search-row"><input id="channel-search" class="input search-input" type="search" placeholder="চ্যানেল খুঁজো"></div>
+      <div class="section-title">Channels <button id="btn-new-channel" class="btn-link">+ New channel</button></div>
+      <div class="search-row"><input id="channel-search" class="input search-input" type="search" placeholder="Search channels"></div>
       <div id="channel-list" class="chat-list"></div>
     </div>
 
@@ -121,81 +121,81 @@
         <img src="logo.webp" class="logo-medium" alt="">
         <div><div id="tools-name" class="profile-name"></div><div id="tools-phone" class="profile-phone"></div></div>
       </div>
-      <div class="section-title">আজকের ডেটা খরচ (আনুমানিক)</div>
+      <div class="section-title">Today's data use (estimate)</div>
       <div class="meter-card">
-        <div class="meter-total"><b id="meter-total">০ MB</b><span> / লক্ষ্য ১০ MB</span></div>
+        <div class="meter-total"><b id="meter-total">0 MB</b><span> / 10 MB goal</span></div>
         <div class="meter-bar"><div id="meter-fill" class="meter-fill"></div></div>
         <div class="meter-rows">
-          <div>মেসেজ <span id="meter-msg">০ KB</span></div>
-          <div>ভয়েস কল <span id="meter-call">০ KB</span></div>
-          <div>ভিডিও কল <span id="meter-vcall">০ KB</span></div>
+          <div>Messages <span id="meter-msg">0 KB</span></div>
+          <div>Voice call <span id="meter-call">0 KB</span></div>
+          <div>Video call <span id="meter-vcall">0 KB</span></div>
         </div>
-        <p class="meter-note">মেসেজে খুব কম ডেটা লাগে; ভয়েস কলে প্রতি মিনিটে প্রায় ১২০ KB, ভিডিও কলে (৭২০p) প্রতি মিনিটে প্রায় ১১ MB। সারাদিনের লক্ষ্য ৫–১০ MB।</p>
+        <p class="meter-note">Messages use very little data; voice calls use about 120 KB per minute, video calls (720p) about 11 MB per minute. Daily goal: 5–10 MB.</p>
       </div>
-      <button id="btn-logout" class="btn-danger">লগ আউট করো</button>
-      <div class="section-title">থিম</div>
+      <button id="btn-logout" class="btn-danger">Log out</button>
+      <div class="section-title">Theme</div>
       <div class="meter-card">
         <div class="theme-row">
-          <button id="btn-theme-light" class="method-btn" type="button">☀️ হালকা</button>
-          <button id="btn-theme-dark" class="method-btn" type="button">🌙 অন্ধকার</button>
+          <button id="btn-theme-light" class="method-btn" type="button">☀️ Light</button>
+          <button id="btn-theme-dark" class="method-btn" type="button">🌙 Dark</button>
         </div>
-        <p class="hint" style="margin:12px 0 8px">রং বেছে নাও</p>
+        <p class="hint" style="margin:12px 0 8px">Choose a colour</p>
         <div class="theme-row">
-          <button class="theme-swatch" data-accent="green" type="button" title="সবুজ" style="background:#25D366">সবুজ</button>
-          <button class="theme-swatch" data-accent="blue" type="button" title="নীল" style="background:#2196F3">নীল</button>
-          <button class="theme-swatch" data-accent="purple" type="button" title="বেগুনি" style="background:#9C27B0">বেগুনি</button>
+          <button class="theme-swatch" data-accent="green" type="button" title="Green" style="background:#25D366">Green</button>
+          <button class="theme-swatch" data-accent="blue" type="button" title="Blue" style="background:#2196F3">Blue</button>
+          <button class="theme-swatch" data-accent="purple" type="button" title="Purple" style="background:#9C27B0">Purple</button>
         </div>
-        <p class="meter-note">থিম বদলালে ইনবক্স আর চ্যাট — দুটোই বদলে যাবে। তোমার ফোনেই মনে থাকবে।</p>
-        <p class="hint" style="margin:12px 0 8px">ইনবক্সের পটভূমিতে ছবি</p>
+        <p class="meter-note">Changing the theme changes both the inbox and chats. It's saved on your phone.</p>
+        <p class="hint" style="margin:12px 0 8px">Inbox background photo</p>
         <div class="theme-row">
-          <button id="btn-inbox-bg-pick" class="method-btn" type="button">🖼️ গ্যালারি থেকে ছবি</button>
-          <button id="btn-inbox-bg-remove" class="method-btn hidden" type="button">ছবি সরাও</button>
+          <button id="btn-inbox-bg-pick" class="method-btn" type="button">🖼️ Photo from gallery</button>
+          <button id="btn-inbox-bg-remove" class="method-btn hidden" type="button">Remove photo</button>
         </div>
         <input type="file" id="inbox-bg-input" accept="image/*" class="hidden">
       </div>
-      <div class="section-title">মিডিয়া স্টোরেজ (আনুমানিক)</div>
+      <div class="section-title">Media storage (estimate)</div>
       <div class="meter-card">
-        <div class="meter-total"><b id="storage-used">০ MB</b><span> / ১ GB ফ্রি স্টোরেজ</span></div>
+        <div class="meter-total"><b id="storage-used">0 MB</b><span> / 1 GB free storage</span></div>
         <div class="meter-bar"><div id="storage-fill" class="meter-fill"></div></div>
-        <div class="meter-rows"><div>মিডিয়া ফাইল <span id="storage-count">০টি</span></div></div>
-        <p class="meter-note">ছবি আর ভিডিও আসল মানের (১০০%) পাঠানো হয় — কোনো কমপ্রেশন নেই। তাই বড় ভিডিও বেশি পাঠালে ১ GB তাড়াতাড়ি ভরে যাবে: মোটামুটি ২৫০টি ৩ MB-এর ছবি, বা ১৬টি ৫০ MB-এর ভিডিও। কিছুই নিজে নিজে মোছা হয় না।</p>
+        <div class="meter-rows"><div>Media files <span id="storage-count">0</span></div></div>
+        <p class="meter-note">Photos and videos are sent at original quality (100%) — no compression. So sending lots of big videos will fill 1 GB fast: roughly 250 photos of 3 MB, or 16 videos of 50 MB. Nothing is ever deleted by itself.</p>
       </div>
-      <p class="app-version">S_19 CHAT BOOK • পরীক্ষার সংস্করণ</p>
+      <p class="app-version">S_19 CHAT BOOK • Test version</p>
     </div>
 
     <!-- Admin (only shown when the server says this user is an admin) -->
     <div id="tab-admin" class="tab-page hidden">
-      <div class="section-title">পরিসংখ্যান</div>
+      <div class="section-title">Statistics</div>
       <div class="meter-card">
         <div class="meter-rows">
-          <div>ব্যবহারকারী <b id="admin-stat-users">০</b></div>
-          <div>মেসেজ <b id="admin-stat-messages">০</b></div>
-          <div>কল <b id="admin-stat-calls">০</b></div>
+          <div>Users <b id="admin-stat-users">0</b></div>
+          <div>Messages <b id="admin-stat-messages">0</b></div>
+          <div>Calls <b id="admin-stat-calls">0</b></div>
         </div>
       </div>
-      <div class="section-title">ব্যবহারকারী</div>
+      <div class="section-title">Users</div>
       <div id="admin-users" class="chat-list"></div>
-      <div class="section-title">চ্যানেল</div>
+      <div class="section-title">Channels</div>
       <div id="admin-channels" class="chat-list"></div>
-      <div class="section-title">সবাইকে ঘোষণা পাঠাও</div>
+      <div class="section-title">Send an announcement to everyone</div>
       <div class="status-add-row">
-        <input id="admin-broadcast-input" class="input" type="text" maxlength="4000" placeholder="ঘোষণা লেখো…">
-        <button id="btn-admin-broadcast" class="btn-primary btn-small">পাঠাও</button>
+        <input id="admin-broadcast-input" class="input" type="text" maxlength="4000" placeholder="Write an announcement…">
+        <button id="btn-admin-broadcast" class="btn-primary btn-small">Send</button>
       </div>
-      <div class="section-title">সেটিংস — স্বাগতম পাতার ব্যানার</div>
+      <div class="section-title">Settings — welcome page banner</div>
       <div class="status-add-row">
-        <input id="admin-banner-input" class="input" type="text" maxlength="300" placeholder="ব্যানারের লেখা (খালি রাখলে দেখাবে না)">
-        <button id="btn-admin-save-banner" class="btn-primary btn-small">সেভ করো</button>
+        <input id="admin-banner-input" class="input" type="text" maxlength="300" placeholder="Banner text (leave empty to hide it)">
+        <button id="btn-admin-save-banner" class="btn-primary btn-small">Save</button>
       </div>
-      <p class="hint" style="padding:0 16px">ব্যানারটা অ্যাপের প্রথম (স্বাগতম) পাতায় দেখাবে। খালি রাখলে কিছু দেখাবে না।</p>
+      <p class="hint" style="padding:0 16px">The banner shows on the app's first (welcome) page. Leave it empty to show nothing.</p>
     </div>
 
     <nav class="bottom-nav">
-      <button data-tab="chats" class="nav-btn active">💬<span>চ্যাট</span></button>
-      <button data-tab="calls" class="nav-btn">📞<span>কল</span></button>
-      <button data-tab="updates" class="nav-btn">⭕<span>আপডেট</span></button>
-      <button data-tab="tools" class="nav-btn">🛠️<span>টুলস</span></button>
-      <button data-tab="admin" id="nav-admin" class="nav-btn hidden">🛡️<span>অ্যাডমিন</span></button>
+      <button data-tab="chats" class="nav-btn active">💬<span>Chats</span></button>
+      <button data-tab="calls" class="nav-btn">📞<span>Calls</span></button>
+      <button data-tab="updates" class="nav-btn">⭕<span>Updates</span></button>
+      <button data-tab="tools" class="nav-btn">🛠️<span>Tools</span></button>
+      <button data-tab="admin" id="nav-admin" class="nav-btn hidden">🛡️<span>Admin</span></button>
     </nav>
   </section>
 
@@ -206,39 +206,39 @@
       <div class="chat-peer" id="chat-peer-box"><div class="avatar" id="chat-peer-avatar">?</div>
         <div><div id="chat-peer-name" class="chat-peer-name"></div><div id="chat-peer-phone" class="chat-peer-phone"></div></div>
       </div>
-      <button id="btn-video-call-peer" class="call-btn" title="ভিডিও কল">🎥</button>
-      <button id="btn-call-peer" class="call-btn" title="ভয়েস কল">📞</button>
-      <button id="btn-chat-menu" class="call-btn" title="সেটিংস">⋮</button>
+      <button id="btn-video-call-peer" class="call-btn" title="Video call">🎥</button>
+      <button id="btn-call-peer" class="call-btn" title="Voice call">📞</button>
+      <button id="btn-chat-menu" class="call-btn" title="Settings">⋮</button>
       <div id="chat-menu" class="chat-menu hidden">
-        <button id="menu-chat-theme" type="button">🎨 চ্যাট থিম</button>
-        <button id="menu-mute" type="button">🔇 নোটিফিকেশন বন্ধ</button>
-        <button id="menu-disappearing" type="button">⏳ গায়েব মেসেজ</button>
-        <button id="menu-clear" type="button">🧹 চ্যাট মুছুন</button>
-        <button id="menu-block" type="button">🚫 ব্লক করুন</button>
+        <button id="menu-chat-theme" type="button">🎨 Chat theme</button>
+        <button id="menu-mute" type="button">🔇 Mute notifications</button>
+        <button id="menu-disappearing" type="button">⏳ Disappearing messages</button>
+        <button id="menu-clear" type="button">🧹 Clear chat</button>
+        <button id="menu-block" type="button">🚫 Block</button>
       </div>
     </header>
     <div id="chat-search-bar" class="chat-search-bar hidden">
-      <input id="chat-search-input" type="search" placeholder="মেসেজ খুঁজুন…">
+      <input id="chat-search-input" type="search" placeholder="Search messages…">
       <span id="chat-search-count"></span>
       <button id="btn-close-search" class="btn-link" type="button">✕</button>
     </div>
     <div id="chat-messages" class="chat-messages"></div>
     <div id="chat-blocked-note" class="blocked-note hidden"></div>
     <div id="attach-menu" class="attach-menu hidden">
-      <button id="attach-photo" type="button">📷 ছবি</button>
-      <button id="attach-video" type="button">🎥 ভিডিও</button>
-      <button id="attach-voice" type="button">🎤 ভয়েস মেসেজ</button>
-      <button id="attach-file" type="button">📄 ফাইল</button>
+      <button id="attach-photo" type="button">📷 Photo</button>
+      <button id="attach-video" type="button">🎥 Video</button>
+      <button id="attach-voice" type="button">🎤 Voice message</button>
+      <button id="attach-file" type="button">📄 File</button>
     </div>
     <div id="voice-rec-bar" class="voice-rec-bar hidden">
-      <span class="rec-dot">●</span><span>রেকর্ড হচ্ছে… <b id="voice-rec-time">০:০০</b></span>
-      <button id="btn-voice-cancel" class="btn-link" type="button">বাতিল</button>
-      <button id="btn-voice-stop" class="btn-primary btn-small" type="button">পাঠাও</button>
+      <span class="rec-dot">●</span><span>Recording… <b id="voice-rec-time">0:00</b></span>
+      <button id="btn-voice-cancel" class="btn-link" type="button">Cancel</button>
+      <button id="btn-voice-stop" class="btn-primary btn-small" type="button">Send</button>
     </div>
     <div class="chat-input-row">
-      <button id="btn-attach" class="attach-btn" type="button" title="ফাইল পাঠাও">📎</button>
-      <input id="chat-input" class="input" type="text" placeholder="মেসেজ লেখো…" autocomplete="off">
-      <button id="btn-send-msg" class="btn-primary btn-small">পাঠাও</button>
+      <button id="btn-attach" class="attach-btn" type="button" title="Send a file">📎</button>
+      <input id="chat-input" class="input" type="text" placeholder="Message…" autocomplete="off">
+      <button id="btn-send-msg" class="btn-primary btn-small">Send</button>
     </div>
     <input id="file-image" type="file" accept="image/*" class="hidden">
     <input id="file-video" type="file" accept="video/*" class="hidden">
@@ -255,8 +255,8 @@
     </header>
     <div id="channel-posts" class="chat-messages"></div>
     <div id="channel-post-row" class="chat-input-row hidden">
-      <input id="channel-post-input" class="input" type="text" placeholder="আপডেট লেখো…" autocomplete="off">
-      <button id="btn-send-post" class="btn-primary btn-small">পোস্ট করো</button>
+      <input id="channel-post-input" class="input" type="text" placeholder="Write an update…" autocomplete="off">
+      <button id="btn-send-post" class="btn-primary btn-small">Post</button>
     </div>
   </section>
 
@@ -269,13 +269,13 @@
     <img src="logo.webp" class="logo-medium" alt="">
     <div class="call-top">
       <div id="call-peer-name" class="call-name"></div>
-      <div id="call-status" class="call-status">ডাকছে…</div>
-      <div id="call-timer" class="call-timer">০০:০০</div>
+      <div id="call-status" class="call-status">Ringing…</div>
+      <div id="call-timer" class="call-timer">00:00</div>
     </div>
     <div class="call-buttons">
       <button id="btn-mute" class="call-round">🎙️</button>
-      <button id="btn-cam-toggle" class="call-round hidden" title="ক্যামেরা বন্ধ করো">📷</button>
-      <button id="btn-cam-switch" class="call-round hidden" title="সামনে/পেছনের ক্যামেরা">🔄</button>
+      <button id="btn-cam-toggle" class="call-round hidden" title="Turn camera off">📷</button>
+      <button id="btn-cam-switch" class="call-round hidden" title="Front/back camera">🔄</button>
       <button id="btn-end-call" class="call-round call-end">📞</button>
     </div>
   </div>
@@ -290,28 +290,28 @@
   <!-- ===== Add contact dialog ===== -->
   <div id="add-contact-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
-      <h3>বন্ধু যোগ করো</h3>
+      <h3>Add a friend</h3>
       <div class="method-toggle">
-        <button id="btn-add-method-phone" class="method-btn active" type="button">📱 নম্বর দিয়ে</button>
-        <button id="btn-add-method-email" class="method-btn" type="button">✉️ Gmail দিয়ে</button>
+        <button id="btn-add-method-phone" class="method-btn active" type="button">📱 By number</button>
+        <button id="btn-add-method-email" class="method-btn" type="button">✉️ By Gmail</button>
       </div>
       <div id="add-phone-form">
-        <label class="field-label" for="add-country-select">দেশ</label>
+        <label class="field-label" for="add-country-select">Country</label>
         <select id="add-country-select" class="input"></select>
-        <label class="field-label" for="add-phone-input">ফোন নম্বর</label>
+        <label class="field-label" for="add-phone-input">Phone number</label>
         <div class="phone-row">
           <span id="add-dial-prefix" class="dial-prefix">+880</span>
           <input id="add-phone-input" class="input phone-input" type="tel" inputmode="numeric" placeholder="1XXXXXXXXX">
         </div>
       </div>
       <div id="add-email-form" class="hidden">
-        <label class="field-label" for="add-email-input">Gmail ঠিকানা</label>
+        <label class="field-label" for="add-email-input">Gmail address</label>
         <input id="add-email-input" class="input" type="email" inputmode="email" placeholder="bondhu@gmail.com">
       </div>
       <p id="add-contact-error" class="error hidden"></p>
       <div class="dialog-buttons">
-        <button id="btn-cancel-add" class="btn-link">বাতিল</button>
-        <button id="btn-confirm-add" class="btn-primary btn-small">যোগ করো</button>
+        <button id="btn-cancel-add" class="btn-link">Cancel</button>
+        <button id="btn-confirm-add" class="btn-primary btn-small">Add</button>
       </div>
     </div>
   </div>
@@ -319,13 +319,13 @@
   <!-- ===== New channel dialog ===== -->
   <div id="new-channel-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
-      <h3>নতুন চ্যানেল</h3>
-      <input id="new-channel-name" class="input" type="text" maxlength="80" placeholder="চ্যানেলের নাম">
-      <input id="new-channel-desc" class="input" type="text" maxlength="300" placeholder="বিবরণ (ঐচ্ছিক)">
+      <h3>New channel</h3>
+      <input id="new-channel-name" class="input" type="text" maxlength="80" placeholder="Channel name">
+      <input id="new-channel-desc" class="input" type="text" maxlength="300" placeholder="Description (optional)">
       <p id="new-channel-error" class="error hidden"></p>
       <div class="dialog-buttons">
-        <button id="btn-cancel-channel" class="btn-link">বাতিল</button>
-        <button id="btn-confirm-channel" class="btn-primary btn-small">বানাও</button>
+        <button id="btn-cancel-channel" class="btn-link">Cancel</button>
+        <button id="btn-confirm-channel" class="btn-primary btn-small">Create</button>
       </div>
     </div>
   </div>
@@ -333,11 +333,11 @@
   <!-- ===== Push notification permission ===== -->
   <div id="push-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
-      <h3>নোটিফিকেশন চালু করো</h3>
-      <p class="hint">অ্যাপ বন্ধ থাকলেও কল আর মেসেজ যাতে আসে, তার জন্য নোটিফিকেশন দরকার। ডেটা বা WiFi চালু থাকলে স্ক্রিন বন্ধ থাকলেও কল আসবে।</p>
+      <h3>Turn on notifications</h3>
+      <p class="hint">Notifications are needed so calls and messages can reach you even when the app is closed. With data or WiFi on, calls will come through even with the screen off.</p>
       <div class="dialog-buttons">
-        <button id="btn-push-later" class="btn-link">পরে</button>
-        <button id="btn-push-allow" class="btn-primary btn-small">অনুমতি দাও</button>
+        <button id="btn-push-later" class="btn-link">Later</button>
+        <button id="btn-push-allow" class="btn-primary btn-small">Allow</button>
       </div>
     </div>
   </div>
@@ -345,16 +345,16 @@
   <!-- ===== Disappearing messages dialog ===== -->
   <div id="disappearing-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
-      <h3>গায়েব মেসেজ</h3>
-      <p class="hint">এই চ্যাটের মেসেজ (ছবি-ভিডিওসহ) বেছে নেওয়া সময়ের পর নিজে নিজে মুছে যাবে — দুজনের ফোন থেকেই।</p>
+      <h3>Disappearing messages</h3>
+      <p class="hint">Messages in this chat (including photos and videos) will delete themselves after the time you choose — from both phones.</p>
       <div class="option-list">
-        <button class="option-btn" data-disappearing="0" type="button">বন্ধ</button>
-        <button class="option-btn" data-disappearing="86400" type="button">২৪ ঘণ্টা</button>
-        <button class="option-btn" data-disappearing="604800" type="button">৭ দিন</button>
-        <button class="option-btn" data-disappearing="7776000" type="button">৯০ দিন</button>
+        <button class="option-btn" data-disappearing="0" type="button">Off</button>
+        <button class="option-btn" data-disappearing="86400" type="button">24 hours</button>
+        <button class="option-btn" data-disappearing="604800" type="button">7 days</button>
+        <button class="option-btn" data-disappearing="7776000" type="button">90 days</button>
       </div>
       <div class="dialog-buttons">
-        <button id="btn-disappearing-cancel" class="btn-link">বাতিল</button>
+        <button id="btn-disappearing-cancel" class="btn-link">Cancel</button>
       </div>
     </div>
   </div>
@@ -362,27 +362,27 @@
   <!-- ===== Per-chat theme dialog (preview first, apply after) ===== -->
   <div id="chat-theme-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
-      <h3>চ্যাট থিম</h3>
-      <p class="hint">আগে দেখে নাও, তারপর Done চাপো। শুধু এই চ্যাটের পটভূমি বদলাবে।</p>
+      <h3>Chat theme</h3>
+      <p class="hint">Take a look first, then tap Done. Only this chat's background will change.</p>
       <div id="chat-theme-preview" class="chat-theme-preview">
-        <div class="msg theirs">হাই, কেমন আছো?</div>
-        <div class="msg mine">ভালো আছি! 😊</div>
+        <div class="msg theirs">Hi, how are you?</div>
+        <div class="msg mine">I'm good! 😊</div>
       </div>
       <div class="theme-row theme-swatches">
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="" type="button" style="background:#ECE5DD;color:#111">ডিফল্ট</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="green" type="button" style="background:#D9FDD3;color:#075E54">সবুজ</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="blue" type="button" style="background:#D6EAF8;color:#0B4F8A">নীল</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="purple" type="button" style="background:#EADCF8;color:#4A148C">বেগুনি</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="pink" type="button" style="background:#FCE4EC;color:#880E4F">গোলাপি</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="dark" type="button" style="background:#0B141A;color:#E9EDEF">অন্ধকার</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="" type="button" style="background:#ECE5DD;color:#111">Default</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="green" type="button" style="background:#D9FDD3;color:#075E54">Green</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="blue" type="button" style="background:#D6EAF8;color:#0B4F8A">Blue</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="purple" type="button" style="background:#EADCF8;color:#4A148C">Purple</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="pink" type="button" style="background:#FCE4EC;color:#880E4F">Pink</button>
+        <button class="theme-swatch chat-theme-opt" data-chat-theme="dark" type="button" style="background:#0B141A;color:#E9EDEF">Dark</button>
       </div>
       <div class="theme-row" style="margin-top:12px">
-        <button id="btn-chat-bg-pick" class="method-btn" type="button">🖼️ গ্যালারি থেকে ছবি</button>
-        <button id="btn-chat-bg-remove" class="method-btn hidden" type="button">ছবি সরাও</button>
+        <button id="btn-chat-bg-pick" class="method-btn" type="button">🖼️ Photo from gallery</button>
+        <button id="btn-chat-bg-remove" class="method-btn hidden" type="button">Remove photo</button>
       </div>
       <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
       <div class="dialog-buttons">
-        <button id="btn-chat-theme-cancel" class="btn-link">বাতিল</button>
+        <button id="btn-chat-theme-cancel" class="btn-link">Cancel</button>
         <button id="btn-chat-theme-apply" class="btn-primary">Done</button>
       </div>
     </div>
@@ -398,26 +398,26 @@
     <div class="profile-phone" id="profile-phone"></div>
     <div class="profile-joined" id="profile-joined"></div>
     <div class="profile-actions">
-      <button id="btn-profile-voice" class="profile-action" type="button">📞<span>ভয়েস</span></button>
-      <button id="btn-profile-video" class="profile-action" type="button">🎥<span>ভিডিও</span></button>
-      <button id="btn-profile-search" class="profile-action" type="button">🔍<span>খুঁজুন</span></button>
+      <button id="btn-profile-voice" class="profile-action" type="button">📞<span>Voice</span></button>
+      <button id="btn-profile-video" class="profile-action" type="button">🎥<span>Video</span></button>
+      <button id="btn-profile-search" class="profile-action" type="button">🔍<span>Search</span></button>
     </div>
     <button id="profile-media-row" class="profile-row" type="button">
-      <span>📷 মিডিয়া, লিংক আর ফাইল</span><span><b id="profile-media-count">০</b> ›</span>
+      <span>📷 Media, links, and docs</span><span><b id="profile-media-count">0</b> ›</span>
     </button>
     <div id="profile-media-grid" class="profile-media-grid hidden"></div>
     <button id="profile-mute-row" class="profile-row" type="button">
-      <span>🔔 নোটিফিকেশন</span><span id="profile-mute-state"></span>
+      <span>🔔 Notifications</span><span id="profile-mute-state"></span>
     </button>
     <button id="profile-disappearing-row" class="profile-row" type="button">
-      <span>⏳ গায়েব মেসেজ</span><span id="profile-disappearing-state"></span>
+      <span>⏳ Disappearing messages</span><span id="profile-disappearing-state"></span>
     </button>
   </div>
 
   <!-- ===== Full photo viewer ===== -->
   <div id="media-viewer" class="media-viewer hidden">
     <button id="btn-close-media" class="status-close">✕</button>
-    <img id="media-viewer-img" class="media-viewer-img" alt="ছবি">
+    <img id="media-viewer-img" class="media-viewer-img" alt="Photo">
     <video id="media-viewer-video" class="media-viewer-img hidden" controls playsinline></video>
   </div>
 
