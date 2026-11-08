@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#075E54">
+<title>S_19 CHAT BOOK</title>
+<link rel="icon" href="logo.webp">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== Welcome ===== -->
+  <section id="screen-welcome" class="screen">
+    <div class="welcome-box">
+      <img src="logo.webp" alt="S_19 CHAT BOOK লোগো" class="logo-big">
+      <h1>S_19 CHAT BOOK</h1>
+      <p class="welcome-sub">বন্ধুদের সাথে ফ্রিতে মেসেজ আর ভয়েস কল</p>
+      <p class="welcome-note">মেসেজ, কল, স্ট্যাটাস আর চ্যানেল — সব এক জায়গায়।</p>
+      <button id="btn-agree" class="btn-primary">সম্মত আছি, চালিয়ে যাও</button>
+    </div>
+  </section>
+
+  <!-- ===== Step 1: phone ===== -->
+  <section id="screen-phone" class="screen hidden">
+    <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
+    <div class="form-box">
+      <h2 id="login-title">ফোন নম্বর দাও</h2>
+      <p class="hint">ফোন নম্বর বা Gmail — যেকোনো একটা দিয়ে লগইন করো।</p>
+      <div class="method-toggle">
+        <button id="btn-method-phone" class="method-btn active" type="button">📱 ফোন নম্বর</button>
+        <button id="btn-method-email" class="method-btn" type="button">✉️ Gmail</button>
+      </div>
+      <div id="phone-form">
+        <p class="hint">তোমার দেশটা বেছে নাও, তারপর নম্বরটা লেখো।</p>
+        <label class="field-label" for="country-select">দেশ</label>
+        <select id="country-select" class="input"></select>
+        <label class="field-label" for="phone-input">ফোন নম্বর</label>
+        <div class="phone-row">
+          <span id="dial-prefix" class="dial-prefix">+880</span>
+          <input id="phone-input" class="input phone-input" type="tel" inputmode="numeric" autocomplete="tel" placeholder="1XXXXXXXXX">
+        </div>
+      </div>
+      <div id="email-form" class="hidden">
+        <p class="hint">তোমার Gmail ঠিকানাটা লেখো — কোডটা ওই Gmail-এ যাবে (ফ্রি)।</p>
+        <label class="field-label" for="email-input">Gmail ঠিকানা</label>
+        <input id="email-input" class="input" type="email" inputmode="email" autocomplete="email" placeholder="tomar@gmail.com">
+      </div>
+      <p id="phone-error" class="error hidden"></p>
+      <button id="btn-send-code" class="btn-primary">কোড পাঠাও</button>
+    </div>
+  </section>
+
+  <!-- ===== Step 2: code ===== -->
+  <section id="screen-code" class="screen hidden">
+    <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
+    <div class="form-box">
+      <h2>কোডটা লেখো</h2>
+      <p class="hint" id="code-hint"><span id="code-phone-label"></span>-এ ৬ সংখ্যার কোড পাঠানো হয়েছে।</p>
+      <div id="test-code-box" class="test-code hidden">পরীক্ষার কোড: <b id="test-code"></b><br><small>আসল কোড পাঠানো এখনো যুক্ত হয়নি, তাই কোডটা এখানেই দেখানো হচ্ছে।</small></div>
+      <input id="code-input" class="input code-input" type="text" inputmode="numeric" maxlength="6" placeholder="______" autocomplete="one-time-code">
+      <p id="code-error" class="error hidden"></p>
+      <button id="btn-verify-code" class="btn-primary">লগইন করো</button>
+      <button id="btn-resend-code" class="btn-link">কোড আবার পাঠাও</button>
+      <button id="btn-change-number" class="btn-link">নম্বর বদলাও</button>
+    </div>
+  </section>
+
+  <!-- ===== Step 3: name ===== -->
+  <section id="screen-name" class="screen hidden">
+    <header class="topbar"><img src="logo.webp" class="logo-small" alt=""><span>S_19 CHAT BOOK</span></header>
+    <div class="form-box">
+      <h2>তোমার নাম কী?</h2>
+      <p class="hint">বন্ধুরা তোমাকে এই নামে চিনবে।</p>
+      <input id="name-input" class="input" type="text" maxlength="60" placeholder="তোমার নাম লেখো">
+      <p id="name-error" class="error hidden"></p>
+      <button id="btn-save-name" class="btn-primary">শুরু করো</button>
+    </div>
+  </section>
+
+  <!-- ===== Main app ===== -->
+  <section id="screen-app" class="screen hidden">
+    <header class="app-header">
+      <img src="logo.webp" class="logo-small" alt="S_19">
+      <span class="app-title">S_19 CHAT BOOK</span>
+    </header>
+
+    <!-- Chats -->
+    <div id="tab-chats" class="tab-page">
+      <div class="search-row"><input id="chat-search" class="input search-input" type="search" placeholder="খুঁজো"></div>
+      <div id="chat-list" class="chat-list"></div>
+      <button id="btn-add-contact" class="fab" title="নম্বর যোগ করো">+</button>
+    </div>
+
+    <!-- Calls -->
+    <div id="tab-calls" class="tab-page hidden">
+      <div class="section-title">কল করো</div>
+      <div id="call-list" class="chat-list"></div>
+      <div class="section-title">সাম্প্রতিক কল</div>
+      <div id="call-history" class="chat-list"></div>
+    </div>
+
+    <!-- Updates -->
+    <div id="tab-updates" class="tab-page hidden">
+      <div class="section-title">স্ট্যাটাস</div>
+      <div id="status-list" class="status-list"></div>
+      <div class="status-add-row">
+        <input id="status-input" class="input" type="text" maxlength="500" placeholder="স্ট্যাটাস লেখো…">
+        <button id="btn-post-status" class="btn-primary btn-small">দাও</button>
+      </div>
+      <div class="section-title">চ্যানেল <button id="btn-new-channel" class="btn-link">+ নতুন চ্যানেল</button></div>
+      <div class="search-row"><input id="channel-search" class="input search-input" type="search" placeholder="চ্যানেল খুঁজো"></div>
+      <div id="channel-list" class="chat-list"></div>
+    </div>
+
+    <!-- Tools -->
+    <div id="tab-tools" class="tab-page hidden">
+      <div class="profile-card">
+        <img src="logo.webp" class="logo-medium" alt="">
+        <div><div id="tools-name" class="profile-name"></div><div id="tools-phone" class="profile-phone"></div></div>
+      </div>
+      <div class="section-title">আজকের ডেটা খরচ (আনুমানিক)</div>
+      <div class="meter-card">
+        <div class="meter-total"><b id="meter-total">০ MB</b><span> / লক্ষ্য ১০ MB</span></div>
+        <div class="meter-bar"><div id="meter-fill" class="meter-fill"></div></div>
+        <div class="meter-rows">
+          <div>মেসেজ <span id="meter-msg">০ KB</span></div>
+          <div>ভয়েস কল <span id="meter-call">০ KB</span></div>
+        </div>
+        <p class="meter-note">মেসেজে খুব কম ডেটা লাগে; কলে প্রতি মিনিটে প্রায় ১২০ KB। সারাদিনের লক্ষ্য ৫–১০ MB।</p>
+      </div>
+      <button id="btn-logout" class="btn-danger">লগ আউট করো</button>
+      <p class="app-version">S_19 CHAT BOOK • পরীক্ষার সংস্করণ</p>
+    </div>
+
+    <nav class="bottom-nav">
+      <button data-tab="chats" class="nav-btn active">💬<span>চ্যাট</span></button>
+      <button data-tab="calls" class="nav-btn">📞<span>কল</span></button>
+      <button data-tab="updates" class="nav-btn">⭕<span>আপডেট</span></button>
+      <button data-tab="tools" class="nav-btn">🛠️<span>টুলস</span></button>
+    </nav>
+  </section>
+
+  <!-- ===== 1-to-1 chat ===== -->
+  <section id="screen-chat" class="screen hidden">
+    <header class="chat-header">
+      <button id="btn-back-chats" class="back-btn">‹</button>
+      <div class="chat-peer"><div class="avatar" id="chat-peer-avatar">?</div>
+        <div><div id="chat-peer-name" class="chat-peer-name"></div><div id="chat-peer-phone" class="chat-peer-phone"></div></div>
+      </div>
+      <button id="btn-call-peer" class="call-btn" title="ভয়েস কল">📞</button>
+    </header>
+    <div id="chat-messages" class="chat-messages"></div>
+    <div class="chat-input-row">
+      <input id="chat-input" class="input" type="text" placeholder="মেসেজ লেখো…" autocomplete="off">
+      <button id="btn-send-msg" class="btn-primary btn-small">পাঠাও</button>
+    </div>
+  </section>
+
+  <!-- ===== Channel view ===== -->
+  <section id="screen-channel" class="screen hidden">
+    <header class="chat-header">
+      <button id="btn-back-updates" class="back-btn">‹</button>
+      <div class="chat-peer"><div class="avatar">📢</div>
+        <div><div id="channel-name" class="chat-peer-name"></div><div id="channel-desc" class="chat-peer-phone"></div></div>
+      </div>
+    </header>
+    <div id="channel-posts" class="chat-messages"></div>
+    <div id="channel-post-row" class="chat-input-row hidden">
+      <input id="channel-post-input" class="input" type="text" placeholder="আপডেট লেখো…" autocomplete="off">
+      <button id="btn-send-post" class="btn-primary btn-small">পোস্ট করো</button>
+    </div>
+  </section>
+
+  <!-- ===== Call overlay ===== -->
+  <div id="call-overlay" class="call-overlay hidden">
+    <img src="logo.webp" class="logo-medium" alt="">
+    <div id="call-peer-name" class="call-name"></div>
+    <div id="call-status" class="call-status">ডাকছে…</div>
+    <div id="call-timer" class="call-timer">০০:০০</div>
+    <div class="call-buttons">
+      <button id="btn-mute" class="call-round">🎙️</button>
+      <button id="btn-end-call" class="call-round call-end">📞</button>
+    </div>
+  </div>
+
+  <!-- ===== Status full-screen viewer ===== -->
+  <div id="status-viewer" class="status-viewer hidden">
+    <button id="btn-close-status" class="status-close">✕</button>
+    <div id="status-viewer-name" class="status-viewer-name"></div>
+    <div id="status-viewer-text" class="status-viewer-text"></div>
+  </div>
+
+  <!-- ===== Add contact dialog ===== -->
+  <div id="add-contact-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>বন্ধু যোগ করো</h3>
+      <div class="method-toggle">
+        <button id="btn-add-method-phone" class="method-btn active" type="button">📱 নম্বর দিয়ে</button>
+        <button id="btn-add-method-email" class="method-btn" type="button">✉️ Gmail দিয়ে</button>
+      </div>
+      <div id="add-phone-form">
+        <label class="field-label" for="add-country-select">দেশ</label>
+        <select id="add-country-select" class="input"></select>
+        <label class="field-label" for="add-phone-input">ফোন নম্বর</label>
+        <div class="phone-row">
+          <span id="add-dial-prefix" class="dial-prefix">+880</span>
+          <input id="add-phone-input" class="input phone-input" type="tel" inputmode="numeric" placeholder="1XXXXXXXXX">
+        </div>
+      </div>
+      <div id="add-email-form" class="hidden">
+        <label class="field-label" for="add-email-input">Gmail ঠিকানা</label>
+        <input id="add-email-input" class="input" type="email" inputmode="email" placeholder="bondhu@gmail.com">
+      </div>
+      <p id="add-contact-error" class="error hidden"></p>
+      <div class="dialog-buttons">
+        <button id="btn-cancel-add" class="btn-link">বাতিল</button>
+        <button id="btn-confirm-add" class="btn-primary btn-small">যোগ করো</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== New channel dialog ===== -->
+  <div id="new-channel-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>নতুন চ্যানেল</h3>
+      <input id="new-channel-name" class="input" type="text" maxlength="80" placeholder="চ্যানেলের নাম">
+      <input id="new-channel-desc" class="input" type="text" maxlength="300" placeholder="বিবরণ (ঐচ্ছিক)">
+      <p id="new-channel-error" class="error hidden"></p>
+      <div class="dialog-buttons">
+        <button id="btn-cancel-channel" class="btn-link">বাতিল</button>
+        <button id="btn-confirm-channel" class="btn-primary btn-small">বানাও</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <audio id="remote-audio" autoplay playsinline></audio>
+</div>
+<script src="countries.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
