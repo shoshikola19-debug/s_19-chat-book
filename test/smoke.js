@@ -115,8 +115,21 @@ async function main() {
   check('sender sees delivered double-tick', inboxA.status === 200 && inboxA.data.messages[0].delivered === 1, inboxA);
   const inc = await get('/api/messages?with=' + FRIEND + '&afterId=' + inboxA.data.messages[0].id, tokA);
   check('incremental fetch returns nothing new', inc.status === 200 && inc.data.messages.length === 0, inc);
+  const read = await post('/api/messages/read', { with: BIJOY }, tokB);
+  check('friend marks conversation read', read.status === 200 && read.data.ok, read);
+  const ticksEmpty = await get('/api/messages?with=' + FRIEND + '&afterId=' + inboxA.data.messages[0].id, tokA);
+  check('ticks arrive even when no new messages (delivered + read)',
+    ticksEmpty.status === 200 && ticksEmpty.data.messages.length === 0 && Array.isArray(ticksEmpty.data.ticks)
+    && ticksEmpty.data.ticks.length === 1 && ticksEmpty.data.ticks[0].delivered === 1 && ticksEmpty.data.ticks[0].read === 1, ticksEmpty);
+  const sent2 = await post('/api/messages', { to: FRIEND, body: 'Second test message' }, tokA);
+  check('send second message', sent2.status === 200, sent2);
+  const convsB = await get('/api/conversations', tokB);
+  check('friend inbox lists conversation', convsB.status === 200 && convsB.data.conversations.length >= 1, convsB);
+  const ticks2 = await get('/api/messages?with=' + FRIEND + '&afterId=' + sent2.data.message.id, tokA);
+  check('inbox poll alone marks message delivered',
+    ticks2.status === 200 && ticks2.data.ticks.some((t) => t.id === sent2.data.message.id && t.delivered === 1 && t.read === 0), ticks2);
   const convs = await get('/api/conversations', tokA);
-  check('inbox lists the conversation', convs.status === 200 && convs.data.conversations.length === 1 && convs.data.conversations[0].lastMessage.includes('Hello'), convs);
+  check('inbox lists the conversation', convs.status === 200 && convs.data.conversations.length === 1 && convs.data.conversations[0].lastMessage.includes('Second test message'), convs);
 
   console.log('== gmail + phone cross chat ==');
   const addByEmail = await post('/api/contacts', { email: GMAIL_USER }, tokA);
@@ -177,7 +190,7 @@ async function main() {
 
   console.log('== usage ==');
   const usage = await get('/api/usage', tokA);
-  check('usage endpoint counts today', usage.status === 200 && usage.data.messagesSent === 2 && usage.data.bytesSent > 0, usage);
+  check('usage endpoint counts today', usage.status === 200 && usage.data.messagesSent === 3 && usage.data.bytesSent > 0, usage);
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
