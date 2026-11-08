@@ -139,6 +139,10 @@ async function main() {
     swJs.status === 200 && swText.includes("addEventListener('fetch'"));
   const idxText = await (await fetch(BASE + '/')).text();
   check('index offers Gmail login', idxText.includes('Gmail'));
+  check('theme-color uses the light/dark media pair (no green strip before JS runs)',
+    idxText.includes('media="(prefers-color-scheme: light)" content="#FFFFFF"')
+    && idxText.includes('media="(prefers-color-scheme: dark)" content="#0B141A"')
+    && !idxText.includes('<meta name="theme-color" content="#075E54">'));
   check('contact-info screen has the WhatsApp rows',
     idxText.includes('Manage storage') && idxText.includes('Media visibility') && idxText.includes('Chat lock')
     && idxText.includes('No groups in common') && idxText.includes('Create group with') && idxText.includes('Add to groups'));
@@ -695,6 +699,20 @@ async function main() {
     appJs.includes('function exportChat') && appJs.includes('handleDeepLink')
     && appJs.includes('mediaVisibility') && appJs.includes('getLockedChats')
     && appJs.includes('showPinDialog') && appJs.includes('renderProfileGroups'));
+  // Static guards for the inbox first-load states: a slow or failed
+  // conversations fetch must show loading / tap-to-retry, never a
+  // silent empty inbox — and the empty note only renders after a
+  // successful load (guarded by inboxLoaded in renderInbox).
+  check('inbox shows loading, not a silent empty list, while the first load is in flight',
+    appJs.includes('Loading chats…') && appJs.includes('inboxLoaded') && appJs.includes('inboxLoadFailed'));
+  check('inbox load failure shows tap-to-retry and auto-retries',
+    appJs.includes('inbox-error') && appJs.includes('Tap to retry.') && appJs.includes('INBOX_MAX_RETRIES') && appJs.includes('retryInboxLoad'));
+  check('inbox fetch has a timeout so a hung request can fail and retry',
+    appJs.includes('INBOX_FETCH_TIMEOUT_MS') && appJs.includes('timeoutMs'));
+  const styleCss = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  check('dark mode inbox title is white, light mode stays green',
+    styleCss.includes(':root[data-theme="dark"] .app-header .app-title { color: #FFFFFF; }')
+    && styleCss.includes('.app-header .app-title { flex: 1; color: #25D366;'));
 
   console.log('== delete message + last seen + missed call ==');
   // Last seen: every authenticated request touches it (throttled to
@@ -796,7 +814,9 @@ async function main() {
     })());
   check('input bar uses SVG icons, not emoji',
     !idxHtml.includes('>😊<') && !idxHtml.includes('>📎<') && !idxHtml.includes('>🎤</button>') && !idxHtml.includes('>➤</button>'));
-  check('theme-color meta is white', idxHtml.includes('name="theme-color" content="#FFFFFF"'));
+  check('theme-color meta is white in light mode, dark in dark mode (media pair)',
+    idxHtml.includes('media="(prefers-color-scheme: light)" content="#FFFFFF"')
+    && idxHtml.includes('media="(prefers-color-scheme: dark)" content="#0B141A"'));
   const manifest2 = await fetch(BASE + '/manifest.json');
   const manifestData2 = await manifest2.json().catch(() => null);
   check('manifest theme and background are white',
