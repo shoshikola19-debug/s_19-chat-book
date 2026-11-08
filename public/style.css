@@ -618,6 +618,11 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .dialog h3 { margin-bottom: 8px; }
 .dialog .input { margin-top: 8px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+/* Dialog header row: title on the left, a round + button on the right
+   (ringtone / message-tone pickers: add your own tone from a file). */
+.dialog-head { display: flex; align-items: center; justify-content: space-between; }
+.dialog-head h3 { margin-bottom: 0; }
+.dialog-add-btn { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--green); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; flex-shrink: 0; }
 /* Full-screen profile photo viewer + photo guard. The photo can never
    be long-pressed / right-clicked to save while guarded (see app.js),
    and it hides the moment the app loses focus. */
