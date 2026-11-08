@@ -219,7 +219,7 @@ const DISAPPEAR_OPTIONS = [0, 86400, 604800, 7776000]; // off, 24h, 7d, 90d
 const CHAT_THEMES = ['', 'green', 'blue', 'purple', 'pink', 'dark'];
 async function getChatSettings(owner, peer) {
   const row = await db.get(
-    'SELECT muted, disappearing, chat_theme, blocked, cleared_at, media_visibility, favorite FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?',
+    'SELECT muted, disappearing, chat_theme, blocked, cleared_at, media_visibility, favorite, bubble_color FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?',
     owner, peer);
   return {
     muted: row ? row.muted : 0,
@@ -231,6 +231,8 @@ async function getChatSettings(owner, peer) {
     // auto-save this chat's photos/videos, 0 = never auto-save them.
     mediaVisibility: row ? (row.media_visibility === null || row.media_visibility === undefined ? null : row.media_visibility) : null,
     favorite: row ? row.favorite : 0,
+    // Outgoing-bubble colour for this chat: '' = default green.
+    bubbleColor: row ? (row.bubble_color || '') : '',
   };
 }
 // Has `receiver` muted this chat (no push, no sound) for `sender`?
@@ -709,6 +711,7 @@ app.get('/api/chat-settings', ah(auth), ah(async (req, res) => {
     clearedAt: mine.clearedAt,
     mediaVisibility: mine.mediaVisibility,
     favorite: mine.favorite,
+    bubbleColor: mine.bubbleColor,
   });
 }));
 
@@ -743,8 +746,14 @@ app.post('/api/chat-settings', ah(auth), ah(async (req, res) => {
     else return res.status(400).json({ ok: false, error: 'bad_visibility' });
   }
   if (body.favorite !== undefined) patch.favorite = body.favorite ? true : false;
+  // Outgoing-bubble colour: '' = default green, otherwise a #RRGGBB hex.
+  if (body.bubbleColor !== undefined) {
+    const bc = String(body.bubbleColor || '');
+    if (bc !== '' && !/^#[0-9a-fA-F]{6}$/.test(bc)) return res.status(400).json({ ok: false, error: 'bad_bubble_color' });
+    patch.bubbleColor = bc;
+  }
   if (!Object.keys(patch).length) return res.status(400).json({ ok: false, error: 'bad_input' });
-  const colName = { muted: 'muted', disappearing: 'disappearing', chatTheme: 'chat_theme', blocked: 'blocked', mediaVisibility: 'media_visibility', favorite: 'favorite' };
+  const colName = { muted: 'muted', disappearing: 'disappearing', chatTheme: 'chat_theme', blocked: 'blocked', mediaVisibility: 'media_visibility', favorite: 'favorite', bubbleColor: 'bubble_color' };
   const keys = Object.keys(patch);
   const cols = ['owner_phone', 'peer_phone', ...keys.map((k) => colName[k])];
   const vals = [req.phone, peer, ...keys.map((k) => patch[k])];
@@ -765,6 +774,7 @@ app.post('/api/chat-settings', ah(auth), ah(async (req, res) => {
     clearedAt: mine.clearedAt,
     mediaVisibility: mine.mediaVisibility,
     favorite: mine.favorite,
+    bubbleColor: mine.bubbleColor,
   });
 }));
 
