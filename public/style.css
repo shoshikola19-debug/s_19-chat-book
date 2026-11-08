@@ -550,6 +550,40 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 }
 .media-viewer-img { max-width: 100%; max-height: 92dvh; border-radius: 8px; object-fit: contain; }
 
+/* Media preview before sending (WhatsApp-style): dark full-screen
+   overlay. Top: cancel, HD toggle (photos only) and view-once "1"
+   toggle. Middle: the photo/video. Bottom: caption + green Send. */
+.media-preview {
+  position: fixed; inset: 0; background: #111B21; color: #fff; z-index: 80;
+  display: flex; flex-direction: column;
+}
+.media-preview-top { display: flex; align-items: center; gap: 10px; padding: 14px 14px 6px; flex-shrink: 0; }
+.media-preview-x { background: none; border: 0; color: #fff; font-size: 22px; cursor: pointer; padding: 6px; }
+.media-preview-spacer { flex: 1; }
+.media-preview-note { font-size: 12px; color: #8696A0; }
+.media-preview-toggle {
+  min-width: 38px; height: 38px; padding: 0 8px; border-radius: 999px; cursor: pointer;
+  border: 1.5px solid rgba(255,255,255,.65); background: transparent; color: #fff;
+  font-size: 15px; font-weight: 700; font-family: inherit;
+}
+.media-preview-toggle.on { background: #25D366; border-color: #25D366; color: #fff; }
+.media-preview-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px 14px; }
+.media-preview-media { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+.media-preview-bottom { display: flex; align-items: center; gap: 10px; padding: 10px 14px 18px; flex-shrink: 0; }
+.media-preview-caption {
+  flex: 1; min-width: 0; border: 0; outline: none; border-radius: 999px;
+  background: rgba(255,255,255,.14); color: #fff; font-size: 15px; font-family: inherit;
+  padding: 11px 16px;
+}
+.media-preview-caption::placeholder { color: #8696A0; }
+.media-preview-send {
+  width: 50px; height: 50px; border-radius: 50%; border: 0; cursor: pointer; flex-shrink: 0;
+  background: #25D366; color: #fff; font-size: 22px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+/* Caption under a photo/video in the chat bubble (WhatsApp-style). */
+.msg-caption { font-size: 14px; line-height: 1.4; padding-top: 6px; word-break: break-word; }
+
 /* ---------- theme picker + options ---------- */
 .theme-row { display: flex; gap: 8px; }
 .theme-row .method-btn { flex: 1; }
