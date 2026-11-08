@@ -146,6 +146,12 @@
           <button class="theme-swatch" data-accent="purple" type="button" title="বেগুনি" style="background:#9C27B0">বেগুনি</button>
         </div>
         <p class="meter-note">থিম বদলালে ইনবক্স আর চ্যাট — দুটোই বদলে যাবে। তোমার ফোনেই মনে থাকবে।</p>
+        <p class="hint" style="margin:12px 0 8px">ইনবক্সের পটভূমিতে ছবি</p>
+        <div class="theme-row">
+          <button id="btn-inbox-bg-pick" class="method-btn" type="button">🖼️ গ্যালারি থেকে ছবি</button>
+          <button id="btn-inbox-bg-remove" class="method-btn hidden" type="button">ছবি সরাও</button>
+        </div>
+        <input type="file" id="inbox-bg-input" accept="image/*" class="hidden">
       </div>
       <div class="section-title">মিডিয়া স্টোরেজ (আনুমানিক)</div>
       <div class="meter-card">
@@ -256,9 +262,11 @@
       <video id="local-video" autoplay playsinline muted></video>
     </div>
     <img src="logo.webp" class="logo-medium" alt="">
-    <div id="call-peer-name" class="call-name"></div>
-    <div id="call-status" class="call-status">ডাকছে…</div>
-    <div id="call-timer" class="call-timer">০০:০০</div>
+    <div class="call-top">
+      <div id="call-peer-name" class="call-name"></div>
+      <div id="call-status" class="call-status">ডাকছে…</div>
+      <div id="call-timer" class="call-timer">০০:০০</div>
+    </div>
     <div class="call-buttons">
       <button id="btn-mute" class="call-round">🎙️</button>
       <button id="btn-cam-toggle" class="call-round hidden" title="ক্যামেরা বন্ধ করো">📷</button>
@@ -359,6 +367,11 @@
         <button class="theme-swatch chat-theme-opt" data-chat-theme="pink" type="button" style="background:#FCE4EC;color:#880E4F">গোলাপি</button>
         <button class="theme-swatch chat-theme-opt" data-chat-theme="dark" type="button" style="background:#0B141A;color:#E9EDEF">অন্ধকার</button>
       </div>
+      <div class="theme-row" style="margin-top:12px">
+        <button id="btn-chat-bg-pick" class="method-btn" type="button">🖼️ গ্যালারি থেকে ছবি</button>
+        <button id="btn-chat-bg-remove" class="method-btn hidden" type="button">ছবি সরাও</button>
+      </div>
+      <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
       <div class="dialog-buttons">
         <button id="btn-chat-theme-cancel" class="btn-link">বাতিল</button>
       </div>
