@@ -219,7 +219,7 @@ const DISAPPEAR_OPTIONS = [0, 86400, 604800, 7776000]; // off, 24h, 7d, 90d
 const CHAT_THEMES = ['', 'green', 'blue', 'purple', 'pink', 'dark'];
 async function getChatSettings(owner, peer) {
   const row = await db.get(
-    'SELECT muted, disappearing, chat_theme, blocked, cleared_at FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?',
+    'SELECT muted, disappearing, chat_theme, blocked, cleared_at, media_visibility, favorite FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?',
     owner, peer);
   return {
     muted: row ? row.muted : 0,
@@ -227,6 +227,10 @@ async function getChatSettings(owner, peer) {
     chatTheme: row ? (row.chat_theme || '') : '',
     blocked: row ? row.blocked : 0,
     clearedAt: row ? row.cleared_at : 0,
+    // Tri-state: null = follow the global auto-save toggle, 1 = always
+    // auto-save this chat's photos/videos, 0 = never auto-save them.
+    mediaVisibility: row ? (row.media_visibility === null || row.media_visibility === undefined ? null : row.media_visibility) : null,
+    favorite: row ? row.favorite : 0,
   };
 }
 // Has `receiver` muted this chat (no push, no sound) for `sender`?
@@ -529,6 +533,7 @@ app.get('/api/conversations', ah(auth), ah(async (req, res) => {
       lastId: last ? last.id : 0,
       unread,
       muted: mine.muted ? 1 : 0,
+      favorite: mine.favorite ? 1 : 0,
       missedAt,
       missedVideo: missedVideo ? 1 : 0,
     });
@@ -702,6 +707,8 @@ app.get('/api/chat-settings', ah(auth), ah(async (req, res) => {
     blockedByMe: mine.blocked,
     blockedByPeer: theirs.blocked,
     clearedAt: mine.clearedAt,
+    mediaVisibility: mine.mediaVisibility,
+    favorite: mine.favorite,
   });
 }));
 
@@ -727,8 +734,17 @@ app.post('/api/chat-settings', ah(auth), ah(async (req, res) => {
     patch.chatTheme = th;
   }
   if (body.blocked !== undefined) patch.blocked = body.blocked ? true : false;
+  // Media visibility is tri-state: null = follow the global auto-save
+  // toggle, 1 = always auto-save this chat, 0 = never. The column is
+  // INTEGER on both engines, so 0/1/null bind cleanly either way.
+  if (body.mediaVisibility !== undefined) {
+    if (body.mediaVisibility === null) patch.mediaVisibility = null;
+    else if (body.mediaVisibility === 0 || body.mediaVisibility === 1) patch.mediaVisibility = body.mediaVisibility;
+    else return res.status(400).json({ ok: false, error: 'bad_visibility' });
+  }
+  if (body.favorite !== undefined) patch.favorite = body.favorite ? true : false;
   if (!Object.keys(patch).length) return res.status(400).json({ ok: false, error: 'bad_input' });
-  const colName = { muted: 'muted', disappearing: 'disappearing', chatTheme: 'chat_theme', blocked: 'blocked' };
+  const colName = { muted: 'muted', disappearing: 'disappearing', chatTheme: 'chat_theme', blocked: 'blocked', mediaVisibility: 'media_visibility', favorite: 'favorite' };
   const keys = Object.keys(patch);
   const cols = ['owner_phone', 'peer_phone', ...keys.map((k) => colName[k])];
   const vals = [req.phone, peer, ...keys.map((k) => patch[k])];
@@ -747,6 +763,8 @@ app.post('/api/chat-settings', ah(auth), ah(async (req, res) => {
     blockedByMe: mine.blocked,
     blockedByPeer: theirs.blocked,
     clearedAt: mine.clearedAt,
+    mediaVisibility: mine.mediaVisibility,
+    favorite: mine.favorite,
   });
 }));
 
@@ -761,6 +779,24 @@ app.post('/api/chat-settings/clear', ah(auth), ah(async (req, res) => {
      ON CONFLICT(owner_phone, peer_phone) DO UPDATE SET cleared_at = excluded.cleared_at`,
     req.phone, peer, now());
   return res.json({ ok: true });
+}));
+
+// ---- report a peer to the admins ------------------------------------------
+// The reason is a short free text and may be empty. Reports land in the
+// `reports` table; the Admin panel lists them with a Block action for
+// the reported user.
+app.post('/api/report', ah(auth), ah(async (req, res) => {
+  const peer = normalizePeerOrSystem(req.body && req.body.peer);
+  if (!peer || peer === req.phone || peer === SYSTEM_SENDER) {
+    return res.status(400).json({ ok: false, error: 'bad_peer' });
+  }
+  const reason = String((req.body && req.body.reason) || '').trim().slice(0, 500);
+  // db.get (not db.run): INSERT ... RETURNING hands the new row back on
+  // both engines — the SQLite adapter's run() carries no rows.
+  const inserted = await db.get(
+    'INSERT INTO reports (reporter, reported, reason, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    req.phone, peer, reason, now());
+  return res.json({ ok: true, id: inserted ? inserted.id : undefined });
 }));
 
 // ---- contact profile: peer info + all shared media in this chat -----------
@@ -1412,6 +1448,20 @@ app.get('/api/admin/stats', ah(auth), adminAuth, ah(async (req, res) => {
   const messages = (await db.get('SELECT COUNT(*) AS n FROM messages')).n;
   const calls = (await db.get("SELECT COUNT(*) AS n FROM call_signals WHERE kind = 'offer'")).n;
   return res.json({ ok: true, users, messages, calls });
+}));
+
+// Reports from users about a peer, newest first, with both names
+// resolved so the panel can act on them. Blocking uses the existing
+// POST /api/admin/users/block endpoint.
+app.get('/api/admin/reports', ah(auth), adminAuth, ah(async (req, res) => {
+  const rows = await db.all('SELECT id, reporter, reported, reason, created_at FROM reports ORDER BY id DESC LIMIT 100');
+  const out = [];
+  for (const r of rows) {
+    const reporter = await publicUser(r.reporter);
+    const reported = await publicUser(r.reported);
+    out.push({ ...r, reporterName: reporter.name || displayId(r.reporter), reportedName: reported.name || displayId(r.reported) });
+  }
+  return res.json({ ok: true, reports: out });
 }));
 
 // All users, newest first, with their blocked flag.
