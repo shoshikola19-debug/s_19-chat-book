@@ -125,7 +125,7 @@ document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) =>
 // long side so it fits in the phone's local storage (a full phone photo
 // would not). This is a wallpaper, not a sent photo — photos sent in
 // chats still go at 100% original quality, untouched.
-function downscaleImageFile(file) {
+function downscaleImageFile(file, maxDim) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('read_failed'));
@@ -133,7 +133,7 @@ function downscaleImageFile(file) {
       const img = new Image();
       img.onerror = () => reject(new Error('bad_image'));
       img.onload = () => {
-        const max = 1280;
+        const max = maxDim || 1280;
         const scale = Math.min(1, max / Math.max(img.width, img.height));
         const w = Math.max(1, Math.round(img.width * scale));
         const h = Math.max(1, Math.round(img.height * scale));
@@ -387,7 +387,88 @@ function enterApp() {
   startPolling();
   setupPushNotifications();
   checkAdmin();
+  loadMyProfile();
 }
+
+// ---- Settings: my photo, name and About ("Current mood") ----------------
+// WhatsApp-style: ⋮ menu → Settings, or tap the profile card in Tools.
+// The photo is downscaled to 256px before upload (a profile photo is
+// small by design — the 100%-original-quality rule is for photos SENT
+// in chats, not for avatars). Friends see the photo and About in the
+// inbox, chat header and contact profile.
+let myProfile = null;
+function renderMyProfile() {
+  if (!myProfile) return;
+  $('tools-avatar').innerHTML = avatarHtml(myProfile.name, myProfile.phone, myProfile.avatar);
+  $('tools-name').textContent = myProfile.name || 'My name';
+  $('tools-phone').textContent = displayId(myProfile.phone);
+  session.name = myProfile.name;
+}
+async function loadMyProfile() {
+  try {
+    myProfile = await api('/api/me');
+    renderMyProfile();
+  } catch { /* offline — keep the session values on screen */ }
+}
+function openSettings() {
+  if (!myProfile) return;
+  $('settings-avatar').innerHTML = avatarHtml(myProfile.name, myProfile.phone, myProfile.avatar);
+  $('settings-name').textContent = myProfile.name || '';
+  $('settings-about').textContent = myProfile.about || 'Hey there! I am using S_19 CHAT BOOK.';
+  $('settings-phone').textContent = displayId(myProfile.phone);
+  $('settings-overlay').classList.remove('hidden');
+}
+$('btn-app-menu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('app-menu').classList.toggle('hidden');
+});
+$('menu-settings').addEventListener('click', () => {
+  $('app-menu').classList.add('hidden');
+  openSettings();
+});
+$('tools-profile-card').addEventListener('click', openSettings);
+$('btn-close-settings').addEventListener('click', () => $('settings-overlay').classList.add('hidden'));
+$('settings-avatar-wrap').addEventListener('click', () => $('settings-avatar-input').click());
+$('settings-avatar-input').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const url = await downscaleImageFile(file, 256);
+    myProfile = await api('/api/profile', { method: 'POST', body: JSON.stringify({ avatar: url }) });
+    renderMyProfile();
+    $('settings-avatar').innerHTML = avatarHtml(myProfile.name, myProfile.phone, myProfile.avatar);
+    toast('Profile photo updated');
+  } catch { toast("Couldn't update the photo — try another one"); }
+});
+let editFieldKind = null; // 'name' | 'about'
+function openEditField(kind) {
+  editFieldKind = kind;
+  const isName = kind === 'name';
+  $('edit-field-title').textContent = isName ? 'Name' : 'About';
+  const input = $('edit-field-input');
+  input.value = isName ? (myProfile.name || '') : (myProfile.about || '');
+  input.maxLength = isName ? 60 : 140;
+  input.placeholder = isName ? 'Your name' : 'Current mood…';
+  $('edit-field-dialog').classList.remove('hidden');
+  input.focus();
+}
+$('settings-name-row').addEventListener('click', () => openEditField('name'));
+$('settings-about-row').addEventListener('click', () => openEditField('about'));
+$('btn-edit-field-cancel').addEventListener('click', () => $('edit-field-dialog').classList.add('hidden'));
+$('btn-edit-field-save').addEventListener('click', async () => {
+  const v = $('edit-field-input').value.trim();
+  if (editFieldKind === 'name' && !v) { toast('Please enter a name'); return; }
+  try {
+    const body = {};
+    body[editFieldKind] = v;
+    myProfile = await api('/api/profile', { method: 'POST', body: JSON.stringify(body) });
+    renderMyProfile();
+    $('edit-field-dialog').classList.add('hidden');
+    openSettings();
+    toast(editFieldKind === 'name' ? 'Name updated' : 'About updated');
+  } catch { toast("Couldn't save — check your connection and try again"); }
+});
 
 // The server decides who is admin (ADMIN_USERS env var) — /api/me
 // carries the flag, and the Admin tab only appears when it is true.
@@ -416,6 +497,13 @@ document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click',
 function avatarLetter(name, phone) {
   return (name || phone || '?').trim().charAt(0).toUpperCase();
 }
+// A contact's photo when they set one, otherwise their initial letter.
+// The avatar is a data URL (no quotes in base64), so it is safe inside
+// an <img src="..."> built this way.
+function avatarHtml(name, phone, avatar) {
+  if (avatar) return '<img src="' + avatar + '" alt="">';
+  return avatarLetter(name, phone);
+}
 function peerName(c) { return c.name || displayId(c.phone); }
 
 // ---- inbox -------------------------------------------------------------------
@@ -439,7 +527,7 @@ function renderInbox() {
     const row = document.createElement('div');
     row.className = 'chat-row';
     row.innerHTML =
-      '<div class="avatar">' + avatarLetter(c.name, c.phone) + '</div>' +
+      '<div class="avatar">' + avatarHtml(c.name, c.phone, c.avatar) + '</div>' +
       '<div class="chat-row-body">' +
         '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(peerName(c)) + (c.muted ? ' 🔇' : '') + '</span>' +
         '<span class="chat-row-time">' + (c.lastAt ? fmtTime(c.lastAt) : '') + '</span></div>' +
@@ -523,7 +611,8 @@ function openChat(phone, name) {
   chatSettings = null;
   $('chat-messages').innerHTML = '';
   $('chat-messages').className = 'chat-messages';
-  $('chat-peer-avatar').textContent = avatarLetter(name, phone);
+  const peer = conversations.find((c) => c.phone === phone) || {};
+  $('chat-peer-avatar').innerHTML = avatarHtml(name, phone, peer.avatar);
   $('chat-peer-name').textContent = name || displayId(phone);
   $('chat-peer-phone').textContent = displayId(phone);
   $('chat-menu').classList.add('hidden');
@@ -603,6 +692,9 @@ document.addEventListener('click', (e) => {
   }
   if (!$('attach-menu').classList.contains('hidden') && !e.target.closest('#attach-menu') && e.target.id !== 'btn-attach') {
     $('attach-menu').classList.add('hidden');
+  }
+  if (!$('app-menu').classList.contains('hidden') && !e.target.closest('#app-menu') && e.target.id !== 'btn-app-menu') {
+    $('app-menu').classList.add('hidden');
   }
 });
 async function saveChatSettings(patch, doneMsg) {
@@ -737,9 +829,10 @@ async function openProfile() {
   if (!activeChat) return;
   profilePeer = activeChat;
   const peer = conversations.find((c) => c.phone === activeChat) || {};
-  $('profile-avatar').textContent = avatarLetter(peer.name, activeChat);
+  $('profile-avatar').innerHTML = avatarHtml(peer.name, activeChat, peer.avatar);
   $('profile-name').textContent = peer.name || displayId(activeChat);
   $('profile-phone').textContent = displayId(activeChat);
+  $('profile-about').textContent = peer.about || '';
   $('profile-joined').textContent = '';
   $('profile-media-count').textContent = '…';
   $('profile-media-grid').classList.add('hidden');
@@ -752,6 +845,10 @@ async function openProfile() {
     $('profile-media-count').textContent = bn(String(profileMedia.length));
     if (r.peer && r.peer.created_at) {
       $('profile-joined').textContent = 'Joined: ' + new Date(r.peer.created_at).toLocaleDateString('en-US');
+    }
+    if (r.peer) {
+      if (r.peer.avatar) $('profile-avatar').innerHTML = '<img src="' + r.peer.avatar + '" alt="">';
+      if (r.peer.about) $('profile-about').textContent = r.peer.about;
     }
   } catch { $('profile-media-count').textContent = '0'; }
 }
@@ -1890,7 +1987,7 @@ async function loadCallsTab() {
   for (const p of peers) {
     const row = document.createElement('div');
     row.className = 'chat-row';
-    row.innerHTML = '<div class="avatar">' + avatarLetter(p.name, p.phone) + '</div>' +
+    row.innerHTML = '<div class="avatar">' + avatarHtml(p.name, p.phone, p.avatar) + '</div>' +
       '<div class="chat-row-body"><div class="chat-row-name">' + escapeHtml(peerName(p)) + '</div>' +
       '<div class="chat-row-msg">' + displayId(p.phone) + '</div></div>' +
       '<button class="call-btn" title="Call">📞</button>';
@@ -1937,7 +2034,7 @@ async function loadUpdates() {
     for (const s of others) {
       const row = document.createElement('div');
       row.className = 'status-row';
-      row.innerHTML = '<div class="status-ring"><div class="avatar">' + avatarLetter(s.name, s.phone) + '</div></div>' +
+      row.innerHTML = '<div class="status-ring"><div class="avatar">' + avatarHtml(s.name, s.phone, s.avatar) + '</div></div>' +
         '<div class="chat-row-body"><div class="chat-row-name">' + escapeHtml(s.name || displayId(s.phone)) + '</div>' +
         '<div class="chat-row-msg">' + fmtTime(s.created_at) + '</div></div>';
       row.addEventListener('click', () => showStatus(s));
@@ -2122,7 +2219,7 @@ function renderAdminUsers(users) {
   for (const u of users) {
     const row = document.createElement('div');
     row.className = 'chat-row';
-    row.innerHTML = '<div class="avatar">' + avatarLetter(u.name, u.phone) + '</div>' +
+    row.innerHTML = '<div class="avatar">' + avatarHtml(u.name, u.phone, u.avatar) + '</div>' +
       '<div class="chat-row-body">' +
         '<div class="chat-row-name">' + escapeHtml(u.name || displayId(u.phone)) + '</div>' +
         '<div class="chat-row-msg">' + displayId(u.phone) + ' • ' + fmtDate(u.created_at) +
