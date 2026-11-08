@@ -822,11 +822,29 @@ async function main() {
     && idxHtml2.includes('settings-invite-row')
     && idxHtml2.includes('settings-notif-overlay') && idxHtml2.includes('settings-storage-overlay')
     && idxHtml2.includes('settings-access-overlay') && idxHtml2.includes('settings-help-overlay'));
-  check('Notifications screen: per-device sound toggles, 3 ringtones, preview, and the call/message paths respect them',
+  const ringBlock = (appJs.match(/const RING_MELODIES = \{([\s\S]*?)\n\};/) || [])[1] || '';
+  const ringKeys = (ringBlock.match(/^\s{2}[a-z]+:/gm) || []).length;
+  check('15 built-in call ringtones (Classic, Gentle, Bright + 12 more)', ringKeys === 15, { ringKeys });
+  const msgBlock = (appJs.match(/const MSG_TONES = \{([\s\S]*?)\n\};/) || [])[1] || '';
+  const msgKeys = (msgBlock.match(/^\s{2}[a-z]+:/gm) || []).length;
+  check('6 built-in message tones', msgKeys === 6, { msgKeys });
+  check('Notifications screen: per-device sound toggles, 15 ringtones + 6 message tones + custom tones + Silent, preview, and the call/message paths respect them',
     appJs.includes('s19_notif') && appJs.includes('loadNotifSettings') && appJs.includes('saveNotifSettings')
-    && appJs.includes('RING_MELODIES') && appJs.includes("gentle") && appJs.includes("bright")
-    && appJs.includes('previewRingtone') && appJs.includes('playMsgBeep')
-    && appJs.includes('callSound') && appJs.includes('msgSound') && appJs.includes('groupSound'));
+    && appJs.includes('RING_MELODIES') && appJs.includes('sunrise') && appJs.includes('starlight') && appJs.includes('festival')
+    && appJs.includes('MSG_TONES') && appJs.includes('chirp') && appJs.includes('whistle')
+    && appJs.includes('previewRingtone') && appJs.includes('previewMsgTone') && appJs.includes('playMsgBeep')
+    && appJs.includes('callSound') && appJs.includes('msgSound') && appJs.includes('groupSound')
+    && appJs.includes('msgTone') && appJs.includes('notif-msgtone-row')
+    && idxHtml2.includes('msgtone-dialog') && idxHtml2.includes('ringtone-list') && idxHtml2.includes('msgtone-list'));
+  check('custom tones: IndexedDB store, 1 MB cap, max 5, add-your-own row, delete, blob playback',
+    appJs.includes('s19-tones') && appJs.includes('s19_custom_tones') && appJs.includes('CUSTOM_TONE_MAX')
+    && appJs.includes('1024 * 1024') && appJs.includes('custom-tone-input')
+    && appJs.includes('Add your own') && appJs.includes('addCustomTone') && appJs.includes('deleteCustomTone')
+    && appJs.includes('getCustomToneBlob') && appJs.includes('playCustomToneOnce')
+    && idxHtml2.includes('custom-tone-input'));
+  check('Silent is a valid ringtone and message tone (no sound, call/message still works)',
+    appJs.includes("'silent'") && appJs.includes('Silent') && appJs.includes('ringtoneDisplayName')
+    && appJs.includes('msgToneDisplayName'));
   check('Storage and data screen mirrors the meters and splits auto-download by photos/videos',
     idxHtml2.includes('storage2-used') && idxHtml2.includes('meter2-total')
     && idxHtml2.includes('autodl-photos-row') && idxHtml2.includes('autodl-videos-row')
