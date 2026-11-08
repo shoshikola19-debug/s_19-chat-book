@@ -65,9 +65,15 @@ CREATE TABLE IF NOT EXISTS messages (
   media_size INTEGER NOT NULL DEFAULT 0,
   media_data TEXT,
   -- Voice-note length in seconds (0 for other kinds).
-  media_duration INTEGER NOT NULL DEFAULT 0
+  media_duration INTEGER NOT NULL DEFAULT 0,
+  -- Client idempotency key for media uploads: the sender's tempId.
+  -- A retry of an upload whose response was lost (flaky network)
+  -- re-sends the same key, and the server returns the row that
+  -- already exists instead of inserting a second copy.
+  client_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key);
 CREATE TABLE IF NOT EXISTS statuses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   phone TEXT NOT NULL,
@@ -189,9 +195,11 @@ CREATE TABLE IF NOT EXISTS messages (
   media_type TEXT NOT NULL DEFAULT '',
   media_size BIGINT NOT NULL DEFAULT 0,
   media_data TEXT,
-  media_duration BIGINT NOT NULL DEFAULT 0
+  media_duration BIGINT NOT NULL DEFAULT 0,
+  client_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key);
 CREATE TABLE IF NOT EXISTS statuses (
   id SERIAL PRIMARY KEY,
   phone TEXT NOT NULL,
@@ -312,7 +320,10 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS media_size BIGINT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS media_data TEXT,
-      ADD COLUMN IF NOT EXISTS media_duration BIGINT NOT NULL DEFAULT 0`);
+      ADD COLUMN IF NOT EXISTS media_duration BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS client_key TEXT`);
+    // Idempotency key for media-upload retries (see db.js schema note).
+    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
     return {
       engine: 'postgres',
       label: 'Neon Postgres',
@@ -357,10 +368,13 @@ async function createDb({ dbPath }) {
     ['media_size', 'INTEGER NOT NULL DEFAULT 0'],
     ['media_data', 'TEXT'],
     ['media_duration', 'INTEGER NOT NULL DEFAULT 0'],
+    ['client_key', 'TEXT'],
   ];
   for (const [col, def] of msgAdds) {
     if (!msgCols.includes(col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${def}`);
   }
+  // Idempotency key for media-upload retries (see schema note above).
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
   return {
     engine: 'sqlite',
     label: 'SQLite (local file)',
