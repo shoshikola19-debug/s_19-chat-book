@@ -1,0 +1,7 @@
+node_modules/
+.env
+s19.db
+s19.db-wal
+s19.db-shm
+*.log
+.DS_Store
