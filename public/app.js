@@ -1236,6 +1236,10 @@ function makePc() {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443'],
       username: 'openrelayproject', credential: 'openrelayproject' },
+    // TCP fallback: if the operator blocks UDP, media can still flow
+    // over TURN/TCP on 443 (slower, but a call beats no call).
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject', credential: 'openrelayproject' },
   ] });
   peer.onicecandidate = (e) => {
     if (e.candidate && callPeer) {
@@ -1244,21 +1248,22 @@ function makePc() {
   };
   peer.ontrack = (e) => {
     const stream = e.streams[0];
+    if (!stream) return;
     if (e.track.kind === 'video') {
-      // The friend's camera: full-screen remote video. The same stream
-      // also carries their audio, which goes to the audio element below.
+      // The friend's camera: full-screen remote video. The element is
+      // muted — its sound is not needed, the voice comes from the audio
+      // element below. A muted video is allowed to autoplay, so it
+      // renders even when the call took long to connect.
       const v = $('remote-video');
+      v.muted = true;
       v.srcObject = stream;
-      v.play().catch(() => {});
-      return;
+    } else {
+      const a = $('remote-audio');
+      a.srcObject = stream;
+      a.muted = false;
+      a.volume = 1;
     }
-    const a = $('remote-audio');
-    a.srcObject = stream;
-    a.muted = false;
-    a.volume = 1;
-    // The stream alone is not enough on mobile Chrome: playback must be
-    // started explicitly, or the other side stays silent.
-    a.play().catch(() => {});
+    resumeRemotePlayback();
   };
   peer.oniceconnectionstatechange = () => {
     const st = peer.iceConnectionState;
@@ -1266,9 +1271,38 @@ function makePc() {
       iceRestarts++;
       try { peer.restartIce(); } catch { /* ignore */ }
     }
-    if (st === 'connected' || st === 'completed') startCallTimer();
+    if (st === 'connected' || st === 'completed') {
+      startCallTimer();
+      // The call is really connected now — say so, in case the timer
+      // started earlier on the answer signal alone.
+      $('call-status').textContent = callIsVideo ? 'ভিডিও কল চলছে…' : 'কথা হচ্ছে…';
+    } else if (st === 'failed' && callConnected) {
+      $('call-status').textContent = 'সংযোগ হারিয়ে গেছে — আবার চেষ্টা করো';
+    }
   };
   return peer;
+}
+
+// Mobile Chrome blocks play() on an element with sound once the tap
+// that started the call is more than a few seconds old (autoplay
+// policy). A video call takes longer than that to connect, so the first
+// play() often fails silently: the timer runs, the local (muted)
+// preview works, but the friend's video stays black and silent. So
+// playback is re-attempted on every tap on the call screen and every
+// 2 seconds while the call runs, until both elements are playing.
+let playRetryId = null;
+function resumeRemotePlayback() {
+  const v = $('remote-video');
+  if (v && v.srcObject && v.paused) v.play().catch(() => {});
+  const a = $('remote-audio');
+  if (a && a.srcObject && a.paused) a.play().catch(() => {});
+}
+function startPlayRetry() {
+  if (playRetryId) return;
+  playRetryId = setInterval(resumeRemotePlayback, 2000);
+}
+function stopPlayRetry() {
+  if (playRetryId) { clearInterval(playRetryId); playRetryId = null; }
 }
 function fmtCallTime(s) {
   const m = Math.floor(s / 60), ss = s % 60;
@@ -1277,6 +1311,7 @@ function fmtCallTime(s) {
 function startCallTimer() {
   if (callTimerId || !callStartAt) return;
   callConnected = true;
+  startPlayRetry(); // keep re-trying play() until the remote media renders
   callTimerId = setInterval(() => {
     callSeconds = Math.floor((Date.now() - callStartAt) / 1000);
     $('call-timer').textContent = fmtCallTime(callSeconds);
@@ -1315,6 +1350,7 @@ function showCallOverlay(name, status, incoming, isVideo) {
 }
 function hideCallOverlay() {
   stopRinging();
+  stopPlayRetry();
   $('call-overlay').classList.add('hidden');
   $('call-overlay').classList.remove('video');
   $('call-video-wrap').classList.add('hidden');
@@ -1459,6 +1495,9 @@ $('btn-call-peer').addEventListener('click', () => {
 $('btn-video-call-peer').addEventListener('click', () => {
   if (activeChat) startCall(activeChat, $('chat-peer-name').textContent, true);
 });
+// Any tap on the call screen is a fresh user gesture — use it to
+// (re)start the remote video/audio playback if autoplay blocked it.
+$('call-overlay').addEventListener('pointerdown', resumeRemotePlayback);
 $('btn-cam-toggle').addEventListener('click', () => {
   if (!localStream) return;
   const vt = localStream.getVideoTracks()[0];
