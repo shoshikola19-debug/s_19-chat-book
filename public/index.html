@@ -246,6 +246,8 @@
     <div id="chat-search-bar" class="chat-search-bar hidden">
       <input id="chat-search-input" type="search" placeholder="Search messages…">
       <span id="chat-search-count"></span>
+      <button id="btn-search-prev" class="btn-link" type="button" title="Previous match">↑</button>
+      <button id="btn-search-next" class="btn-link" type="button" title="Next match">↓</button>
       <button id="btn-close-search" class="btn-link" type="button">✕</button>
     </div>
     <div id="chat-messages" class="chat-messages"></div>
@@ -273,6 +275,7 @@
       <button id="btn-send-msg" class="mic-btn hidden" type="button" title="Send"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
     </div>
     <input id="file-image" type="file" accept="image/*" class="hidden">
+    <input id="file-camera" type="file" accept="image/*" capture="environment" class="hidden">
     <input id="file-video" type="file" accept="video/*" class="hidden">
     <input id="file-any" type="file" class="hidden">
   </section>
@@ -490,7 +493,113 @@
       <span class="settings-row-label">Profile photo guard</span><span id="settings-photoguard" class="settings-row-value">On</span>
     </button>
     <div class="settings-hint">When on, a profile photo opens in a guarded viewer: no save button, and the photo hides when you switch away from the app. It does not stop screenshots.</div>
+    <button id="settings-notif-row" class="settings-row" type="button">
+      <span class="settings-row-label">Notifications</span><span class="settings-row-value">Message, group &amp; call tones</span>
+    </button>
+    <button id="settings-storage-row" class="settings-row" type="button">
+      <span class="settings-row-label">Storage and data</span><span class="settings-row-value">Network usage, auto-download</span>
+    </button>
+    <button id="settings-access-row" class="settings-row" type="button">
+      <span class="settings-row-label">Accessibility</span><span class="settings-row-value">Increase contrast, animation</span>
+    </button>
+    <button id="settings-help-row" class="settings-row" type="button">
+      <span class="settings-row-label">Help and feedback</span><span class="settings-row-value">Help Center, contact us, privacy policy</span>
+    </button>
+    <button id="settings-invite-row" class="settings-row" type="button">
+      <span class="settings-row-label">Invite a friend</span><span class="settings-row-value">Share S_19 CHAT BOOK</span>
+    </button>
     <input type="file" id="settings-avatar-input" accept="image/*" class="hidden">
+  </div>
+
+  <!-- ===== Settings: Notifications ===== -->
+  <div id="settings-notif-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-notif" class="back-btn">‹</button>
+      <span class="settings-title">Notifications</span>
+    </div>
+    <button id="notif-msg-row" class="settings-row" type="button">
+      <span class="settings-row-label">Message notification sound</span><span id="notif-msg-state" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-sub-hint">Plays a short sound when a new message arrives while the app is open.</div>
+    <button id="notif-group-row" class="settings-row" type="button">
+      <span class="settings-row-label">Group notification sound</span><span id="notif-group-state" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-sub-hint">Plays a short sound when a new group message arrives while the app is open.</div>
+    <button id="notif-call-row" class="settings-row" type="button">
+      <span class="settings-row-label">Call ringtone</span><span id="notif-call-state" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-sub-hint">When off, incoming calls ring silently (the call still comes through).</div>
+    <button id="notif-ringtone-row" class="settings-row" type="button">
+      <span class="settings-row-label">Ringtone</span><span id="notif-ringtone-state" class="settings-row-value">Classic</span>
+    </button>
+    <div class="settings-sub-hint">Tap to choose a ringtone — it plays once so you can hear it.</div>
+  </div>
+
+  <!-- ===== Settings: Storage and data ===== -->
+  <div id="settings-storage-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-storage" class="back-btn">‹</button>
+      <span class="settings-title">Storage and data</span>
+    </div>
+    <div class="section-title">Media storage (estimate)</div>
+    <div class="meter-card">
+      <div class="meter-total"><b id="storage2-used">0 MB</b><span> / 1 GB free storage</span></div>
+      <div class="meter-bar"><div id="storage2-fill" class="meter-fill"></div></div>
+      <div class="meter-rows"><div>Media files <span id="storage2-count">0</span></div></div>
+      <p class="meter-note">Photos and videos are sent at original quality (100%) — no compression.</p>
+    </div>
+    <div class="section-title">Today's data use (estimate)</div>
+    <div class="meter-card">
+      <div class="meter-total"><b id="meter2-total">0 MB</b><span> / 10 MB goal</span></div>
+      <div class="meter-bar"><div id="meter2-fill" class="meter-fill"></div></div>
+      <div class="meter-rows">
+        <div>Messages <span id="meter2-msg">0 KB</span></div>
+        <div>Voice call <span id="meter2-call">0 KB</span></div>
+        <div>Video call <span id="meter2-vcall">0 KB</span></div>
+      </div>
+      <p class="meter-note">Messages use very little data; voice calls use about 120 KB per minute, video calls (720p) about 11 MB per minute. Daily goal: 5–10 MB.</p>
+    </div>
+    <div class="section-title">Auto-download</div>
+    <button id="autodl-photos-row" class="settings-row" type="button">
+      <span class="settings-row-label">Photos</span><span id="autodl-photos-state" class="settings-row-value">On</span>
+    </button>
+    <button id="autodl-videos-row" class="settings-row" type="button">
+      <span class="settings-row-label">Videos</span><span id="autodl-videos-state" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-sub-hint">Photos and videos friends send are saved to your phone automatically. This is the same setting as "Auto-save photos &amp; videos" in Settings — changing it here changes it there too. Voice notes and files are never auto-saved.</div>
+  </div>
+
+  <!-- ===== Settings: Accessibility ===== -->
+  <div id="settings-access-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-access" class="back-btn">‹</button>
+      <span class="settings-title">Accessibility</span>
+    </div>
+    <button id="access-text-row" class="settings-row" type="button">
+      <span class="settings-row-label">Larger text</span><span id="access-text-state" class="settings-row-value">Off</span>
+    </button>
+    <div class="settings-sub-hint">Makes the text in chats, the inbox and menus bigger.</div>
+    <button id="access-motion-row" class="settings-row" type="button">
+      <span class="settings-row-label">Reduce motion</span><span id="access-motion-state" class="settings-row-value">Off</span>
+    </button>
+    <div class="settings-sub-hint">Turns off animations (like the blinking recording dot) — the app feels calmer.</div>
+  </div>
+
+  <!-- ===== Settings: Help and feedback ===== -->
+  <div id="settings-help-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-help" class="back-btn">‹</button>
+      <span class="settings-title">Help and feedback</span>
+    </div>
+    <div class="section-title">How it works</div>
+    <div class="settings-sub-hint"><b>Log in</b> — with your phone number or Gmail. A 6-digit code confirms it is you.<br><br><b>Chats</b> — tap + to add a friend by number or Gmail, then message them. Photos and videos send at original quality. Long-press a message to delete it.<br><br><b>Calls</b> — tap the phone or video button in a chat. Voice calls use about 120 KB per minute; video calls use much more.<br><br><b>Groups</b> — tap + then "New group", pick friends, and chat together. Any member can add more people.<br><br><b>Status &amp; channels</b> — post a status in Updates (it lasts 24 hours), or follow a channel.</div>
+    <div class="section-title">Privacy policy</div>
+    <div class="settings-sub-hint">Messages are stored on our server (Render / Neon) so they can reach you when you come back online. They are <b>NOT end-to-end encrypted</b> — the server could technically read them. In the app, only you and the person you chat with can open a chat; strangers cannot. Your profile photo and name are visible to people you chat with.</div>
+    <div class="section-title">Contact us</div>
+    <div class="settings-sub-hint">There is no support email yet. If something is wrong, copy the app link below and send it to the admin (Bijoy) with your question.</div>
+    <button id="help-contact-row" class="settings-row" type="button">
+      <span class="settings-row-label">Contact us</span><span class="settings-row-value">Copy the app link</span>
+    </button>
   </div>
 
   <!-- ===== Edit name / about dialog ===== -->
@@ -644,6 +753,45 @@
     </div>
     <img id="photo-viewer-img" alt="">
     <a id="photo-viewer-download" class="photo-viewer-download hidden" download="profile-photo.jpg">⬇ Save photo</a>
+  </div>
+
+  <!-- ===== Send a photo to… (inbox camera) ===== -->
+  <div id="send-photo-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Send photo to…</h3>
+      <div id="send-photo-list" class="option-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-send-photo-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Manage storage breakdown (contact info) ===== -->
+  <div id="manage-storage-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Manage storage</h3>
+      <div id="storage-breakdown" class="meter-rows"></div>
+      <p class="hint" style="margin-top:12px">This is the media shared in this chat. Nothing is deleted by itself — to free space, delete messages from the chat.</p>
+      <div class="dialog-buttons">
+        <button id="btn-manage-storage-close" class="btn-link">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Choose a ringtone ===== -->
+  <div id="ringtone-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Ringtone</h3>
+      <p class="hint">Tap one to hear it — it plays once.</p>
+      <div class="option-list">
+        <button class="option-btn" data-ringtone="classic" type="button">Classic</button>
+        <button class="option-btn" data-ringtone="gentle" type="button">Gentle</button>
+        <button class="option-btn" data-ringtone="bright" type="button">Bright</button>
+      </div>
+      <div class="dialog-buttons">
+        <button id="btn-ringtone-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
