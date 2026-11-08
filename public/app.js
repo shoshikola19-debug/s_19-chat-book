@@ -92,8 +92,10 @@ function fillCountrySelect(selectEl, selectedDial) {
 function currentDial() { return $('country-select').value; }
 
 // Identity display: phone numbers show with a +, Gmail addresses as-is.
+// The broadcast sender "S_19 CHAT BOOK" is shown as-is (no + in front).
 function displayId(id) {
   if (!id) return '';
+  if (id === 'S_19 CHAT BOOK') return id;
   return String(id).includes('@') ? String(id) : '+' + id;
 }
 function isEmailText(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim()); }
@@ -159,6 +161,8 @@ async function requestCode() {
   } catch (e) {
     $('phone-error').textContent = e.message === 'too_many_codes'
       ? 'অনেকবার কোড চাওয়া হয়েছে — একটু পরে আবার চেষ্টা করো'
+      : e.message === 'blocked'
+      ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
       : 'কোড পাঠানো যায়নি — নেট দেখে আবার চেষ্টা করো';
     $('phone-error').classList.remove('hidden');
   }
@@ -190,6 +194,8 @@ async function requestEmailCode() {
   } catch (e) {
     $('phone-error').textContent = e.message === 'too_many_codes'
       ? 'অনেকবার কোড চাওয়া হয়েছে — একটু পরে আবার চেষ্টা করো'
+      : e.message === 'blocked'
+      ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
       : 'কোড পাঠানো যায়নি — নেট দেখে আবার চেষ্টা করো';
     $('phone-error').classList.remove('hidden');
   }
@@ -231,6 +237,7 @@ async function verifyCode() {
       e.message === 'wrong_code' ? 'কোডটা ভুল — আবার দেখে লেখো'
       : e.message === 'code_expired' ? 'কোডের মেয়াদ শেষ — নতুন কোড নাও'
       : e.message === 'too_many_attempts' ? 'অনেকবার ভুল হয়েছে — নতুন কোড নাও'
+      : e.message === 'blocked' ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
       : 'যাচাই করা যায়নি — নেট দেখে আবার চেষ্টা করো';
     $('code-error').classList.remove('hidden');
   }
@@ -271,16 +278,30 @@ function enterApp() {
   refreshAll();
   startPolling();
   setupPushNotifications();
+  checkAdmin();
+}
+
+// The server decides who is admin (ADMIN_USERS env var) — /api/me
+// carries the flag, and the Admin tab only appears when it is true.
+// The server still enforces admin on every /api/admin/* route.
+let isAdminUser = false;
+async function checkAdmin() {
+  try {
+    const me = await api('/api/me');
+    isAdminUser = !!me.isAdmin;
+  } catch { isAdminUser = false; }
+  $('nav-admin').classList.toggle('hidden', !isAdminUser);
 }
 
 function switchTab(tab) {
-  for (const t of ['chats', 'calls', 'updates', 'tools']) {
+  for (const t of ['chats', 'calls', 'updates', 'tools', 'admin']) {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   }
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   if (tab === 'updates') loadUpdates();
   if (tab === 'calls') loadCallsTab();
   if (tab === 'tools') renderMeter();
+  if (tab === 'admin') loadAdmin();
 }
 document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
@@ -1083,6 +1104,99 @@ $('btn-send-post').addEventListener('click', async () => {
   }
 });
 
+// ---- admin panel ---------------------------------------------------------------
+// Everything here is admin-only on the server (403 for non-admins). The
+// tab itself is hidden unless /api/me said this user is an admin.
+async function loadAdmin() {
+  if (!isAdminUser) return;
+  try {
+    const [stats, users, channels, settings] = await Promise.all([
+      api('/api/admin/stats'),
+      api('/api/admin/users'),
+      api('/api/admin/channels'),
+      api('/api/admin/settings'),
+    ]);
+    $('admin-stat-users').textContent = bn(stats.users);
+    $('admin-stat-messages').textContent = bn(stats.messages);
+    $('admin-stat-calls').textContent = bn(stats.calls);
+    renderAdminUsers(users.users || []);
+    renderAdminChannels(channels.channels || []);
+    $('admin-banner-input').value = settings.banner || '';
+  } catch { toast('অ্যাডমিন তথ্য আনা যায়নি'); }
+}
+function renderAdminUsers(users) {
+  const list = $('admin-users');
+  list.innerHTML = '';
+  if (!users.length) {
+    list.innerHTML = '<div class="empty-note">কোনো ব্যবহারকারী নেই।</div>';
+    return;
+  }
+  for (const u of users) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">' + avatarLetter(u.name, u.phone) + '</div>' +
+      '<div class="chat-row-body">' +
+        '<div class="chat-row-name">' + escapeHtml(u.name || displayId(u.phone)) + '</div>' +
+        '<div class="chat-row-msg">' + displayId(u.phone) + ' • ' + fmtDate(u.created_at) +
+        (u.blocked ? ' • ⛔ ব্লক করা' : '') + '</div></div>' +
+      '<button class="btn-link" style="color:#D32F2F">' + (u.blocked ? 'আনব্লক করো' : 'ব্লক করো') + '</button>';
+    row.querySelector('.btn-link').addEventListener('click', async () => {
+      try {
+        await api('/api/admin/users/block', { method: 'POST', body: JSON.stringify({ phone: u.phone, blocked: !u.blocked }) });
+        toast(u.blocked ? 'আনব্লক করা হয়েছে' : 'ব্লক করা হয়েছে');
+        loadAdmin();
+      } catch (e) {
+        toast(e.message === 'cannot_block_admin' ? 'অ্যাডমিনকে ব্লক করা যায় না' : 'বদলানো যায়নি');
+      }
+    });
+    list.appendChild(row);
+  }
+}
+function renderAdminChannels(channels) {
+  const list = $('admin-channels');
+  list.innerHTML = '';
+  if (!channels.length) {
+    list.innerHTML = '<div class="empty-note">কোনো চ্যানেল নেই।</div>';
+    return;
+  }
+  for (const c of channels) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">📢</div>' +
+      '<div class="chat-row-body">' +
+        '<div class="chat-row-name">' + escapeHtml(c.name) + '</div>' +
+        '<div class="chat-row-msg">' + escapeHtml(c.owner_phone || '') + ' • ' + bn(c.followers || 0) + ' ফলোয়ার</div></div>' +
+      '<button class="btn-link" style="color:#D32F2F">মুছো</button>';
+    row.querySelector('.btn-link').addEventListener('click', async () => {
+      if (!confirm('"' + c.name + '" চ্যানেলটা মুছে দেবে?')) return;
+      try {
+        await api('/api/admin/channels/' + c.id, { method: 'DELETE' });
+        toast('চ্যানেল মোছা হয়েছে');
+        loadAdmin();
+        loadChannels();
+      } catch { toast('মোছা যায়নি'); }
+    });
+    list.appendChild(row);
+  }
+}
+$('btn-admin-broadcast').addEventListener('click', async () => {
+  const text = $('admin-broadcast-input').value.trim();
+  if (!text) { toast('ঘোষণার লেখাটা লেখো'); return; }
+  try {
+    const r = await api('/api/admin/broadcast', { method: 'POST', body: JSON.stringify({ text }) });
+    $('admin-broadcast-input').value = '';
+    toast('ঘোষণা পাঠানো হয়েছে — ' + bn(r.recipients) + ' জনকে');
+    loadAdmin();
+  } catch { toast('ঘোষণা পাঠানো যায়নি'); }
+});
+$('btn-admin-save-banner').addEventListener('click', async () => {
+  const banner = $('admin-banner-input').value.trim();
+  try {
+    await api('/api/admin/settings', { method: 'POST', body: JSON.stringify({ banner }) });
+    toast(banner ? 'ব্যানার সেভ হয়েছে' : 'ব্যানার সরিয়ে দেওয়া হয়েছে');
+  } catch { toast('সেভ হয়নি'); }
+});
+
 // ---- tools ------------------------------------------------------------------------
 $('btn-logout').addEventListener('click', async () => {
   try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
@@ -1096,6 +1210,15 @@ $('btn-logout').addEventListener('click', async () => {
 // ---- init -----------------------------------------------------------------------------
 (function init() {
   fillCountrySelect($('country-select'), localStorage.getItem('s19_last_dial') || '+880');
+  // Welcome-screen banner, set by the admin from the Admin panel.
+  // Public endpoint, no login needed; empty = hidden.
+  fetch('/api/banner').then((r) => r.json()).then((d) => {
+    if (d && d.banner) {
+      const el = $('welcome-banner');
+      el.textContent = d.banner;
+      el.classList.remove('hidden');
+    }
+  }).catch(() => {});
   if (session && session.token) {
     // Stay logged in on this device; only the name step is needed if the
     // profile was never finished.
