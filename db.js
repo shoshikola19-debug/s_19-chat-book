@@ -73,7 +73,6 @@ CREATE TABLE IF NOT EXISTS messages (
   client_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key);
 CREATE TABLE IF NOT EXISTS statuses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   phone TEXT NOT NULL,
@@ -199,7 +198,6 @@ CREATE TABLE IF NOT EXISTS messages (
   client_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key);
 CREATE TABLE IF NOT EXISTS statuses (
   id SERIAL PRIMARY KEY,
   phone TEXT NOT NULL,
@@ -323,6 +321,11 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS media_duration BIGINT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS client_key TEXT`);
     // Idempotency key for media-upload retries (see db.js schema note).
+    // NOTE: this index must ONLY be created here, AFTER the ALTER above
+    // — never inside PG_SCHEMA. On an existing database the schema's
+    // CREATE TABLE is a no-op (table already exists without client_key),
+    // so an index on client_key inside PG_SCHEMA crashes the boot with
+    // `column "client_key" does not exist` (seen live 2026-11-08).
     await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
     return {
       engine: 'postgres',
