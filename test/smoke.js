@@ -77,14 +77,16 @@ async function main() {
       ssl: { rejectUnauthorized: false },
     });
     await client.connect();
-    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions CASCADE');
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings CASCADE');
     await client.end();
   } else {
     console.log('== engine: SQLite (local file) ==');
   }
   const server = spawn('node', ['server.js'], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PORT: String(PORT), DB_PATH: DB },
+    // BIJOY is the admin for this run (ADMIN_USERS), so the admin panel
+    // can be tested end to end; everyone else must get 403.
+    env: { ...process.env, PORT: String(PORT), DB_PATH: DB, ADMIN_USERS: BIJOY },
     stdio: 'pipe',
   });
   server.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
@@ -241,6 +243,102 @@ async function main() {
   check('call offer to user with no push subscription still sends', sigNoSub.status === 200 && sigNoSub.data.ok, sigNoSub);
   const sigsNoSub = await get('/api/calls/signals', tokB);
   check('callee still receives the offer via polling', sigsNoSub.status === 200 && sigsNoSub.data.signals.length === 1, sigsNoSub);
+
+  console.log('== admin panel ==');
+  const CHARLIE = '8801911000003'; // made-up test number, for block tests
+  const tokC = await login(CHARLIE, 'Charlie Test');
+
+  // The /api/me flag is what shows the Admin tab in the client.
+  const meAdmin = await get('/api/me', tokA);
+  check('admin sees isAdmin=true on /api/me', meAdmin.status === 200 && meAdmin.data.isAdmin === true, meAdmin);
+  const meNonAdmin = await get('/api/me', tokB);
+  check('non-admin sees isAdmin=false on /api/me', meNonAdmin.status === 200 && meNonAdmin.data.isAdmin === false, meNonAdmin);
+
+  // Non-admins get 403 on every admin route.
+  const statsNo = await get('/api/admin/stats', tokB);
+  check('non-admin stats -> 403', statsNo.status === 403 && statsNo.data.error === 'not_admin', statsNo);
+  const usersNo = await get('/api/admin/users', tokB);
+  check('non-admin users list -> 403', usersNo.status === 403, usersNo);
+  const bcNo = await post('/api/admin/broadcast', { text: 'ami admin na' }, tokB);
+  check('non-admin broadcast -> 403', bcNo.status === 403, bcNo);
+  const setNo = await get('/api/admin/settings', tokB);
+  check('non-admin settings read -> 403', setNo.status === 403, setNo);
+  const setPostNo = await post('/api/admin/settings', { banner: 'x' }, tokB);
+  check('non-admin settings write -> 403', setPostNo.status === 403, setPostNo);
+  const statsAnon = await get('/api/admin/stats');
+  check('anonymous stats -> 401', statsAnon.status === 401, statsAnon);
+
+  // Admin stats: 4 users, 5 messages so far, 2 call offers so far.
+  const stats = await get('/api/admin/stats', tokA);
+  check('admin stats totals', stats.status === 200 && stats.data.users === 4 && stats.data.messages === 5 && stats.data.calls === 2, stats);
+  const usersList = await get('/api/admin/users', tokA);
+  const charlieRow = (usersList.data.users || []).find((u) => u.phone === CHARLIE);
+  check('admin users list has Charlie, not blocked', usersList.status === 200 && usersList.data.users.length === 4 && charlieRow && charlieRow.blocked === 0, usersList);
+
+  // Block Charlie: login is refused at both code steps, and the live
+  // session token stops working at once (message + call + me -> 401).
+  const block = await post('/api/admin/users/block', { phone: CHARLIE, blocked: true }, tokA);
+  check('admin blocks Charlie', block.status === 200 && block.data.blocked === true, block);
+  const blockNoUser = await post('/api/admin/users/block', { phone: '8801999999999', blocked: true }, tokA);
+  check('blocking an unknown user -> 404', blockNoUser.status === 404, blockNoUser);
+  const blockAdmin = await post('/api/admin/users/block', { phone: BIJOY, blocked: true }, tokA);
+  check('admin cannot block themself', blockAdmin.status === 403 && blockAdmin.data.error === 'cannot_block_admin', blockAdmin);
+  const rcBlocked = await post('/api/request-code', { phone: CHARLIE });
+  check('blocked user gets no code', rcBlocked.status === 403 && rcBlocked.data.error === 'blocked', rcBlocked);
+  const vcBlocked = await post('/api/verify-code', { phone: CHARLIE, code: '123456' });
+  check('blocked user verify-code -> 403', vcBlocked.status === 403 && vcBlocked.data.error === 'blocked', vcBlocked);
+  const meBlocked = await get('/api/me', tokC);
+  check('blocked user live session -> 401', meBlocked.status === 401, meBlocked);
+  const msgBlocked = await post('/api/messages', { to: FRIEND, body: 'ami blocked' }, tokC);
+  check('blocked user cannot send messages', msgBlocked.status === 401, msgBlocked);
+  const sigBlocked = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'x', type: 'offer' } }, tokC);
+  check('blocked user cannot call', sigBlocked.status === 401, sigBlocked);
+
+  // Unblock: the same session token works again, no re-login needed.
+  const unblock = await post('/api/admin/users/block', { phone: CHARLIE, blocked: false }, tokA);
+  check('admin unblocks Charlie', unblock.status === 200 && unblock.data.blocked === false, unblock);
+  const meUnblocked = await get('/api/me', tokC);
+  check('unblocked user session works again', meUnblocked.status === 200 && meUnblocked.data.name === 'Charlie Test', meUnblocked);
+
+  // Broadcast: one message from "S_19 CHAT BOOK" into every inbox.
+  const bc = await post('/api/admin/broadcast', { text: 'ঘোষণা: কাল অ্যাপের নতুন সংস্করণ আসবে!' }, tokA);
+  check('admin broadcast reaches all 4 users', bc.status === 200 && bc.data.recipients === 4, bc);
+  const bcEmpty = await post('/api/admin/broadcast', { text: '   ' }, tokA);
+  check('empty broadcast rejected', bcEmpty.status === 400, bcEmpty);
+  const statsAfterBc = await get('/api/admin/stats', tokA);
+  check('stats messages grew by 4 after broadcast', statsAfterBc.status === 200 && statsAfterBc.data.messages === 9, statsAfterBc);
+  const convsBc = await get('/api/conversations', tokB);
+  const bcConv = (convsBc.data.conversations || []).find((c) => c.phone === 'S_19 CHAT BOOK');
+  check('friend inbox shows the announcement conversation', convsBc.status === 200 && bcConv && bcConv.lastMessage.includes('নতুন সংস্করণ'), convsBc);
+  const bcMsgs = await get('/api/messages?with=' + encodeURIComponent('S_19 CHAT BOOK') + '&afterId=0', tokB);
+  check('friend reads the announcement message', bcMsgs.status === 200 && bcMsgs.data.messages.length === 1 && bcMsgs.data.messages[0].sender === 'S_19 CHAT BOOK' && bcMsgs.data.messages[0].body.includes('নতুন সংস্করণ'), bcMsgs);
+
+  // Settings: the welcome-screen banner, public to read, admin to write.
+  const setGet0 = await get('/api/admin/settings', tokA);
+  check('banner starts empty', setGet0.status === 200 && setGet0.data.banner === '', setGet0);
+  const bannerPub0 = await get('/api/banner');
+  check('public banner endpoint starts empty', bannerPub0.status === 200 && bannerPub0.data.banner === '', bannerPub0);
+  const setSave = await post('/api/admin/settings', { banner: 'স্বাগতম! আজ রাত ৯টায় নতুন ভিডিও।' }, tokA);
+  check('admin saves banner', setSave.status === 200 && setSave.data.banner.includes('স্বাগতম'), setSave);
+  const bannerPub = await get('/api/banner');
+  check('public banner shows the saved text', bannerPub.status === 200 && bannerPub.data.banner.includes('স্বাগতম'), bannerPub);
+  const setClear = await post('/api/admin/settings', { banner: '' }, tokA);
+  check('admin clears banner', setClear.status === 200 && setClear.data.banner === '', setClear);
+  const bannerPub2 = await get('/api/banner');
+  check('public banner empty again after clear', bannerPub2.status === 200 && bannerPub2.data.banner === '', bannerPub2);
+
+  // Channels: admin can delete any channel; non-admins get 403 even
+  // for a channel they own (the admin delete route is admin-only).
+  const chDel = await post('/api/channels', { name: 'Admin Delete Test', description: 'muchhe felar channel' }, tokB);
+  check('friend creates a channel for admin-delete test', chDel.status === 200 && chDel.data.channel.id, chDel);
+  const delNoAdmin = await fetch(BASE + '/api/admin/channels/' + chDel.data.channel.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokB } });
+  check('non-admin cannot delete via admin route', delNoAdmin.status === 403);
+  const delAdmin = await fetch(BASE + '/api/admin/channels/' + chDel.data.channel.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
+  check('admin deletes any channel', delAdmin.status === 200);
+  const chListAfter = await get('/api/channels?q=', tokB);
+  check('deleted channel is gone', chListAfter.status === 200 && !chListAfter.data.channels.some((c) => c.name === 'Admin Delete Test'), chListAfter);
+  const delMissing = await fetch(BASE + '/api/admin/channels/999999', { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
+  check('admin delete of missing channel -> 404', delMissing.status === 404);
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
