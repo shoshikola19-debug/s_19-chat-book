@@ -77,7 +77,7 @@ async function main() {
       ssl: { rejectUnauthorized: false },
     });
     await client.connect();
-    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals CASCADE');
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions CASCADE');
     await client.end();
   } else {
     console.log('== engine: SQLite (local file) ==');
@@ -211,6 +211,36 @@ async function main() {
   console.log('== usage ==');
   const usage = await get('/api/usage', tokA);
   check('usage endpoint counts today', usage.status === 200 && usage.data.messagesSent === 3 && usage.data.bytesSent > 0, usage);
+
+  console.log('== web push ==');
+  // No VAPID keys are set for this run, so push is disabled: the public
+  // key endpoint answers null and everything else works exactly as
+  // before (polling). Subscriptions can still be saved/deleted.
+  const vapid = await get('/api/push/vapid-public-key');
+  check('vapid public key endpoint (push disabled -> null)', vapid.status === 200 && vapid.data.ok && vapid.data.publicKey === null, vapid);
+  const FAKE_SUB = { endpoint: 'https://localhost:1/fake-push', keys: { p256dh: 'test-p256dh', auth: 'test-auth' } };
+  const subNoAuth = await post('/api/push/subscribe', { subscription: FAKE_SUB });
+  check('subscribe without auth -> 401', subNoAuth.status === 401);
+  const subBad = await post('/api/push/subscribe', { subscription: { endpoint: '' } }, tokA);
+  check('subscribe with bad subscription -> 400', subBad.status === 400 && subBad.data.error === 'bad_subscription', subBad);
+  const sub1 = await post('/api/push/subscribe', { subscription: FAKE_SUB }, tokA);
+  check('subscribe with auth saves subscription', sub1.status === 200 && sub1.data.ok, sub1);
+  const sub2 = await post('/api/push/subscribe', { subscription: FAKE_SUB }, tokA);
+  check('re-subscribe (upsert) is idempotent', sub2.status === 200 && sub2.data.ok, sub2);
+  const delNoAuth = await fetch(BASE + '/api/push/subscribe', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: FAKE_SUB.endpoint }) });
+  check('unsubscribe without auth -> 401', delNoAuth.status === 401);
+  const del1 = await fetch(BASE + '/api/push/subscribe', { method: 'DELETE', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokA }, body: JSON.stringify({ endpoint: FAKE_SUB.endpoint }) });
+  check('unsubscribe with auth deletes subscription', del1.status === 200);
+  const del2 = await fetch(BASE + '/api/push/subscribe', { method: 'DELETE', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokA }, body: JSON.stringify({ endpoint: FAKE_SUB.endpoint }) });
+  check('unsubscribe again is idempotent', del2.status === 200);
+  // Neither recipient has a subscription now: a message and a call offer
+  // must still succeed (push is skipped, never blocks the response).
+  const msgNoSub = await post('/api/messages', { to: FRIEND, body: 'Push chara message' }, tokA);
+  check('message to user with no push subscription still sends', msgNoSub.status === 200 && msgNoSub.data.ok, msgNoSub);
+  const sigNoSub = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'fake-offer-2', type: 'offer' } }, tokA);
+  check('call offer to user with no push subscription still sends', sigNoSub.status === 200 && sigNoSub.data.ok, sigNoSub);
+  const sigsNoSub = await get('/api/calls/signals', tokB);
+  check('callee still receives the offer via polling', sigsNoSub.status === 200 && sigsNoSub.data.signals.length === 1, sigsNoSub);
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
