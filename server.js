@@ -1155,6 +1155,13 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
   const expiresAt = targetGroup ? 0 : await disappearingExpiresAt(req.phone, to, t);
   const duration = Math.max(0, Math.floor(Number(body.duration || 0)));
   const label = kind === 'file' && fileName ? '📄 ' + fileName : MEDIA_LABELS[kind];
+  // A caption from the preview screen rides as the message body (it
+  // renders under the photo/video in the bubble, and a forwarded copy
+  // carries it along because forward copies the body); without one
+  // the body stays the plain label, as before. The push notification
+  // below still uses the label, never the caption text.
+  const caption = String(body.caption || '').trim().slice(0, 1000);
+  const bodyText = caption || label;
   const fetchRow = (id) => db.get(
     `SELECT id, sender, receiver, body, created_at, delivered, read,
        media_kind, media_name, media_type, media_size, media_duration, expires_at, group_id,
@@ -1188,7 +1195,7 @@ app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
          media_kind, media_name, media_type, media_size, media_data, media_duration, client_key, group_id,
          reply_to, reply_body, reply_sender, reply_media_kind, view_once)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-      req.phone, targetGroup ? '' : to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration, clientKey || null, targetGroup ? groupId : null,
+      req.phone, targetGroup ? '' : to, bodyText, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration, clientKey || null, targetGroup ? groupId : null,
       reply ? reply.reply_to : null, reply ? reply.reply_body : '', reply ? reply.reply_sender : '', reply ? reply.reply_media_kind : '', viewOnce);
   } catch (e) {
     // Two identical uploads raced each other and the unique index let
