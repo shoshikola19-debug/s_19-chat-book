@@ -8,14 +8,13 @@
 // outbox and send themselves when the network returns.
 
 const $ = (id) => document.getElementById(id);
-const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
-const bn = (s) => String(s).replace(/[0-9]/g, (d) => BN_DIGITS[+d]);
+const bn = (s) => String(s);
 const bytesOf = (s) => new TextEncoder().encode(s).length;
 const fmtTime = (ts) => {
   const d = new Date(ts);
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 };
-const fmtDate = (ts) => new Date(ts).toLocaleDateString('bn-BD', { day: 'numeric', month: 'short' });
+const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
 
 function toast(msg) {
   const t = $('toast');
@@ -76,8 +75,8 @@ function renderMeter() {
   const vcallBytes = (u.videoSec || 0) * VCALL_BYTES_PER_SEC;
   $('meter-total').textContent = bn((total / 1e6).toFixed(2)) + ' MB';
   $('meter-msg').textContent = bn(Math.round(u.msg / 1024)) + ' KB';
-  $('meter-call').textContent = bn(Math.round(callBytes / 1024)) + ' KB (' + bn(Math.floor(u.callSec / 60)) + ' মিনিট)';
-  $('meter-vcall').textContent = bn(Math.round(vcallBytes / 1024)) + ' KB (' + bn(Math.floor((u.videoSec || 0) / 60)) + ' মিনিট)';
+  $('meter-call').textContent = bn(Math.round(callBytes / 1024)) + ' KB (' + bn(Math.floor(u.callSec / 60)) + ' min)';
+  $('meter-vcall').textContent = bn(Math.round(vcallBytes / 1024)) + ' KB (' + bn(Math.floor((u.videoSec || 0) / 60)) + ' min)';
   $('meter-fill').style.width = Math.min(100, (total / 10e6) * 100) + '%';
 }
 
@@ -156,15 +155,15 @@ $('inbox-bg-input').addEventListener('change', async (e) => {
   try {
     const url = await downscaleImageFile(file);
     try { localStorage.setItem('s19_inbox_bg', url); }
-    catch { toast('ছবিটা বড় হয়ে গেছে — ছোট ছবি বেছে নাও'); return; }
+    catch { toast('That photo is too big — choose a smaller one'); return; }
     applyTheme();
-    toast('ইনবক্সের ছবি বসানো হয়েছে');
-  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+    toast('Inbox photo set');
+  } catch { toast("Couldn't read that photo — choose another one"); }
 });
 $('btn-inbox-bg-remove').addEventListener('click', () => {
   try { localStorage.removeItem('s19_inbox_bg'); } catch {}
   applyTheme();
-  toast('ইনবক্সের ছবি সরানো হয়েছে');
+  toast('Inbox photo removed');
 });
 
 // ---- media storage (Tools tab) ------------------------------------------------
@@ -176,7 +175,7 @@ async function loadStorage() {
     $('storage-used').textContent = bytes >= 1024 * 1024
       ? bn((bytes / (1024 * 1024)).toFixed(1)) + ' MB'
       : bn(Math.round(bytes / 1024)) + ' KB';
-    $('storage-count').textContent = bn(r.mediaCount || 0) + 'টি';
+    $('storage-count').textContent = bn(r.mediaCount || 0) ;
     $('storage-fill').style.width = Math.min(100, (bytes / (r.limitBytes || 1073741824)) * 100) + '%';
   } catch { /* offline — keep the last numbers */ }
 }
@@ -223,7 +222,7 @@ function setLoginMethod(m) {
   $('btn-method-email').classList.toggle('active', m === 'email');
   $('phone-form').classList.toggle('hidden', m !== 'phone');
   $('email-form').classList.toggle('hidden', m !== 'email');
-  $('login-title').textContent = m === 'phone' ? 'ফোন নম্বর দাও' : 'Gmail ঠিকানা দাও';
+  $('login-title').textContent = m === 'phone' ? 'Enter your phone number' : 'Enter your Gmail address';
   $('phone-error').classList.add('hidden');
 }
 $('btn-method-phone').addEventListener('click', () => setLoginMethod('phone'));
@@ -245,7 +244,7 @@ async function requestCode() {
   const raw = $('phone-input').value.replace(/\D/g, '');
   const dial = currentDial();
   if (raw.length < 9 || raw.length > 11) {
-    $('phone-error').textContent = 'সঠিক নম্বরটা লেখো';
+    $('phone-error').textContent = 'Type the correct number';
     $('phone-error').classList.remove('hidden');
     return;
   }
@@ -255,13 +254,13 @@ async function requestCode() {
     loginDial = dial;
     loginPhone = (dial.replace(/\D/g, '') + raw.replace(/^0/, ''));
     $('code-phone-label').textContent = dial + ' ' + raw;
-    $('btn-change-number').textContent = 'নম্বর বদলাও';
+    $('btn-change-number').textContent = 'Change number';
     if (r.testCode) {
       $('test-code').textContent = r.testCode;
       $('test-code-box').classList.remove('hidden');
     } else {
       $('test-code-box').classList.add('hidden');
-      toast('SMS-এ কোড পাঠানো হয়েছে');
+      toast('Code sent by SMS');
     }
     $('code-error').classList.add('hidden');
     $('code-input').value = '';
@@ -269,17 +268,17 @@ async function requestCode() {
     $('code-input').focus();
   } catch (e) {
     $('phone-error').textContent = e.message === 'too_many_codes'
-      ? 'অনেকবার কোড চাওয়া হয়েছে — একটু পরে আবার চেষ্টা করো'
+      ? 'Too many code requests — try again in a bit'
       : e.message === 'blocked'
-      ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
-      : 'কোড পাঠানো যায়নি — নেট দেখে আবার চেষ্টা করো';
+      ? 'This account has been blocked — contact the admin'
+      : "Couldn't send the code — check your connection and try again";
     $('phone-error').classList.remove('hidden');
   }
 }
 async function requestEmailCode() {
   const email = $('email-input').value.trim().toLowerCase();
   if (!isEmailText(email)) {
-    $('phone-error').textContent = 'সঠিক Gmail ঠিকানাটা লেখো';
+    $('phone-error').textContent = 'Type the correct Gmail address';
     $('phone-error').classList.remove('hidden');
     return;
   }
@@ -288,13 +287,13 @@ async function requestEmailCode() {
     const r = await api('/api/request-code', { method: 'POST', body: JSON.stringify({ email }) });
     loginEmail = email;
     $('code-phone-label').textContent = email;
-    $('btn-change-number').textContent = 'Gmail বদলাও';
+    $('btn-change-number').textContent = 'Change Gmail';
     if (r.testCode) {
       $('test-code').textContent = r.testCode;
       $('test-code-box').classList.remove('hidden');
     } else {
       $('test-code-box').classList.add('hidden');
-      toast('Gmail-এ কোড পাঠানো হয়েছে');
+      toast('Code sent to Gmail');
     }
     $('code-error').classList.add('hidden');
     $('code-input').value = '';
@@ -302,10 +301,10 @@ async function requestEmailCode() {
     $('code-input').focus();
   } catch (e) {
     $('phone-error').textContent = e.message === 'too_many_codes'
-      ? 'অনেকবার কোড চাওয়া হয়েছে — একটু পরে আবার চেষ্টা করো'
+      ? 'Too many code requests — try again in a bit'
       : e.message === 'blocked'
-      ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
-      : 'কোড পাঠানো যায়নি — নেট দেখে আবার চেষ্টা করো';
+      ? 'This account has been blocked — contact the admin'
+      : "Couldn't send the code — check your connection and try again";
     $('phone-error').classList.remove('hidden');
   }
 }
@@ -317,15 +316,15 @@ $('btn-resend-code').addEventListener('click', async () => {
     const body = loginMethod === 'email' ? { email: loginEmail } : { phone: loginPhone };
     const r = await api('/api/request-code', { method: 'POST', body: JSON.stringify(body) });
     if (r.testCode) { $('test-code').textContent = r.testCode; $('test-code-box').classList.remove('hidden'); }
-    toast('কোড আবার পাঠানো হয়েছে');
-  } catch { toast('কোড পাঠানো যায়নি'); }
+    toast('Code sent again');
+  } catch { toast("Couldn't send the code"); }
 });
 $('btn-change-number').addEventListener('click', () => showScreen('screen-phone'));
 
 async function verifyCode() {
   const code = $('code-input').value.replace(/\D/g, '');
   if (code.length !== 6) {
-    $('code-error').textContent = '৬ সংখ্যার কোডটা লেখো';
+    $('code-error').textContent = 'Type the 6-digit code';
     $('code-error').classList.remove('hidden');
     return;
   }
@@ -343,11 +342,11 @@ async function verifyCode() {
     }
   } catch (e) {
     $('code-error').textContent =
-      e.message === 'wrong_code' ? 'কোডটা ভুল — আবার দেখে লেখো'
-      : e.message === 'code_expired' ? 'কোডের মেয়াদ শেষ — নতুন কোড নাও'
-      : e.message === 'too_many_attempts' ? 'অনেকবার ভুল হয়েছে — নতুন কোড নাও'
-      : e.message === 'blocked' ? 'এই অ্যাকাউন্টটি বন্ধ করা হয়েছে — অ্যাডমিনের সাথে যোগাযোগ করো'
-      : 'যাচাই করা যায়নি — নেট দেখে আবার চেষ্টা করো';
+      e.message === 'wrong_code' ? 'Wrong code — check and type it again'
+      : e.message === 'code_expired' ? 'Code expired — get a new code'
+      : e.message === 'too_many_attempts' ? 'Too many wrong attempts — get a new code'
+      : e.message === 'blocked' ? 'This account has been blocked — contact the admin'
+      : "Couldn't verify — check your connection and try again";
     $('code-error').classList.remove('hidden');
   }
 }
@@ -357,7 +356,7 @@ $('code-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') veri
 async function saveName() {
   const name = $('name-input').value.trim();
   if (!name) {
-    $('name-error').textContent = 'নামটা লেখো';
+    $('name-error').textContent = 'Type your name';
     $('name-error').classList.remove('hidden');
     return;
   }
@@ -367,7 +366,7 @@ async function saveName() {
     session.name = r.name;
     saveSession(session);
     enterApp();
-  } catch { toast('নাম সেভ হয়নি — আবার চেষ্টা করো'); }
+  } catch { toast("Name didn't save — try again"); }
 }
 $('btn-save-name').addEventListener('click', saveName);
 $('name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveName(); });
@@ -380,7 +379,7 @@ let chatSearch = '';
 let channelSearch = '';
 
 function enterApp() {
-  $('tools-name').textContent = session.name || 'আমার নাম';
+  $('tools-name').textContent = session.name || 'My name';
   $('tools-phone').textContent = displayId(session.phone);
   showScreen('screen-app');
   switchTab('chats');
@@ -433,7 +432,7 @@ function renderInbox() {
   list.innerHTML = '';
   const rows = conversations.filter((c) => !q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q));
   if (!rows.length) {
-    list.innerHTML = '<div class="empty-note">ইনবক্স খালি।<br>সবুজ + বোতামে বন্ধুর নম্বর বা Gmail যোগ করে মেসেজ শুরু করো।</div>';
+    list.innerHTML = '<div class="empty-note">Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.</div>';
     return;
   }
   for (const c of rows) {
@@ -486,7 +485,7 @@ $('btn-confirm-add').addEventListener('click', async () => {
   if (addMethod === 'email') {
     const email = $('add-email-input').value.trim().toLowerCase();
     if (!isEmailText(email)) {
-      $('add-contact-error').textContent = 'সঠিক Gmail ঠিকানাটা লেখো';
+      $('add-contact-error').textContent = 'Type the correct Gmail address';
       $('add-contact-error').classList.remove('hidden');
       return;
     }
@@ -495,7 +494,7 @@ $('btn-confirm-add').addEventListener('click', async () => {
     const raw = $('add-phone-input').value.replace(/\D/g, '');
     const dial = $('add-country-select').value;
     if (raw.length < 9 || raw.length > 11) {
-      $('add-contact-error').textContent = 'সঠিক নম্বরটা লেখো';
+      $('add-contact-error').textContent = 'Type the correct number';
       $('add-contact-error').classList.remove('hidden');
       return;
     }
@@ -507,7 +506,7 @@ $('btn-confirm-add').addEventListener('click', async () => {
     await loadInbox();
     openChat(r.contact.phone, r.contact.name);
   } catch (e) {
-    $('add-contact-error').textContent = e.message === 'self_contact' ? 'নিজেকে যোগ করা যায় না' : 'যোগ করা যায়নি — আবার চেষ্টা করো';
+    $('add-contact-error').textContent = e.message === 'self_contact' ? "You can't add yourself" : "Couldn't add — try again";
     $('add-contact-error').classList.remove('hidden');
   }
 });
@@ -516,7 +515,7 @@ $('btn-confirm-add').addEventListener('click', async () => {
 // ---- per-chat settings (⋮ menu) ----------------------------------------------
 let chatSettings = null; // this chat's settings (mute / disappearing / theme / block)
 function disappearLabel(secs) {
-  return secs === 86400 ? '২৪ ঘণ্টা' : secs === 604800 ? '৭ দিন' : secs === 7776000 ? '৯০ দিন' : 'বন্ধ';
+  return secs === 86400 ? '24 hours' : secs === 604800 ? '7 days' : secs === 7776000 ? '90 days' : 'Off';
 }
 function openChat(phone, name) {
   activeChat = phone;
@@ -563,8 +562,8 @@ function applyChatTheme() {
 }
 function updateChatMenuLabels() {
   if (!chatSettings) return;
-  $('menu-mute').textContent = chatSettings.muted ? '🔔 নোটিফিকেশন চালু' : '🔇 নোটিফিকেশন বন্ধ';
-  $('menu-block').textContent = chatSettings.blockedByMe ? '✅ আনব্লক করুন' : '🚫 ব্লক করুন';
+  $('menu-mute').textContent = chatSettings.muted ? '🔔 Unmute notifications' : '🔇 Mute notifications';
+  $('menu-block').textContent = chatSettings.blockedByMe ? '✅ Unblock' : '🚫 Block';
 }
 function updateBlockedNote() {
   const note = $('chat-blocked-note');
@@ -572,11 +571,11 @@ function updateBlockedNote() {
   if (!chatSettings) {
     note.classList.add('hidden');
   } else if (chatSettings.blockedByMe) {
-    note.textContent = 'তুমি এই বন্ধুকে ব্লক করেছো — আনব্লক না করা পর্যন্ত মেসেজ বা কল যাবে না।';
+    note.textContent = "You've blocked this friend — no messages or calls until you unblock them.";
     note.classList.remove('hidden');
     disabled = true;
   } else if (chatSettings.blockedByPeer) {
-    note.textContent = 'এই বন্ধু তোমাকে ব্লক করেছে — তুমি আর মেসেজ বা কল পাঠাতে পারবে না।';
+    note.textContent = "This friend has blocked you — you can't send messages or calls anymore.";
     note.classList.remove('hidden');
     disabled = true;
   } else {
@@ -615,12 +614,12 @@ async function saveChatSettings(patch, doneMsg) {
     updateBlockedNote();
     if (doneMsg) toast(doneMsg);
     loadInbox();
-  } catch { toast('বদলানো যায়নি — নেট দেখে আবার চেষ্টা করো'); }
+  } catch { toast("Couldn't change it — check your connection and try again"); }
 }
 $('menu-mute').addEventListener('click', () => {
   $('chat-menu').classList.add('hidden');
   const muted = !(chatSettings && chatSettings.muted);
-  saveChatSettings({ muted }, muted ? 'এই চ্যাটের নোটিফিকেশন বন্ধ করা হয়েছে' : 'এই চ্যাটের নোটিফিকেশন চালু করা হয়েছে');
+  saveChatSettings({ muted }, muted ? 'Notifications muted for this chat' : 'Notifications turned on for this chat');
 });
 $('menu-disappearing').addEventListener('click', () => {
   if (!activeChat) return;
@@ -637,10 +636,10 @@ document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
     const secs = Number(b.dataset.disappearing);
     $('disappearing-dialog').classList.add('hidden');
     saveChatSettings({ disappearing: secs },
-      secs === 0 ? 'গায়েব মেসেজ বন্ধ করা হয়েছে' : 'গায়েব মেসেজ চালু — ' + disappearLabel(secs) + ' পর মেসেজ মুছে যাবে');
+      secs === 0 ? 'Disappearing messages turned off' : 'Disappearing messages on — messages will delete after ' + disappearLabel(secs));
   });
 });
-// Per-chat theme: pick first, PREVIEW it, then apply with "বসাও".
+// Per-chat theme: pick first, PREVIEW it, then apply with "Done".
 // Nothing changes in the real chat until Apply — so themes and photos
 // can be compared before committing. Cancel discards the preview.
 let pendingChatTheme = '';
@@ -691,7 +690,7 @@ $('chat-bg-input').addEventListener('change', async (e) => {
     pendingChatPhoto = await downscaleImageFile(file);
     pendingChatTheme = '';
     updateThemePreview();
-  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+  } catch { toast("Couldn't read that photo — choose another one"); }
 });
 $('btn-chat-bg-remove').addEventListener('click', () => {
   pendingChatPhoto = '';
@@ -701,15 +700,15 @@ $('btn-chat-theme-apply').addEventListener('click', () => {
   if (!activeChat) return;
   if (pendingChatPhoto) {
     try { localStorage.setItem(chatPhotoKey(activeChat), pendingChatPhoto); }
-    catch { toast('ছবিটা বড় হয়ে গেছে — ছোট ছবি বেছে নাও'); return; }
+    catch { toast('That photo is too big — choose a smaller one'); return; }
     $('chat-theme-dialog').classList.add('hidden');
     applyChatTheme();
-    saveChatSettings({ chatTheme: '' }, 'চ্যাটের ছবি বসানো হয়েছে');
+    saveChatSettings({ chatTheme: '' }, 'Chat photo set');
   } else {
     try { localStorage.removeItem(chatPhotoKey(activeChat)); } catch {}
     $('chat-theme-dialog').classList.add('hidden');
     applyChatTheme();
-    saveChatSettings({ chatTheme: pendingChatTheme }, 'চ্যাট থিম বদলে গেছে');
+    saveChatSettings({ chatTheme: pendingChatTheme }, 'Chat theme changed');
   }
 });
 
@@ -731,8 +730,8 @@ async function loadMediaUrl(id) {
   return url;
 }
 function updateProfileRows() {
-  $('profile-mute-state').textContent = chatSettings && chatSettings.muted ? 'বন্ধ' : 'চালু';
-  $('profile-disappearing-state').textContent = chatSettings && chatSettings.disappearing ? disappearLabel(chatSettings.disappearing) : 'বন্ধ';
+  $('profile-mute-state').textContent = chatSettings && chatSettings.muted ? 'Off' : 'On';
+  $('profile-disappearing-state').textContent = chatSettings && chatSettings.disappearing ? disappearLabel(chatSettings.disappearing) : 'Off';
 }
 async function openProfile() {
   if (!activeChat) return;
@@ -752,15 +751,15 @@ async function openProfile() {
     profileMedia = r.media || [];
     $('profile-media-count').textContent = bn(String(profileMedia.length));
     if (r.peer && r.peer.created_at) {
-      $('profile-joined').textContent = 'যোগ দিয়েছে: ' + new Date(r.peer.created_at).toLocaleDateString('bn-BD');
+      $('profile-joined').textContent = 'Joined: ' + new Date(r.peer.created_at).toLocaleDateString('en-US');
     }
-  } catch { $('profile-media-count').textContent = '০'; }
+  } catch { $('profile-media-count').textContent = '0'; }
 }
 async function renderProfileMedia() {
   const grid = $('profile-media-grid');
   grid.innerHTML = '';
   if (!profileMedia.length) {
-    grid.innerHTML = '<div class="empty-note">এই চ্যাটে এখনো কোনো ছবি, ভিডিও বা ফাইল নেই।</div>';
+    grid.innerHTML = '<div class="empty-note">No photos, videos or files in this chat yet.</div>';
     return;
   }
   for (const m of profileMedia) {
@@ -769,25 +768,25 @@ async function renderProfileMedia() {
     if (m.media_kind === 'image') {
       tile.innerHTML = '<div class="media-loading">…</div>';
       loadMediaUrl(m.id).then((url) => { if (url) tile.innerHTML = '<img src="' + url + '" alt="">'; })
-        .catch(() => { tile.innerHTML = '<div class="media-loading">লোড হয়নি</div>'; });
+        .catch(() => { tile.innerHTML = '<div class="media-loading">Didn\'t load</div>'; });
       tile.addEventListener('click', async () => {
         const url = await loadMediaUrl(m.id);
         if (url) openMediaViewer(url, 'image');
       });
     } else if (m.media_kind === 'video') {
-      tile.innerHTML = '<div class="profile-media-kind">🎥</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'ভিডিও') + '</div>';
+      tile.innerHTML = '<div class="profile-media-kind">🎥</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'Video') + '</div>';
       tile.addEventListener('click', async () => {
         const url = await loadMediaUrl(m.id);
         if (url) openMediaViewer(url, 'video');
       });
     } else if (m.media_kind === 'voice') {
-      tile.innerHTML = '<div class="profile-media-kind">🎤</div><div class="profile-media-name">ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div>';
+      tile.innerHTML = '<div class="profile-media-kind">🎤</div><div class="profile-media-name">Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div>';
       tile.addEventListener('click', async () => {
         const url = await loadMediaUrl(m.id);
         if (url) new Audio(url).play().catch(() => {});
       });
     } else {
-      tile.innerHTML = '<div class="profile-media-kind">📄</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</div>';
+      tile.innerHTML = '<div class="profile-media-kind">📄</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'File') + '</div>';
       tile.addEventListener('click', async () => {
         const url = await loadMediaUrl(m.id);
         if (url) { const a = document.createElement('a'); a.href = url; a.download = m.media_name || 'file'; a.click(); }
@@ -825,7 +824,7 @@ $('profile-mute-row').addEventListener('click', () => {
   if (!activeChat) return;
   const nowMuted = chatSettings && chatSettings.muted;
   saveChatSettings({ muted: nowMuted ? 0 : 1 },
-    nowMuted ? 'নোটিফিকেশন চালু করা হয়েছে' : 'নোটিফিকেশন বন্ধ করা হয়েছে')
+    nowMuted ? 'Notifications turned on' : 'Notifications muted')
     .then(updateProfileRows);
 });
 $('profile-disappearing-row').addEventListener('click', () => {
@@ -854,28 +853,28 @@ function applyChatSearch(q) {
     el.style.display = hit ? '' : 'none';
     if (hit && chatSearchQuery) n++;
   });
-  $('chat-search-count').textContent = chatSearchQuery ? bn(String(n)) + ' টি মিলেছে' : '';
+  $('chat-search-count').textContent = chatSearchQuery ? bn(String(n)) + ' found' : '';
 }
 $('chat-search-input').addEventListener('input', (e) => applyChatSearch(e.target.value));
 $('btn-close-search').addEventListener('click', closeChatSearch);
 $('menu-clear').addEventListener('click', async () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
-  if (!confirm('এই চ্যাটের সব মেসেজ তোমার ফোন থেকে মুছে যাবে। বন্ধুর ফোনে থাকবে। মুছে দেবে?')) return;
+  if (!confirm("All messages in this chat will be deleted from your phone. They will stay on your friend's phone. Delete them?")) return;
   try {
     await api('/api/chat-settings/clear', { method: 'POST', body: JSON.stringify({ with: activeChat }) });
     chatAfterId = 0;
     $('chat-messages').innerHTML = '';
-    toast('চ্যাট মোছা হয়েছে');
+    toast('Chat cleared');
     loadInbox();
-  } catch { toast('মোছা যায়নি — নেট দেখে আবার চেষ্টা করো'); }
+  } catch { toast("Couldn't clear — check your connection and try again"); }
 });
 $('menu-block').addEventListener('click', () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
   const blocking = !(chatSettings && chatSettings.blockedByMe);
-  if (blocking && !confirm('এই বন্ধুকে ব্লক করলে সে তোমাকে মেসেজ বা কল করতে পারবে না, তুমিও পারবে না। ব্লক করবে?')) return;
-  saveChatSettings({ blocked: blocking }, blocking ? 'ব্লক করা হয়েছে' : 'আনব্লক করা হয়েছে');
+  if (blocking && !confirm("If you block this friend, they won't be able to message or call you, and neither will you. Block them?")) return;
+  saveChatSettings({ blocked: blocking }, blocking ? 'Blocked' : 'Unblocked');
 });
 
 async function fetchChatMessages() {
@@ -951,23 +950,23 @@ function mediaHtml(m) {
     let preview = '';
     if ((kind === 'image' || kind === 'video') && m.localPreviewUrl) {
       preview = kind === 'image'
-        ? '<img src="' + m.localPreviewUrl + '" alt="ছবি">'
+        ? '<img src="' + m.localPreviewUrl + '" alt="Photo">'
         : '<video src="' + m.localPreviewUrl + '" muted playsinline></video>';
     } else if (kind === 'voice') {
-      preview = '<div>🎤 ভয়েস • ' + fmtCallTime(m.duration || 0) + '</div>';
+      preview = '<div>🎤 Voice • ' + fmtCallTime(m.duration || 0) + '</div>';
     } else {
-      preview = '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></div>';
+      preview = '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></div>';
     }
     return wrap + preview +
       '<div class="media-progress"><div style="width:' + (m.progress || 0) + '%"></div></div>' +
-      '<div class="media-progress-label">আপলোড হচ্ছে… ' + bn(m.progress || 0) + '%</div>' +
-      '<span class="media-retry hidden">আবার চেষ্টা করো</span></div>';
+      '<div class="media-progress-label">Uploading… ' + bn(m.progress || 0) + '%</div>' +
+      '<span class="media-retry hidden">Try again</span></div>';
   }
   const size = m.media_size ? '<div class="media-size">' + fmtBytes(m.media_size) + '</div>' : '';
-  if (kind === 'image') return wrap + '<div class="media-loading">📷 ছবি লোড হচ্ছে…</div>' + size + '</div>';
-  if (kind === 'video') return wrap + '<div class="media-loading">🎥 ভিডিও লোড হচ্ছে…</div>' + size + '</div>';
-  if (kind === 'voice') return wrap + '<div>🎤 ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + ' লোড হচ্ছে…</div>' + size + '</div>';
-  return wrap + '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></div>' + size + '<div class="media-loading">লোড হচ্ছে…</div></div>';
+  if (kind === 'image') return wrap + '<div class="media-loading">📷 Photo loading…</div>' + size + '</div>';
+  if (kind === 'video') return wrap + '<div class="media-loading">🎥 Video loading…</div>' + size + '</div>';
+  if (kind === 'voice') return wrap + '<div>🎤 Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + ' loading…</div>' + size + '</div>';
+  return wrap + '<div class="media-file">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></div>' + size + '<div class="media-loading">Loading…</div></div>';
 }
 
 // Pulls one message's media bytes (once — then cached) and renders the
@@ -986,17 +985,17 @@ async function loadMediaInto(div, m) {
     }
     const kind = m.media_kind;
     if (kind === 'image') {
-      wrap.innerHTML = '<img src="' + url + '" alt="ছবি">';
+      wrap.innerHTML = '<img src="' + url + '" alt="Photo">';
       wrap.querySelector('img').addEventListener('click', () => openMediaViewer(url));
     } else if (kind === 'video') {
       wrap.innerHTML = '<video src="' + url + '" controls preload="metadata" playsinline></video>';
     } else if (kind === 'voice') {
-      wrap.innerHTML = '<div>🎤 ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div><audio src="' + url + '" controls preload="metadata"></audio>';
+      wrap.innerHTML = '<div>🎤 Voice' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div><audio src="' + url + '" controls preload="metadata"></audio>';
     } else {
-      wrap.innerHTML = '<a class="media-file" href="' + url + '" download="' + escapeHtml(m.media_name || 'file') + '">📄 <span class="media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</span></a><div class="media-size">' + fmtBytes(m.media_size || 0) + ' • চাপ দিলে ডাউনলোড হবে</div>';
+      wrap.innerHTML = '<a class="media-file" href="' + url + '" download="' + escapeHtml(m.media_name || 'file') + '">📄 <span class="media-name">' + escapeHtml(m.media_name || 'File') + '</span></a><div class="media-size">' + fmtBytes(m.media_size || 0) + ' • Tap to download</div>';
     }
   } catch {
-    wrap.innerHTML = '<div class="media-loading">লোড হয়নি — <span class="media-retry">আবার চেষ্টা করো</span></div>';
+    wrap.innerHTML = '<div class="media-loading">Didn\'t load — <span class="media-retry">Try again</span></div>';
     wrap.querySelector('.media-retry').addEventListener('click', () => loadMediaInto(div, m));
   }
 }
@@ -1053,14 +1052,14 @@ async function sendMessage() {
     // A block is final — do NOT park the message in the outbox.
     if (e.message === 'you_blocked' || e.message === 'blocked_by_peer') {
       document.querySelector('[data-id="tmp-' + tempId + '"]')?.remove();
-      toast(e.message === 'you_blocked' ? 'তুমি এই বন্ধুকে ব্লক করেছো' : 'এই বন্ধু তোমাকে ব্লক করেছে');
+      toast(e.message === 'you_blocked' ? "You've blocked this friend" : 'This friend has blocked you');
       loadChatSettings();
       return;
     }
     const outbox = loadOutbox();
     outbox.push({ to: activeChat, body, tempId, created_at: Date.now() });
     saveOutbox(outbox);
-    toast('নেট নেই — মেসেজ জমা থাকলো, নেট এলেই চলে যাবে');
+    toast("No connection — message saved, it will send when you're back online");
   }
 }
 $('btn-send-msg').addEventListener('click', sendMessage);
@@ -1087,7 +1086,7 @@ async function flushOutbox() {
   saveOutbox(remaining);
   if (remaining.length < outbox.length) loadInbox();
 }
-window.addEventListener('online', () => { toast('নেট ফিরেছে'); flushOutbox(); refreshAll(); });
+window.addEventListener('online', () => { toast("You're back online"); flushOutbox(); refreshAll(); });
 
 // ---- media messages (photo / video / voice note / file) ---------------------
 // Original quality, always: the file bytes are sent exactly as picked —
@@ -1096,7 +1095,7 @@ window.addEventListener('online', () => { toast('নেট ফিরেছে');
 // A file over its cap is rejected with a clear message — never squeezed
 // to fit, and never silently degraded on a slow network.
 const MEDIA_CAPS = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024, voice: 10 * 1024 * 1024, file: 5 * 1024 * 1024 };
-const MEDIA_CAP_LABEL = { image: '১০ MB', video: '৫০ MB', voice: '১০ MB', file: '৫ MB' };
+const MEDIA_CAP_LABEL = { image: '10 MB', video: '50 MB', voice: '10 MB', file: '5 MB' };
 const mediaCache = new Map(); // message id -> data URL (already downloaded)
 const pendingMedia = new Map(); // tempId -> { kind, file, fileName, mimeType, duration }
 
@@ -1107,10 +1106,10 @@ function fmtBytes(n) {
 }
 function dataUrl(mime, b64) { return 'data:' + (mime || 'application/octet-stream') + ';base64,' + b64; }
 function mediaLabel(kind, fileName) {
-  if (kind === 'image') return '📷 ছবি';
-  if (kind === 'video') return '🎥 ভিডিও';
-  if (kind === 'voice') return '🎤 ভয়েস';
-  return '📄 ' + (fileName || 'ফাইল');
+  if (kind === 'image') return '📷 Photo';
+  if (kind === 'video') return '🎥 Video';
+  if (kind === 'voice') return '🎤 Voice';
+  return '📄 ' + (fileName || 'File');
 }
 
 $('btn-attach').addEventListener('click', (e) => {
@@ -1158,7 +1157,7 @@ async function sendMediaFile(kind, file, durationSec) {
   if (!activeChat) return;
   const cap = MEDIA_CAPS[kind];
   if (file.size > cap) {
-    toast('ফাইলটা অনেক বড় — ' + MEDIA_CAP_LABEL[kind] + '-এর বেশি পাঠানো যায় না (ফ্রি স্টোরেজের সীমা)');
+    toast("That file is too big — you can't send more than " + MEDIA_CAP_LABEL[kind] + ' (free storage limit)');
     return;
   }
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
@@ -1183,7 +1182,7 @@ async function uploadPendingMedia(tempId) {
     const bar = el.querySelector('.media-progress > div');
     const lab = el.querySelector('.media-progress-label');
     if (bar) bar.style.width = pct + '%';
-    if (lab) lab.textContent = failed ? 'পাঠানো যায়নি — নিচে চাপ দিয়ে আবার চেষ্টা করো' : 'আপলোড হচ্ছে… ' + bn(pct) + '%';
+    if (lab) lab.textContent = failed ? "Couldn't send — tap below to try again" : 'Uploading… ' + bn(pct) + '%';
     const retry = el.querySelector('.media-retry');
     if (retry) retry.classList.toggle('hidden', !failed);
   };
@@ -1206,16 +1205,16 @@ async function uploadPendingMedia(tempId) {
     if (e.message === 'file_too_big') {
       el?.remove();
       pendingMedia.delete(tempId);
-      toast('ফাইলটা অনেক বড় — ' + MEDIA_CAP_LABEL[p.kind] + '-এর বেশি পাঠানো যায় না');
+      toast("That file is too big — you can't send more than " + MEDIA_CAP_LABEL[p.kind]);
     } else if (e.message === 'you_blocked') {
       el?.remove();
       pendingMedia.delete(tempId);
-      toast('তুমি এই বন্ধুকে ব্লক করেছো');
+      toast("You've blocked this friend");
       loadChatSettings();
     } else if (e.message === 'blocked_by_peer') {
       el?.remove();
       pendingMedia.delete(tempId);
-      toast('এই বন্ধু তোমাকে ব্লক করেছে');
+      toast('This friend has blocked you');
       loadChatSettings();
     } else {
       setProgress(0, true); // keep the bubble with a retry link
@@ -1238,7 +1237,7 @@ $('attach-voice').addEventListener('click', async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   } catch {
-    toast('মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও');
+    toast('Microphone permission needed — tap Allow in the browser');
     return;
   }
   try {
@@ -1265,7 +1264,7 @@ $('attach-voice').addEventListener('click', async () => {
   mediaRecorder.start();
   recStartAt = Date.now();
   $('voice-rec-bar').classList.remove('hidden');
-  $('voice-rec-time').textContent = '০০:০০';
+  $('voice-rec-time').textContent = '00:00';
   recTimerId = setInterval(() => {
     $('voice-rec-time').textContent = fmtCallTime(Math.floor((Date.now() - recStartAt) / 1000));
   }, 500);
@@ -1552,9 +1551,9 @@ function makePc() {
       startCallTimer();
       // The call is really connected now — say so, in case the timer
       // started earlier on the answer signal alone.
-      $('call-status').textContent = callIsVideo ? 'ভিডিও কল চলছে…' : 'কথা হচ্ছে…';
+      $('call-status').textContent = callIsVideo ? 'Video call in progress…' : 'On call…';
     } else if (st === 'failed' && callConnected) {
-      $('call-status').textContent = 'সংযোগ হারিয়ে গেছে — আবার চেষ্টা করো';
+      $('call-status').textContent = 'Connection lost — try again';
     }
   };
   return peer;
@@ -1597,7 +1596,7 @@ function startCallTimer() {
 function showCallOverlay(name, status, incoming, isVideo) {
   $('call-peer-name').textContent = name;
   $('call-status').textContent = status;
-  $('call-timer').textContent = '০০:০০';
+  $('call-timer').textContent = '00:00';
   $('btn-mute').textContent = '🎙️';
   $('btn-mute').classList.remove('muted');
   // Video call: the friend's video fills the screen, my preview sits
@@ -1614,7 +1613,7 @@ function showCallOverlay(name, status, incoming, isVideo) {
   $('btn-cam-toggle').classList.toggle('hidden', !isVideo);
   $('btn-cam-switch').classList.toggle('hidden', !isVideo);
   $('btn-cam-toggle').textContent = '📷';
-  $('btn-cam-toggle').title = 'ক্যামেরা বন্ধ করো';
+  $('btn-cam-toggle').title = 'Turn camera off';
   camOn = true;
   let ans = $('btn-answer');
   if (!ans) {
@@ -1654,7 +1653,7 @@ function logCallHistory(peer, dir, seconds, answered = true) {
 }
 
 async function startCall(peer, name, isVideo) {
-  if (pc) { toast('একটা কল ইতিমধ্যে চলছে'); return; }
+  if (pc) { toast('A call is already in progress'); return; }
   // Video quality FIRST (Bijoy's rule): 720p when the connection
   // allows it, a clean picture — never blurry. MB does not matter.
   // Audio stays sacred even on a weak network: Opus FEC/DTX + top
@@ -1667,8 +1666,8 @@ async function startCall(peer, name, isVideo) {
   try {
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch {
-    toast(isVideo ? 'ক্যামেরা আর মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও, তারপর আবার চেষ্টা করো'
-      : 'মাইক্রোফোনের অনুমতি লাগবে — ব্রাউজারে Allow দাও, তারপর আবার চেষ্টা করো');
+    toast(isVideo ? 'Camera and microphone permission needed — tap Allow in the browser, then try again'
+      : 'Microphone permission needed — tap Allow in the browser, then try again');
     return;
   }
   callPeer = peer;
@@ -1687,7 +1686,7 @@ async function startCall(peer, name, isVideo) {
   // video:true tells the callee this is a VIDEO call, so their incoming
   // screen shows it and opens the video UI when they answer.
   await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type, video: Boolean(isVideo) } }) });
-  showCallOverlay(name || displayId(peer), 'ডাকছে…', false, isVideo);
+  showCallOverlay(name || displayId(peer), 'Ringing…', false, isVideo);
   if (isVideo) $('local-video').srcObject = localStream; // my own preview, small in the corner
   startRinging('soft'); // caller hears a quiet ringback while waiting
   callStartAt = Date.now();
@@ -1701,7 +1700,7 @@ async function answerCall() {
     : { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false };
   try {
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
-  } catch { toast(isVideo ? 'ক্যামেরা আর মাইক্রোফোনের অনুমতি লাগবে' : 'মাইক্রোফোনের অনুমতি লাগবে'); return; }
+  } catch { toast(isVideo ? 'Camera and microphone permission needed' : 'Microphone permission needed'); return; }
   try {
     iceRestarts = 0;
     callDir = 'in';
@@ -1722,7 +1721,7 @@ async function answerCall() {
     await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type, video: isVideo } }) });
     pendingOffer = null;
     stopRinging();
-    showCallOverlay($('call-peer-name').textContent, isVideo ? 'ভিডিও কল চলছে…' : 'কথা হচ্ছে…', false, isVideo);
+    showCallOverlay($('call-peer-name').textContent, isVideo ? 'Video call in progress…' : 'On call…', false, isVideo);
     if (isVideo) $('local-video').srcObject = localStream;
     startCallTimer();
   } catch (e) {
@@ -1736,7 +1735,7 @@ async function answerCall() {
     callStartAt = 0;
     callSeconds = 0;
     callConnected = false;
-    toast('কল ধরা যায়নি — নেট দেখে আবার চেষ্টা করো');
+    toast("Couldn't answer the call — check your connection and try again");
   }
 }
 async function endCall(sendSignal = true) {
@@ -1821,8 +1820,8 @@ $('btn-cam-toggle').addEventListener('click', () => {
   camOn = !camOn;
   vt.enabled = camOn;
   $('btn-cam-toggle').textContent = camOn ? '📷' : '📵';
-  $('btn-cam-toggle').title = camOn ? 'ক্যামেরা বন্ধ করো' : 'ক্যামেরা চালু করো';
-  toast(camOn ? 'ক্যামেরা চালু আছে' : 'ক্যামেরা বন্ধ — শুধু তোমার আওয়াজ যাবে');
+  $('btn-cam-toggle').title = camOn ? 'Turn camera off' : 'Turn camera on';
+  toast(camOn ? 'Camera is on' : 'Camera off — only your voice will go through');
 });
 $('btn-cam-switch').addEventListener('click', async () => {
   if (!localStream || !pc || !callIsVideo) return;
@@ -1840,7 +1839,7 @@ $('btn-cam-switch').addEventListener('click', async () => {
     facingMode = next;
     $('local-video').srcObject = localStream;
   } catch {
-    toast('ক্যামেরা বদলানো যায়নি — অনুমতি দেখে আবার চেষ্টা করো');
+    toast("Couldn't switch the camera — check permission and try again");
   }
 });
 // Signals arriving while a call is already up (answer / ICE / end).
@@ -1855,7 +1854,7 @@ setInterval(async () => {
           pendingOffer = s.payload;
           const name = (conversations.find((c) => c.phone === s.from) || {}).name;
           const isVideo = Boolean(s.payload && s.payload.video);
-          showCallOverlay(name || displayId(s.from), isVideo ? 'ভিডিও কল আসছে…' : 'কল আসছে…', true, isVideo);
+          showCallOverlay(name || displayId(s.from), isVideo ? 'Incoming video call…' : 'Incoming call…', true, isVideo);
           // A muted chat gets no sound — the overlay still shows, so the
           // call can be answered if the user sees it. If the settings
           // fetch fails, ring anyway: better a sound than a missed call.
@@ -1868,7 +1867,7 @@ setInterval(async () => {
       if (s.kind === 'answer') {
         await pc.setRemoteDescription(new RTCSessionDescription(s.payload));
         callStartAt = callStartAt || Date.now();
-        $('call-status').textContent = 'কথা হচ্ছে…';
+        $('call-status').textContent = 'On call…';
         stopRinging();
         startCallTimer();
       } else if (s.kind === 'ice') {
@@ -1886,7 +1885,7 @@ async function loadCallsTab() {
   list.innerHTML = '';
   const peers = conversations.length ? conversations : (await api('/api/contacts').catch(() => ({ contacts: [] }))).contacts || [];
   if (!peers.length) {
-    list.innerHTML = '<div class="empty-note">এখনো কাউকে যোগ করা হয়নি।<br>চ্যাট ট্যাবের + বোতামে নম্বর বা Gmail যোগ করো।</div>';
+    list.innerHTML = '<div class="empty-note">No one added yet.<br>Add a number or Gmail with the + button in the Chats tab.</div>';
   }
   for (const p of peers) {
     const row = document.createElement('div');
@@ -1894,7 +1893,7 @@ async function loadCallsTab() {
     row.innerHTML = '<div class="avatar">' + avatarLetter(p.name, p.phone) + '</div>' +
       '<div class="chat-row-body"><div class="chat-row-name">' + escapeHtml(peerName(p)) + '</div>' +
       '<div class="chat-row-msg">' + displayId(p.phone) + '</div></div>' +
-      '<button class="call-btn" title="কল করো">📞</button>';
+      '<button class="call-btn" title="Call">📞</button>';
     row.querySelector('.call-btn').addEventListener('click', (e) => { e.stopPropagation(); startCall(p.phone, peerName(p)); });
     row.addEventListener('click', () => openChat(p.phone, p.name));
     list.appendChild(row);
@@ -1902,16 +1901,16 @@ async function loadCallsTab() {
   const hist = $('call-history');
   hist.innerHTML = '';
   const h = JSON.parse(localStorage.getItem('s19_call_history') || '[]');
-  if (!h.length) hist.innerHTML = '<div class="empty-note">এখনো কোনো কল হয়নি।</div>';
+  if (!h.length) hist.innerHTML = '<div class="empty-note">No calls yet.</div>';
   for (const item of h) {
     const row = document.createElement('div');
     row.className = 'chat-row';
     // Old entries have no `answered` field — they were only logged when the
     // call lasted > 0 s, so they were answered by definition.
     const answered = item.answered !== undefined ? item.answered : item.seconds > 0;
-    const dirLabel = item.dir === 'out' ? 'বাইরে যাওয়া কল' : 'আসা কল';
+    const dirLabel = item.dir === 'out' ? 'Outgoing call' : 'Incoming call';
     const statusLabel = answered ? fmtCallTime(item.seconds)
-      : (item.dir === 'out' ? 'ধরা হয়নি' : 'মিসড কল');
+      : (item.dir === 'out' ? 'Not answered' : 'Missed call');
     row.innerHTML = '<div class="avatar">📞</div><div class="chat-row-body">' +
       '<div class="chat-row-name">' + displayId(item.peer) + '</div>' +
       '<div class="chat-row-msg">' + dirLabel + ' • ' + statusLabel + '</div></div>' +
@@ -1931,8 +1930,8 @@ async function loadUpdates() {
     const addRow = document.createElement('div');
     addRow.className = 'status-row';
     addRow.innerHTML = '<div class="avatar">+</div><div class="chat-row-body">' +
-      '<div class="chat-row-name">আমার স্ট্যাটাস</div>' +
-      '<div class="chat-row-msg">' + (mine.length ? escapeHtml(mine[0].text) : '২৪ ঘণ্টা থাকবে') + '</div></div>';
+      '<div class="chat-row-name">My status</div>' +
+      '<div class="chat-row-msg">' + (mine.length ? escapeHtml(mine[0].text) : 'Lasts 24 hours') + '</div></div>';
     addRow.addEventListener('click', () => { if (mine.length) showStatus(mine[0]); });
     list.appendChild(addRow);
     for (const s of others) {
@@ -1947,7 +1946,7 @@ async function loadUpdates() {
     if (!others.length) {
       const d = document.createElement('div');
       d.className = 'empty-note';
-      d.textContent = 'বন্ধুদের কোনো স্ট্যাটাস নেই।';
+      d.textContent = 'No status from friends.';
       list.appendChild(d);
     }
   } catch { /* offline */ }
@@ -1964,14 +1963,14 @@ function showStatus(s) {
     del.id = 'btn-delete-status';
     del.className = 'btn-danger';
     del.style.cssText = 'position:absolute;bottom:26px;left:50%;transform:translateX(-50%);width:auto;';
-    del.textContent = 'স্ট্যাটাস মুছো';
+    del.textContent = 'Delete status';
     del.addEventListener('click', async () => {
       try {
         await api('/api/statuses/' + viewingStatus.id, { method: 'DELETE' });
         $('status-viewer').classList.add('hidden');
         loadUpdates();
-        toast('স্ট্যাটাস মোছা হয়েছে');
-      } catch { toast('মোছা যায়নি'); }
+        toast('Status deleted');
+      } catch { toast("Couldn't delete"); }
     });
     $('status-viewer').appendChild(del);
   }
@@ -1986,8 +1985,8 @@ $('btn-post-status').addEventListener('click', async () => {
     await api('/api/statuses', { method: 'POST', body: JSON.stringify({ text }) });
     $('status-input').value = '';
     loadUpdates();
-    toast('স্ট্যাটাস দেওয়া হয়েছে');
-  } catch { toast('স্ট্যাটাস দেওয়া যায়নি'); }
+    toast('Status posted');
+  } catch { toast("Couldn't post the status"); }
 });
 
 // ---- updates: channels ------------------------------------------------------------
@@ -1998,7 +1997,7 @@ async function loadChannels() {
     const list = $('channel-list');
     list.innerHTML = '';
     if (!r.channels.length) {
-      list.innerHTML = '<div class="empty-note">কোনো চ্যানেল নেই।<br>নতুন চ্যানেল বানাও, বা নাম দিয়ে খুঁজো।</div>';
+      list.innerHTML = '<div class="empty-note">No channels.<br>Create a new channel, or search by name.</div>';
       return;
     }
     for (const c of r.channels) {
@@ -2011,12 +2010,12 @@ async function loadChannels() {
           '<div class="chat-row-top"><span class="chat-row-msg">' + escapeHtml(c.lastPost || c.description || '') + '</span>' +
           (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
         '</div>' +
-        (c.followed ? '' : '<button class="btn-primary btn-small">ফলো</button>');
+        (c.followed ? '' : '<button class="btn-primary btn-small">Follow</button>');
       const followBtn = row.querySelector('.btn-primary');
       if (followBtn) {
         followBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          try { await api('/api/channels/' + c.id + '/follow', { method: 'POST' }); loadChannels(); } catch { toast('ফলো করা যায়নি'); }
+          try { await api('/api/channels/' + c.id + '/follow', { method: 'POST' }); loadChannels(); } catch { toast("Couldn't follow"); }
         });
       }
       row.addEventListener('click', () => openChannel(c));
@@ -2036,7 +2035,7 @@ $('btn-confirm-channel').addEventListener('click', async () => {
   const name = $('new-channel-name').value.trim();
   const description = $('new-channel-desc').value.trim();
   if (!name) {
-    $('new-channel-error').textContent = 'চ্যানেলের নাম লেখো';
+    $('new-channel-error').textContent = 'Type the channel name';
     $('new-channel-error').classList.remove('hidden');
     return;
   }
@@ -2046,7 +2045,7 @@ $('btn-confirm-channel').addEventListener('click', async () => {
     loadChannels();
     openChannel(r.channel);
   } catch (e) {
-    $('new-channel-error').textContent = e.message === 'name_taken' ? 'এই নামে চ্যানেল আছে — অন্য নাম দাও' : 'বানানো যায়নি';
+    $('new-channel-error').textContent = e.message === 'name_taken' ? 'A channel with this name already exists — choose another name' : "Couldn't create it";
     $('new-channel-error').classList.remove('hidden');
   }
 });
@@ -2077,7 +2076,7 @@ async function loadChannelPosts() {
       div.innerHTML = '<div>' + escapeHtml(p.text) + '</div><div class="msg-meta">' + fmtDate(p.created_at) + ' ' + fmtTime(p.created_at) + '</div>';
       box.appendChild(div);
     }
-    if (!r.posts.length) box.innerHTML = '<div class="empty-note">এখনো কোনো আপডেট নেই।</div>';
+    if (!r.posts.length) box.innerHTML = '<div class="empty-note">No updates yet.</div>';
     box.scrollTop = box.scrollHeight;
   } catch { /* offline */ }
 }
@@ -2089,7 +2088,7 @@ $('btn-send-post').addEventListener('click', async () => {
     $('channel-post-input').value = '';
     loadChannelPosts();
   } catch (e) {
-    toast(e.message === 'not_owner' ? 'শুধু মালিক পোস্ট করতে পারে' : 'পোস্ট করা যায়নি');
+    toast(e.message === 'not_owner' ? 'Only the owner can post' : "Couldn't post");
   }
 });
 
@@ -2111,13 +2110,13 @@ async function loadAdmin() {
     renderAdminUsers(users.users || []);
     renderAdminChannels(channels.channels || []);
     $('admin-banner-input').value = settings.banner || '';
-  } catch { toast('অ্যাডমিন তথ্য আনা যায়নি'); }
+  } catch { toast("Couldn't load admin info"); }
 }
 function renderAdminUsers(users) {
   const list = $('admin-users');
   list.innerHTML = '';
   if (!users.length) {
-    list.innerHTML = '<div class="empty-note">কোনো ব্যবহারকারী নেই।</div>';
+    list.innerHTML = '<div class="empty-note">No users.</div>';
     return;
   }
   for (const u of users) {
@@ -2127,15 +2126,15 @@ function renderAdminUsers(users) {
       '<div class="chat-row-body">' +
         '<div class="chat-row-name">' + escapeHtml(u.name || displayId(u.phone)) + '</div>' +
         '<div class="chat-row-msg">' + displayId(u.phone) + ' • ' + fmtDate(u.created_at) +
-        (u.blocked ? ' • ⛔ ব্লক করা' : '') + '</div></div>' +
-      '<button class="btn-link" style="color:#D32F2F">' + (u.blocked ? 'আনব্লক করো' : 'ব্লক করো') + '</button>';
+        (u.blocked ? ' • ⛔ Blocked' : '') + '</div></div>' +
+      '<button class="btn-link" style="color:#D32F2F">' + (u.blocked ? 'Unblock' : 'Block') + '</button>';
     row.querySelector('.btn-link').addEventListener('click', async () => {
       try {
         await api('/api/admin/users/block', { method: 'POST', body: JSON.stringify({ phone: u.phone, blocked: !u.blocked }) });
-        toast(u.blocked ? 'আনব্লক করা হয়েছে' : 'ব্লক করা হয়েছে');
+        toast(u.blocked ? 'Unblocked' : 'Blocked');
         loadAdmin();
       } catch (e) {
-        toast(e.message === 'cannot_block_admin' ? 'অ্যাডমিনকে ব্লক করা যায় না' : 'বদলানো যায়নি');
+        toast(e.message === 'cannot_block_admin' ? "You can't block an admin" : "Couldn't change it");
       }
     });
     list.appendChild(row);
@@ -2145,7 +2144,7 @@ function renderAdminChannels(channels) {
   const list = $('admin-channels');
   list.innerHTML = '';
   if (!channels.length) {
-    list.innerHTML = '<div class="empty-note">কোনো চ্যানেল নেই।</div>';
+    list.innerHTML = '<div class="empty-note">No channels.</div>';
     return;
   }
   for (const c of channels) {
@@ -2154,36 +2153,36 @@ function renderAdminChannels(channels) {
     row.innerHTML = '<div class="avatar">📢</div>' +
       '<div class="chat-row-body">' +
         '<div class="chat-row-name">' + escapeHtml(c.name) + '</div>' +
-        '<div class="chat-row-msg">' + escapeHtml(c.owner_phone || '') + ' • ' + bn(c.followers || 0) + ' ফলোয়ার</div></div>' +
-      '<button class="btn-link" style="color:#D32F2F">মুছো</button>';
+        '<div class="chat-row-msg">' + escapeHtml(c.owner_phone || '') + ' • ' + bn(c.followers || 0) + ' followers</div></div>' +
+      '<button class="btn-link" style="color:#D32F2F">Delete</button>';
     row.querySelector('.btn-link').addEventListener('click', async () => {
-      if (!confirm('"' + c.name + '" চ্যানেলটা মুছে দেবে?')) return;
+      if (!confirm('"' + c.name + '" — delete this channel?')) return;
       try {
         await api('/api/admin/channels/' + c.id, { method: 'DELETE' });
-        toast('চ্যানেল মোছা হয়েছে');
+        toast('Channel deleted');
         loadAdmin();
         loadChannels();
-      } catch { toast('মোছা যায়নি'); }
+      } catch { toast("Couldn't delete"); }
     });
     list.appendChild(row);
   }
 }
 $('btn-admin-broadcast').addEventListener('click', async () => {
   const text = $('admin-broadcast-input').value.trim();
-  if (!text) { toast('ঘোষণার লেখাটা লেখো'); return; }
+  if (!text) { toast('Write the announcement text'); return; }
   try {
     const r = await api('/api/admin/broadcast', { method: 'POST', body: JSON.stringify({ text }) });
     $('admin-broadcast-input').value = '';
-    toast('ঘোষণা পাঠানো হয়েছে — ' + bn(r.recipients) + ' জনকে');
+    toast('Announcement sent — to ' + bn(r.recipients) + ' people');
     loadAdmin();
-  } catch { toast('ঘোষণা পাঠানো যায়নি'); }
+  } catch { toast("Couldn't send the announcement"); }
 });
 $('btn-admin-save-banner').addEventListener('click', async () => {
   const banner = $('admin-banner-input').value.trim();
   try {
     await api('/api/admin/settings', { method: 'POST', body: JSON.stringify({ banner }) });
-    toast(banner ? 'ব্যানার সেভ হয়েছে' : 'ব্যানার সরিয়ে দেওয়া হয়েছে');
-  } catch { toast('সেভ হয়নি'); }
+    toast(banner ? 'Banner saved' : 'Banner removed');
+  } catch { toast("Didn't save"); }
 });
 
 // ---- tools ------------------------------------------------------------------------
