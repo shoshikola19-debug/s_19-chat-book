@@ -181,8 +181,62 @@ function normalizePeerOrSystem(raw, dial) {
   return normalizePeer(s, dial);
 }
 
+// ---- per-chat settings (mute / disappearing / theme / block / clear) -----
+// One row per (owner, peer) direction in chat_settings; each side keeps
+// their own choices. A missing row = all defaults (not muted, no
+// disappearing, default theme, not blocked, nothing cleared).
+const DISAPPEAR_OPTIONS = [0, 86400, 604800, 7776000]; // off, 24h, 7d, 90d
+const CHAT_THEMES = ['', 'green', 'blue', 'purple', 'pink', 'dark'];
+async function getChatSettings(owner, peer) {
+  const row = await db.get(
+    'SELECT muted, disappearing, chat_theme, blocked, cleared_at FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?',
+    owner, peer);
+  return {
+    muted: row ? row.muted : 0,
+    disappearing: row ? row.disappearing : 0,
+    chatTheme: row ? (row.chat_theme || '') : '',
+    blocked: row ? row.blocked : 0,
+    clearedAt: row ? row.cleared_at : 0,
+  };
+}
+// Has `receiver` muted this chat (no push, no sound) for `sender`?
+async function isMutedFor(receiver, sender) {
+  return (await getChatSettings(receiver, sender)).muted === 1;
+}
+// Per-user block between two people, from EITHER side's row:
+// byMe = I blocked them, byPeer = they blocked me. This is SEPARATE from
+// the admin-level block (users.blocked) — an admin block locks the whole
+// account, a per-user block only stops these two from reaching each other.
+async function blockState(me, peer) {
+  const mine = await getChatSettings(me, peer);
+  const theirs = await getChatSettings(peer, me);
+  return { byMe: mine.blocked === 1, byPeer: theirs.blocked === 1 };
+}
+// When a message is sent it expires after the SHORTER of the two sides'
+// disappearing settings (0 on a side = that side set nothing). 0 = never.
+async function disappearingExpiresAt(sender, receiver, createdAt) {
+  const s = (await getChatSettings(sender, receiver)).disappearing;
+  const r = (await getChatSettings(receiver, sender)).disappearing;
+  const secs = [s, r].filter((v) => v > 0);
+  if (!secs.length) return 0;
+  return createdAt + Math.min(...secs) * 1000;
+}
+// Push goes out only when the receiver has NOT muted this chat.
+async function pushUnlessMuted(receiver, sender, payload) {
+  if (await isMutedFor(receiver, sender)) return;
+  push.sendPushToUser(db, receiver, payload).catch(() => {});
+}
+
 const app = express();
-app.use(express.json({ limit: '200kb' }));
+// The media upload carries a base64 file (a 50 MB video is ~67 MB of
+// base64), far over the 200 KB cap — so that one route gets its own
+// 70 MB parser, and the small parser below skips that path.
+const jsonSmall = express.json({ limit: '200kb' });
+const jsonMedia = express.json({ limit: '70mb' });
+app.use((req, res, next) => {
+  if (req.path === '/api/messages/media') return next();
+  jsonSmall(req, res, next);
+});
 app.use((req, _res, next) => {
   if (req.path.startsWith('/api/')) console.log(new Date().toISOString(), req.method, req.path);
   next();
@@ -348,21 +402,28 @@ app.get('/api/conversations', ah(auth), ah(async (req, res) => {
   for (const r of await db.all('SELECT DISTINCT receiver AS peer FROM messages WHERE sender = ?', req.phone)) peers.set(r.peer, true);
 
   const out = [];
+  const t = now();
   for (const peer of peers.keys()) {
+    // My Clear-chat marker hides my copy of old messages, and expired
+    // (disappearing) messages never show as the last message or unread.
+    const mine = await getChatSettings(req.phone, peer);
     const last = await db.get(
       `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
-       WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)
+       WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+       AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
        ORDER BY id DESC LIMIT 1`,
-      req.phone, peer, peer, req.phone);
+      req.phone, peer, peer, req.phone, t, mine.clearedAt);
     const unread = (await db.get(
-      'SELECT COUNT(*) AS n FROM messages WHERE sender = ? AND receiver = ? AND read = FALSE',
-      peer, req.phone)).n;
+      `SELECT COUNT(*) AS n FROM messages WHERE sender = ? AND receiver = ? AND read = FALSE
+       AND (expires_at = 0 OR expires_at > ?) AND created_at > ?`,
+      peer, req.phone, t, mine.clearedAt)).n;
     out.push({
       ...(await publicUser(peer)),
       lastMessage: last ? last.body : '',
       lastAt: last ? last.created_at : 0,
       lastId: last ? last.id : 0,
       unread,
+      muted: mine.muted ? 1 : 0,
     });
   }
   out.sort((a, b) => b.lastAt - a.lastAt);
@@ -375,11 +436,21 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   const withPhone = normalizePeerOrSystem(req.query.with || '');
   const afterId = Number(req.query.afterId || 0);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
+  const t = now();
+  const mine = await getChatSettings(req.phone, withPhone);
+  // Hidden for me: messages that expired, and anything at/before my
+  // Clear-chat marker. (The other side's view is untouched.) The media
+  // bytes themselves are NOT in this reply — the client fetches them
+  // on demand from GET /api/media/:id, so a poll stays light even when
+  // the chat holds big original-quality photos and videos.
   const rows = await db.all(
-    `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
+    `SELECT id, sender, receiver, body, created_at, delivered, read,
+       media_kind, media_name, media_type, media_size, media_duration,
+       (media_data IS NOT NULL) AS has_media, expires_at FROM messages
      WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
-       AND id > ? ORDER BY id ASC LIMIT 200`,
-    req.phone, withPhone, withPhone, req.phone, afterId);
+       AND id > ? AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+     ORDER BY id ASC LIMIT 200`,
+    req.phone, withPhone, withPhone, req.phone, afterId, t, mine.clearedAt);
   // Messages from the peer that I just received count as delivered now.
   await db.run(
     'UPDATE messages SET delivered = TRUE WHERE sender = ? AND receiver = ? AND delivered = FALSE',
@@ -389,8 +460,9 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   // update from ✓ to ✓✓ to seen without re-downloading the history.
   const ticks = await db.all(
     `SELECT id, delivered, read FROM messages
-     WHERE sender = ? AND receiver = ? ORDER BY id DESC LIMIT 100`,
-    req.phone, withPhone);
+     WHERE sender = ? AND receiver = ? AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+     ORDER BY id DESC LIMIT 100`,
+    req.phone, withPhone, t, mine.clearedAt);
   return res.json({ ok: true, messages: rows, ticks });
 }));
 
@@ -401,21 +473,28 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
   if (to === req.phone) return res.status(400).json({ ok: false, error: 'self_message' });
+  // Per-user block: either side blocking the other stops new messages.
+  const block = await blockState(req.phone, to);
+  if (block.byMe) return res.status(403).json({ ok: false, error: 'you_blocked' });
+  if (block.byPeer) return res.status(403).json({ ok: false, error: 'blocked_by_peer' });
+  const t = now();
+  const expiresAt = await disappearingExpiresAt(req.phone, to, t);
   const inserted = await db.get(
-    'INSERT INTO messages (sender, receiver, body, created_at) VALUES (?, ?, ?, ?) RETURNING id',
-    req.phone, to, body, now());
+    'INSERT INTO messages (sender, receiver, body, created_at, expires_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    req.phone, to, body, t, expiresAt);
   const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
   // Notify the receiver even if their app is closed (Web Push). The
   // notification never carries the message text — only the sender's name.
   // Fire-and-forget: a push failure must never fail or delay this reply.
+  // Muted chats get no push at all.
   const sender = await publicUser(req.phone);
-  push.sendPushToUser(db, to, {
+  await pushUnlessMuted(to, req.phone, {
     title: sender.name || req.phone,
     body: 'নতুন মেসেজ',
     tag: 'msg-' + req.phone,
     type: 'message',
     peer: req.phone,
-  }).catch(() => {});
+  });
   return res.json({ ok: true, message: row });
 }));
 
@@ -450,6 +529,182 @@ app.get('/api/usage', ah(auth), ah(async (req, res) => {
     bytesSent: sent.b,
     bytesReceived: received.b,
   });
+}));
+
+// ---- per-chat settings: theme / mute / disappearing / block / clear -----
+// WhatsApp-style per-chat menu (⋮ in the chat header). Each side keeps
+// their own row, so muting a chat never mutes it for the other person.
+
+app.get('/api/chat-settings', ah(auth), ah(async (req, res) => {
+  const peer = normalizePeerOrSystem(req.query.with || '');
+  if (!peer || peer === req.phone) return res.status(400).json({ ok: false, error: 'bad_peer' });
+  const mine = await getChatSettings(req.phone, peer);
+  const theirs = await getChatSettings(peer, req.phone);
+  return res.json({
+    ok: true,
+    peer,
+    muted: mine.muted,
+    disappearing: mine.disappearing,
+    chatTheme: mine.chatTheme,
+    blockedByMe: mine.blocked,
+    blockedByPeer: theirs.blocked,
+    clearedAt: mine.clearedAt,
+  });
+}));
+
+app.post('/api/chat-settings', ah(auth), ah(async (req, res) => {
+  const peer = normalizePeerOrSystem(req.body && req.body.with);
+  if (!peer || peer === req.phone || peer === SYSTEM_SENDER) {
+    return res.status(400).json({ ok: false, error: 'bad_peer' });
+  }
+  const body = req.body || {};
+  // Only the fields actually sent are changed; the rest stay as they are.
+  // Booleans go in as JS true/false: pg stores them as BOOLEAN, and
+  // node:sqlite binds them as 1/0 — the same value either way.
+  const patch = {};
+  if (body.muted !== undefined) patch.muted = body.muted ? true : false;
+  if (body.disappearing !== undefined) {
+    const d = Number(body.disappearing);
+    if (!DISAPPEAR_OPTIONS.includes(d)) return res.status(400).json({ ok: false, error: 'bad_disappearing' });
+    patch.disappearing = d;
+  }
+  if (body.chatTheme !== undefined) {
+    const th = String(body.chatTheme || '');
+    if (!CHAT_THEMES.includes(th)) return res.status(400).json({ ok: false, error: 'bad_theme' });
+    patch.chatTheme = th;
+  }
+  if (body.blocked !== undefined) patch.blocked = body.blocked ? true : false;
+  if (!Object.keys(patch).length) return res.status(400).json({ ok: false, error: 'bad_input' });
+  const colName = { muted: 'muted', disappearing: 'disappearing', chatTheme: 'chat_theme', blocked: 'blocked' };
+  const keys = Object.keys(patch);
+  const cols = ['owner_phone', 'peer_phone', ...keys.map((k) => colName[k])];
+  const vals = [req.phone, peer, ...keys.map((k) => patch[k])];
+  await db.run(
+    `INSERT INTO chat_settings (${cols.join(', ')}) VALUES (${vals.map(() => '?').join(', ')})
+     ON CONFLICT(owner_phone, peer_phone) DO UPDATE SET ${keys.map((k) => `${colName[k]} = excluded.${colName[k]}`).join(', ')}`,
+    ...vals);
+  const mine = await getChatSettings(req.phone, peer);
+  const theirs = await getChatSettings(peer, req.phone);
+  return res.json({
+    ok: true,
+    peer,
+    muted: mine.muted,
+    disappearing: mine.disappearing,
+    chatTheme: mine.chatTheme,
+    blockedByMe: mine.blocked,
+    blockedByPeer: theirs.blocked,
+    clearedAt: mine.clearedAt,
+  });
+}));
+
+// Clear chat: hides this conversation's history for ME only (a marker,
+// not a delete — the other side keeps their copy, and new messages after
+// this still appear). Media is hidden with the messages.
+app.post('/api/chat-settings/clear', ah(auth), ah(async (req, res) => {
+  const peer = normalizePeerOrSystem(req.body && req.body.with);
+  if (!peer || peer === req.phone) return res.status(400).json({ ok: false, error: 'bad_peer' });
+  await db.run(
+    `INSERT INTO chat_settings (owner_phone, peer_phone, cleared_at) VALUES (?, ?, ?)
+     ON CONFLICT(owner_phone, peer_phone) DO UPDATE SET cleared_at = excluded.cleared_at`,
+    req.phone, peer, now());
+  return res.json({ ok: true });
+}));
+
+// ---- media messages: photo / video / voice note / file ---------------------
+// Sent at 100% ORIGINAL quality — never resized, never re-encoded, never
+// compressed (Bijoy's rule: quality stays exactly as picked, however much
+// MB it takes). The caps exist only to protect the 1 GB free Neon
+// storage: photo 10 MB, video 50 MB, voice note 10 MB, file 5 MB.
+// Anything over its cap is rejected with file_too_big — never squeezed
+// to fit. Media is stored as base64 in the messages row itself (never
+// on Render's disk — it is ephemeral). The bytes are NOT in the
+// incremental message fetch; the client pulls them on demand from
+// GET /api/media/:id, so polling stays light.
+const MEDIA_CAPS = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024, voice: 10 * 1024 * 1024, file: 5 * 1024 * 1024 };
+const MEDIA_LABELS = { image: '📷 ছবি', video: '🎥 ভিডিও', voice: '🎤 ভয়েস', file: '📄 ফাইল' };
+
+app.post('/api/messages/media', jsonMedia, ah(auth), ah(async (req, res) => {
+  const body = req.body || {};
+  const to = normalizePeerOrSystem(body.to || body.email, body.dial);
+  const kind = String(body.mediaKind || '');
+  const data = typeof body.data === 'string' ? body.data : '';
+  const fileName = String(body.fileName || '').trim().slice(0, 200);
+  const mimeType = String(body.mimeType || '').trim().slice(0, 100);
+  if (!validIdentity(to) || !MEDIA_CAPS[kind] || !data) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  if (to === req.phone) return res.status(400).json({ ok: false, error: 'self_message' });
+  // The real size is the decoded bytes, not what the client claims — a
+  // lying size field cannot sneak a bigger file past the cap.
+  const buf = Buffer.from(data, 'base64');
+  const declared = Number(body.size || 0);
+  if (!buf.length) return res.status(400).json({ ok: false, error: 'bad_data' });
+  if (declared > MEDIA_CAPS[kind] || buf.length > MEDIA_CAPS[kind]) {
+    return res.status(413).json({ ok: false, error: 'file_too_big', cap: MEDIA_CAPS[kind] });
+  }
+  const block = await blockState(req.phone, to);
+  if (block.byMe) return res.status(403).json({ ok: false, error: 'you_blocked' });
+  if (block.byPeer) return res.status(403).json({ ok: false, error: 'blocked_by_peer' });
+  const t = now();
+  const expiresAt = await disappearingExpiresAt(req.phone, to, t);
+  const duration = Math.max(0, Math.floor(Number(body.duration || 0)));
+  const label = kind === 'file' && fileName ? '📄 ' + fileName : MEDIA_LABELS[kind];
+  const inserted = await db.get(
+    `INSERT INTO messages (sender, receiver, body, created_at, expires_at,
+       media_kind, media_name, media_type, media_size, media_data, media_duration)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    req.phone, to, label, t, expiresAt, kind, fileName, mimeType, buf.length, data, duration);
+  // The reply leaves the bytes out — the sender already has them, and
+  // the receiver pulls them on demand from GET /api/media/:id.
+  const row = await db.get(
+    `SELECT id, sender, receiver, body, created_at, delivered, read,
+       media_kind, media_name, media_type, media_size, media_duration, expires_at
+     FROM messages WHERE id = ?`,
+    inserted.id);
+  const sender = await publicUser(req.phone);
+  await pushUnlessMuted(to, req.phone, {
+    title: sender.name || req.phone,
+    body: label,
+    tag: 'msg-' + req.phone,
+    type: 'message',
+    peer: req.phone,
+  });
+  return res.json({ ok: true, message: row });
+}));
+
+// Fetch one message's media bytes (on demand, when the chat renders it).
+// Only the sender or the receiver may fetch it.
+app.get('/api/media/:id', ah(auth), ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const row = await db.get(
+    'SELECT id, sender, receiver, media_kind, media_name, media_type, media_size, media_data, media_duration, expires_at FROM messages WHERE id = ?',
+    id);
+  if (!row || !row.media_data) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (row.sender !== req.phone && row.receiver !== req.phone) {
+    return res.status(403).json({ ok: false, error: 'not_allowed' });
+  }
+  if (row.expires_at && row.expires_at <= now()) return res.status(404).json({ ok: false, error: 'expired' });
+  return res.json({
+    ok: true,
+    id: row.id,
+    mediaKind: row.media_kind,
+    fileName: row.media_name,
+    mimeType: row.media_type,
+    size: row.media_size,
+    duration: row.media_duration,
+    data: row.media_data,
+  });
+}));
+
+// How much of the 1 GB free storage this user's media uses (sent +
+// received). LENGTH(media_data) counts base64 characters — an estimate,
+// labelled as such in the app. Nothing is ever auto-deleted to save space.
+app.get('/api/storage', ah(auth), ah(async (req, res) => {
+  const r = await db.get(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(media_data)), 0) AS b FROM messages
+     WHERE media_data IS NOT NULL AND (sender = ? OR receiver = ?)`,
+    req.phone, req.phone);
+  return res.json({ ok: true, mediaCount: r.n, mediaBytes: r.b, limitBytes: 1073741824 });
 }));
 
 // ---- statuses (24 hours) ----------------------------------------------------
@@ -624,21 +879,30 @@ app.post('/api/calls/signal', ah(auth), ah(async (req, res) => {
   if (!to || !['offer', 'answer', 'ice', 'end'].includes(kind)) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
+  // Per-user block: a blocked contact cannot start a call with me, and
+  // I cannot call someone I blocked. (Only the offer is gated — an
+  // in-progress call's answer/ice/end signals must still flow.)
+  if (kind === 'offer') {
+    const block = await blockState(req.phone, to);
+    if (block.byMe) return res.status(403).json({ ok: false, error: 'you_blocked' });
+    if (block.byPeer) return res.status(403).json({ ok: false, error: 'blocked_by_peer' });
+  }
   await db.run(
     'INSERT INTO call_signals (from_phone, to_phone, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)',
     req.phone, to, kind, JSON.stringify(payload), now());
   // A call offer also pushes the callee's phone, so the call arrives even
-  // when their app is closed. Fire-and-forget, like messages.
+  // when their app is closed. Fire-and-forget, like messages — and a
+  // muted chat gets no push at all.
   if (kind === 'offer') {
     const caller = await publicUser(req.phone);
-    push.sendPushToUser(db, to, {
+    await pushUnlessMuted(to, req.phone, {
       title: caller.name || req.phone,
       body: 'কল আসছে…',
       tag: 'call-' + req.phone,
       type: 'call',
       peer: req.phone,
       requireInteraction: true,
-    }).catch(() => {});
+    });
   }
   return res.json({ ok: true });
 }));
@@ -813,9 +1077,14 @@ app.get('*', (req, res, next) => {
 });
 
 // Errors from async handlers end up here as JSON, not an HTML error page.
+// A body that is too big (media over the 70 MB parser cap) is reported
+// as file_too_big, not a generic server error.
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err && err.message);
   if (res.headersSent) return;
+  if (err && (err.status === 413 || err.type === 'entity.too.large')) {
+    return res.status(413).json({ ok: false, error: 'file_too_big' });
+  }
   res.status(500).json({ ok: false, error: 'server_error' });
 });
 
@@ -824,6 +1093,9 @@ setInterval(async () => {
   try {
     await db.run('DELETE FROM statuses WHERE expires_at <= ?', now());
     await db.run('DELETE FROM call_signals WHERE consumed = TRUE AND created_at < ?', now() - 60 * 60 * 1000);
+    // Disappearing messages: expired rows — and their media with them —
+    // are deleted for everyone, not just hidden.
+    await db.run('DELETE FROM messages WHERE expires_at > 0 AND expires_at <= ?', now());
   } catch (e) {
     console.error('[cleanup]', e && e.message);
   }
