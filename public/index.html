@@ -601,6 +601,10 @@
       <span class="settings-row-label">Group notification sound</span><span id="notif-group-state" class="settings-row-value">On</span>
     </button>
     <div class="settings-sub-hint">Plays a short sound when a new group message arrives while the app is open.</div>
+    <button id="notif-msgtone-row" class="settings-row" type="button">
+      <span class="settings-row-label">Message tone</span><span id="notif-msgtone-state" class="settings-row-value">Ding</span>
+    </button>
+    <div class="settings-sub-hint">The sound for new messages and group messages — tap to choose one of 6 tones, Silent, or add your own.</div>
     <button id="notif-call-row" class="settings-row" type="button">
       <span class="settings-row-label">Call ringtone</span><span id="notif-call-state" class="settings-row-value">On</span>
     </button>
@@ -859,16 +863,25 @@
     <div class="dialog">
       <h3>Ringtone</h3>
       <p class="hint">Tap one to hear it — it plays once.</p>
-      <div class="option-list">
-        <button class="option-btn" data-ringtone="classic" type="button">Classic</button>
-        <button class="option-btn" data-ringtone="gentle" type="button">Gentle</button>
-        <button class="option-btn" data-ringtone="bright" type="button">Bright</button>
-      </div>
+      <div class="option-list" id="ringtone-list"></div>
       <div class="dialog-buttons">
         <button id="btn-ringtone-cancel" class="btn-link">Cancel</button>
       </div>
     </div>
   </div>
+
+  <!-- ===== Choose a message tone ===== -->
+  <div id="msgtone-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Message tone</h3>
+      <p class="hint">Tap one to hear it — it plays once.</p>
+      <div class="option-list" id="msgtone-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-msgtone-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="custom-tone-input" accept="audio/*" class="hidden">
 
   <div id="toast" class="toast hidden"></div>
   <audio id="remote-audio" autoplay playsinline></audio>
