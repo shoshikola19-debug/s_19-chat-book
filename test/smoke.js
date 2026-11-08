@@ -133,6 +133,10 @@ async function main() {
     && manifestData && manifestData.name === 'S_19 CHAT BOOK' && manifestData.display === 'standalone', manifestData);
   const icon192 = await fetch(BASE + '/icon-192.png');
   check('app icon 192 serves', icon192.status === 200 && (icon192.headers.get('content-type') || '').includes('png'));
+  for (const wp of ['media-generation-nature-palm-0-d7019b95-33b0-4080-a168-11452696861b.jpg', 'media-generation-nature-desert-0-b72be574-928d-4c61-89d6-f58db9cb588d.jpg', 'media-generation-nature-mountain-0-1a82b33a-a647-4613-b63b-14fbe7b99b41.jpg', 'media-generation-ai-dream-0-6ab45dc5-0529-4c8b-8b2d-8e21d10edefa.jpg']) {
+    const r = await fetch(BASE + '/wallpapers/' + wp);
+    check('bundled wallpaper serves: ' + wp.slice(18, 32), r.status === 200 && (r.headers.get('content-type') || '').includes('image'));
+  }
   const swJs = await fetch(BASE + '/sw.js');
   const swText = await swJs.text();
   check('service worker has a fetch handler (installable)',
@@ -163,6 +167,17 @@ async function main() {
   check('favorites chip and PIN / locked-chats / visibility dialogs exist',
     idxText.includes('favorites-chip') && idxText.includes('pin-dialog') && idxText.includes('locked-chats-dialog')
     && idxText.includes('media-visibility-dialog') && idxText.includes('report-dialog') && idxText.includes('admin-reports'));
+  check('chat theme + wallpaper + preview overlays exist (WhatsApp-style theme flow)',
+    idxText.includes('id="theme-overlay"') && idxText.includes('id="wallpaper-overlay"') && idxText.includes('id="wallpaper-preview"')
+    && idxText.includes('id="theme-tab-bubble"') && idxText.includes('id="theme-tab-wallpaper"') && idxText.includes('id="theme-tab-ai"')
+    && idxText.includes('id="wp-tab-gallery"') && idxText.includes('id="wp-tab-color"') && idxText.includes('id="wp-tab-ai"')
+    && idxText.includes('id="preview-dim"') && idxText.includes('id="btn-preview-done"')
+    && idxText.includes('id="btn-preview-zoom-in"') && idxText.includes('id="btn-preview-zoom-out"')
+    && idxText.includes('Only you can see this theme.'));
+  check('old colour-picker theme dialog is gone',
+    !idxText.includes('chat-theme-dialog') && !idxText.includes('chat-theme-preview') && !idxText.includes('btn-chat-theme-apply'));
+  check('pinch-zoom is disabled at the viewport (app-wide, except the preview cropper)',
+    idxText.includes('maximum-scale=1') && idxText.includes('user-scalable=no'));
 
   console.log('== auth ==');
   const tokA = await login(BIJOY, 'Bijoy Test');
@@ -461,6 +476,15 @@ async function main() {
   check('bad chat theme rejected', setThemeBad.status === 400 && setThemeBad.data.error === 'bad_theme', setThemeBad);
   const setThemeBack = await post('/api/chat-settings', { with: FRIEND, chatTheme: '' }, tokA);
   check('reset per-chat theme to default', setThemeBack.status === 200 && setThemeBack.data.chatTheme === '', setThemeBack);
+  // Outgoing-bubble colour: stored per chat on the server, '' = default.
+  const set0b = await get('/api/chat-settings?with=' + FRIEND, tokA);
+  check('bubble colour defaults to empty', set0b.status === 200 && set0b.data.bubbleColor === '', set0b);
+  const setBubble = await post('/api/chat-settings', { with: FRIEND, bubbleColor: '#34B7F1' }, tokA);
+  check('set per-chat bubble colour', setBubble.status === 200 && setBubble.data.bubbleColor === '#34B7F1', setBubble);
+  const setBubbleBad = await post('/api/chat-settings', { with: FRIEND, bubbleColor: 'not-a-colour' }, tokA);
+  check('bad bubble colour rejected', setBubbleBad.status === 400 && setBubbleBad.data.error === 'bad_bubble_color', setBubbleBad);
+  const setBubbleBack = await post('/api/chat-settings', { with: FRIEND, bubbleColor: '' }, tokA);
+  check('reset bubble colour to default', setBubbleBack.status === 200 && setBubbleBack.data.bubbleColor === '', setBubbleBack);
   const setDispBad = await post('/api/chat-settings', { with: FRIEND, disappearing: 12345 }, tokA);
   check('bad disappearing value rejected', setDispBad.status === 400 && setDispBad.data.error === 'bad_disappearing', setDispBad);
   // Mute: the friend mutes Bijoy. Messages still deliver (only the push
@@ -758,6 +782,40 @@ async function main() {
   check('Manage storage shows a real breakdown instead of the media grid',
     idxHtml2.includes('manage-storage-dialog') && idxHtml2.includes('storage-breakdown')
     && appJs.includes('storage-breakdown') && appJs.includes('Voice notes'));
+  // Static guards for the pinned chat layout + no-zoom (Miraj bug):
+  // the header and input bar must be flex children of a fixed-height
+  // column, never scrolling away with the messages — and the sticky
+  // headers must not be killed by a later position: relative rule.
+  check('chat screen is a fixed-height column, messages scroll on their own',
+    styleCss.includes('#screen-chat, #screen-channel, #screen-app { height: 100dvh; }')
+    && styleCss.includes('#chat-messages, #channel-posts, .tab-page { min-height: 0; }')
+    && styleCss.includes('.chat-header, .chat-input-row { flex-shrink: 0; }'));
+  check('sticky headers are not overridden to position relative',
+    !styleCss.includes('.app-header { position: relative; }')
+    && !styleCss.includes('.chat-header { position: relative; }'));
+  check('pinch-zoom is off app-wide, double-tap zoom off on controls',
+    styleCss.includes('touch-action: pan-x pan-y;')
+    && styleCss.includes('button, input, textarea, select, a { touch-action: manipulation; }'));
+  // Static guards for the WhatsApp-style Chat theme + Wallpaper flow.
+  check('theme + wallpaper + preview logic exists in the client',
+    appJs.includes('function openThemeOverlay') && appJs.includes('function openWallpaperOverlay')
+    && appJs.includes('function openWallpaperPreview') && appJs.includes('function renderThemeCards')
+    && appJs.includes('function renderBubblePalette') && appJs.includes('s19_chat_dim_')
+    && appJs.includes('wallpaperWithDim') && appJs.includes('bubbleTextFor')
+    && appJs.includes('preview-dim') && appJs.includes('btn-preview-done'));
+  check('bundled wallpapers are referenced (3 nature photos + 1 AI image)',
+    appJs.includes('media-generation-nature-palm-0-d7019b95-33b0-4080-a168-11452696861b.jpg')
+    && appJs.includes('media-generation-nature-desert-0-b72be574-928d-4c61-89d6-f58db9cb588d.jpg')
+    && appJs.includes('media-generation-nature-mountain-0-1a82b33a-a647-4613-b63b-14fbe7b99b41.jpg')
+    && appJs.includes('media-generation-ai-dream-0-6ab45dc5-0529-4c8b-8b2d-8e21d10edefa.jpg'));
+  check('preview cropper keeps its own pinch-zoom (touch-action none on the wall)',
+    styleCss.includes('.preview-wall') && styleCss.includes('touch-action: none'));
+  check('bubble colour uses a CSS variable with a readable text colour',
+    styleCss.includes('--bubble-mine') && appJs.includes("setProperty('--bubble-mine'")
+    && appJs.includes("setProperty('--bubble-mine-text'"));
+  check('server stores the bubble colour (column + API validation)',
+    fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8').includes('bubble_color')
+    && fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8').includes('bad_bubble_color'));
   check('Settings has the five new rows and their screens (no dead rows)',
     idxHtml2.includes('settings-notif-row') && idxHtml2.includes('settings-storage-row')
     && idxHtml2.includes('settings-access-row') && idxHtml2.includes('settings-help-row')
