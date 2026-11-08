@@ -33,11 +33,15 @@ services:
         sync: false
       - key: EMAIL_FROM
         value: ""
+      # Permanent database: set DATABASE_URL to the Neon Postgres
+      # connection string (Dashboard -> Environment). When it is set the
+      # app uses Neon and data survives restarts; when it is empty the
+      # app falls back to a local SQLite file (lost on restart/redeploy
+      # on the free tier, fine for testing only). The connection string
+      # holds a password, so it is marked sync: false and must never be
+      # committed. The code strips channel_binding=require automatically.
+      - key: DATABASE_URL
+        sync: false
     # Free tier has an ephemeral disk: the SQLite file is lost when the
-    # service restarts or redeploys. That is fine for testing with friends.
-    # For permanent chat history, add a paid persistent disk (1 GB, $0.25/GB/mo)
-    # and set DB_PATH to /var/data/s19.db (see README.md).
-    # disks:
-    #   - name: s19-data
-    #     mountPath: /var/data
-    #     sizeGB: 1
+    # service restarts or redeploys. Use DATABASE_URL (Neon, free tier)
+    # for permanent data instead (see README.md).
