@@ -1443,6 +1443,36 @@ async function main() {
     && styleCss.includes('.media-preview') && styleCss.includes('.media-preview-toggle')
     && styleCss.includes('.msg-caption'), null);
 
+  // View-once guard (client-only deterrent): while view-once media is
+  // open in the viewer, losing focus hides it for good in that session
+  // (blur + visibilitychange), the cached bytes are dropped, right-click
+  // / long-press save and dragging are disabled on the view-once media,
+  // and an honest hint says screenshots can't be blocked in a browser.
+  // Nothing anywhere may claim screenshots are blocked.
+  check('view-once guard: focus loss hides the media for good, no save/drag on view-once media, honest hint, no blocking claim',
+    appJs.includes("openMediaViewer(url, m.media_kind, true, m.id)")
+    && appJs.includes('function hideViewOnceMedia')
+    && appJs.includes("window.addEventListener('blur', hideViewOnceMedia)")
+    && appJs.includes("document.addEventListener('visibilitychange', () => { if (document.hidden) hideViewOnceMedia(); })")
+    && appJs.includes('mediaViewerViewOnceHidden = true')
+    && appJs.includes("viewer.classList.add('media-hidden')")
+    && appJs.includes('mediaCache.delete(mediaViewerViewOnceId)')
+    && appJs.includes("el.addEventListener('contextmenu', (e) => { if (mediaViewerViewOnce) e.preventDefault(); })")
+    && appJs.includes("el.addEventListener('dragstart', (e) => { if (mediaViewerViewOnce) e.preventDefault(); })")
+    && idxHtml2.includes('media-viewer-vo-hint')
+    && idxHtml2.includes("Screenshots can't be blocked in a browser — the photo hides if you leave this screen.")
+    && idxHtml2.includes('media-viewer-vo-hidden')
+    && idxHtml2.includes('This photo was hidden when you left the app.')
+    && styleCss.includes('.media-viewer.media-hidden #media-viewer-img')
+    && styleCss.includes('.media-viewer.media-vo #media-viewer-img')
+    && styleCss.includes('.media-viewer-vo-hint')
+    && !appJs.includes('Screenshots are blocked') && !idxHtml2.includes('Screenshots are blocked')
+    && !appJs.includes('screenshot blocked') && !idxHtml2.includes('screenshot blocked')
+    && !appJs.includes('block screenshots') && !appJs.includes('prevent screenshots')
+    && !appJs.includes('screenshot-proof') && !appJs.includes('cannot take a screenshot')
+    && !appJs.includes("can't take a screenshot") && !appJs.includes('stops screenshots')
+    && !appJs.includes('blocks screenshots'), null);
+
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
   check('logout works', lo.status === 200, lo);
