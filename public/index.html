@@ -97,6 +97,7 @@
     <!-- Chats -->
     <div id="tab-chats" class="tab-page">
       <div class="search-row"><svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="chat-search" class="input search-input" type="search" placeholder="Search"></div>
+      <button id="favorites-chip" class="filter-chip hidden" type="button">⭐ Favorites</button>
       <div id="chat-list" class="chat-list"></div>
       <div id="start-chatting" class="start-chatting hidden"></div>
       <button id="btn-add-contact" class="fab" title="Add a number">+</button>
@@ -185,6 +186,8 @@
       <div id="admin-users" class="chat-list"></div>
       <div class="section-title">Channels</div>
       <div id="admin-channels" class="chat-list"></div>
+      <div class="section-title">Reports</div>
+      <div id="admin-reports" class="chat-list"></div>
       <div class="section-title">Send an announcement to everyone</div>
       <div class="status-add-row">
         <input id="admin-broadcast-input" class="input" type="text" maxlength="4000" placeholder="Write an announcement…">
@@ -218,11 +221,25 @@
       <button id="btn-call-peer" class="call-btn" title="Voice call"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
       <button id="btn-chat-menu" class="call-btn" title="Settings">⋮</button>
       <div id="chat-menu" class="chat-menu hidden">
-        <button id="menu-chat-theme" type="button">🎨 Chat theme</button>
-        <button id="menu-mute" type="button">🔇 Mute notifications</button>
-        <button id="menu-disappearing" type="button">⏳ Disappearing messages</button>
-        <button id="menu-clear" type="button">🧹 Clear chat</button>
-        <button id="menu-block" type="button">🚫 Block</button>
+        <div id="chat-menu-main">
+          <button id="menu-new-group" type="button">New group</button>
+          <button id="menu-view-contact" type="button">View contact</button>
+          <button id="menu-search" type="button">Search</button>
+          <button id="menu-media" type="button">Media, links, and docs</button>
+          <button id="menu-mute" type="button">Mute notifications</button>
+          <button id="menu-disappearing" type="button">Disappearing messages</button>
+          <button id="menu-chat-theme" type="button">Chat theme</button>
+          <button id="menu-more" type="button">More ›</button>
+        </div>
+        <div id="chat-menu-more" class="hidden">
+          <button id="menu-more-back" type="button">‹ Back</button>
+          <button id="menu-report" type="button">Report</button>
+          <button id="menu-block" type="button">Block</button>
+          <button id="menu-clear" type="button">Clear chat</button>
+          <button id="menu-export" type="button">Export chat</button>
+          <button id="menu-shortcut" type="button">Add shortcut</button>
+          <button id="menu-favorite" type="button">Add to Favorites</button>
+        </div>
       </div>
     </header>
     <div id="chat-search-bar" class="chat-search-bar hidden">
@@ -483,30 +500,46 @@
     </div>
   </div>
 
-  <!-- ===== Contact profile (WhatsApp-style) ===== -->
+  <!-- ===== Contact profile (WhatsApp-style contact info) ===== -->
   <div id="profile-overlay" class="profile-overlay hidden">
-    <div class="profile-top">
+    <div class="profile-top profile-info-top">
       <button id="btn-close-profile" class="back-btn">‹</button>
+      <div class="profile-head-avatar" id="profile-avatar">?</div>
+      <div class="profile-head-text">
+        <div class="profile-name" id="profile-name"></div>
+        <div class="profile-about" id="profile-about"></div>
+      </div>
     </div>
-    <div class="profile-avatar" id="profile-avatar">?</div>
-    <div class="profile-name" id="profile-name"></div>
-    <div class="profile-phone" id="profile-phone"></div>
-    <div class="profile-about" id="profile-about"></div>
-    <div class="profile-joined" id="profile-joined"></div>
-    <div class="profile-actions">
-      <button id="btn-profile-voice" class="profile-action" type="button">📞<span>Voice</span></button>
-      <button id="btn-profile-video" class="profile-action" type="button">🎥<span>Video</span></button>
-      <button id="btn-profile-search" class="profile-action" type="button">🔍<span>Search</span></button>
-    </div>
+    <div class="profile-sub" id="profile-phone"></div>
+    <div class="profile-sub" id="profile-joined"></div>
     <button id="profile-media-row" class="profile-row" type="button">
-      <span>📷 Media, links, and docs</span><span><b id="profile-media-count">0</b> ›</span>
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></span><span class="profile-row-label">Media, links, and docs</span><span><b id="profile-media-count">0</b> ›</span>
     </button>
     <div id="profile-media-grid" class="profile-media-grid hidden"></div>
+    <button id="profile-storage-row" class="profile-row" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="profile-row-label">Manage storage</span><span id="profile-storage-size">0 MB</span>
+    </button>
     <button id="profile-mute-row" class="profile-row" type="button">
-      <span>🔔 Notifications</span><span id="profile-mute-state"></span>
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span><span class="profile-row-label">Notifications</span><span id="profile-mute-state"></span>
+    </button>
+    <button id="profile-visibility-row" class="profile-row" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span><span class="profile-row-label">Media visibility</span><span id="profile-visibility-state"></span>
     </button>
     <button id="profile-disappearing-row" class="profile-row" type="button">
-      <span>⏳ Disappearing messages</span><span id="profile-disappearing-state"></span>
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="profile-row-label">Disappearing messages</span><span id="profile-disappearing-state"></span>
+    </button>
+    <button id="profile-lock-row" class="profile-row" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span><span class="profile-row-text"><span class="profile-row-label">Chat lock</span><span class="profile-row-sub">Lock and hide this chat on this device.</span></span><span class="toggle-pill" id="profile-lock-toggle"><span class="toggle-knob"></span></span>
+    </button>
+    <div id="profile-groups-section">
+      <div id="profile-groups-empty" class="profile-groups-empty">No groups in common</div>
+      <div id="profile-groups-list"></div>
+    </div>
+    <button id="profile-create-group-row" class="profile-row profile-row-green" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span class="profile-row-label" id="profile-create-group-label">Create group with …</span>
+    </button>
+    <button id="profile-add-to-groups-row" class="profile-row profile-row-green" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg></span><span class="profile-row-label">Add to groups</span>
     </button>
   </div>
 
@@ -531,6 +564,70 @@
     <button id="btn-close-media" class="status-close">✕</button>
     <img id="media-viewer-img" class="media-viewer-img" alt="Photo">
     <video id="media-viewer-video" class="media-viewer-img hidden" controls playsinline></video>
+  </div>
+
+  <!-- ===== Media visibility (per-chat auto-save override) ===== -->
+  <div id="media-visibility-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Media visibility</h3>
+      <p class="hint">Photos and videos from this chat are saved to your phone.</p>
+      <div class="option-list">
+        <button class="option-btn" data-vis="default" type="button">Default (follows the global setting)</button>
+        <button class="option-btn" data-vis="on" type="button">On — always save</button>
+        <button class="option-btn" data-vis="off" type="button">Off — never save</button>
+      </div>
+      <div class="dialog-buttons">
+        <button id="btn-visibility-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Chat lock PIN ===== -->
+  <div id="pin-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="pin-dialog-title">Chat lock</h3>
+      <p class="hint" id="pin-dialog-message"></p>
+      <input id="pin-dialog-input" class="input" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="4-digit PIN">
+      <input id="pin-dialog-confirm" class="input hidden" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Repeat the PIN">
+      <div class="dialog-buttons">
+        <button id="btn-pin-cancel" class="btn-link">Cancel</button>
+        <button id="btn-pin-ok" class="btn-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Locked chats (PIN verified) ===== -->
+  <div id="locked-chats-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Locked chats</h3>
+      <div id="locked-chats-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-locked-chats-close" class="btn-link">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Add this person to one of my groups ===== -->
+  <div id="add-to-group-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Add to groups</h3>
+      <div id="add-to-group-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-add-to-group-close" class="btn-link">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Report this chat ===== -->
+  <div id="report-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="report-dialog-title">Report</h3>
+      <input id="report-reason" class="input" type="text" maxlength="500" placeholder="Reason (optional)">
+      <div class="dialog-buttons">
+        <button id="btn-report-cancel" class="btn-link">Cancel</button>
+        <button id="btn-report-submit" class="btn-primary">Report</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
