@@ -230,6 +230,44 @@ async function main() {
   const sigs2 = await get('/api/calls/signals', tokB);
   check('signals are consumed after fetch', sigs2.status === 200 && sigs2.data.signals.length === 0, sigs2);
 
+  console.log('== video call signalling ==');
+  // A video offer carries video:true through the same signal path, so
+  // the callee's incoming screen knows it is a VIDEO call and opens
+  // the video UI on answer. An audio offer carries no video flag.
+  // (Real two-phone video cannot be tested headlessly — the API flow
+  // and the UI presence below are what this suite can pin down.)
+  const vidSig = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'fake-video-offer', type: 'offer', video: true } }, tokA);
+  check('send video call offer signal', vidSig.status === 200, vidSig);
+  const vidSigs = await get('/api/calls/signals', tokB);
+  check('callee receives the video offer with the video flag',
+    vidSigs.status === 200 && vidSigs.data.signals.length === 1 && vidSigs.data.signals[0].kind === 'offer' && vidSigs.data.signals[0].payload.video === true, vidSigs);
+  const audSig = await post('/api/calls/signal', { to: FRIEND, kind: 'offer', payload: { sdp: 'fake-audio-offer', type: 'offer' } }, tokA);
+  check('send audio call offer signal', audSig.status === 200, audSig);
+  const audSigs = await get('/api/calls/signals', tokB);
+  check('audio offer carries no video flag',
+    audSigs.status === 200 && audSigs.data.signals.length === 1 && audSigs.data.signals[0].payload.video !== true, audSigs);
+  // Static checks: the video UI exists (button, remote + local video,
+  // camera toggle/switch) and the ringtone is the melodic WebAudio
+  // tune at two volumes — soft ringback for the caller, full ringtone
+  // for the callee — with the old dual-sine beep gone.
+  const idxHtml = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  check('video call button in the chat header', idxHtml.includes('id="btn-video-call-peer"'));
+  check('remote + local video elements in the call overlay',
+    idxHtml.includes('id="remote-video"') && idxHtml.includes('id="local-video"') && idxHtml.includes('id="call-video-wrap"'));
+  check('camera toggle + switch buttons in the call overlay',
+    idxHtml.includes('id="btn-cam-toggle"') && idxHtml.includes('id="btn-cam-switch"'));
+  check('video call counted separately in the data meter', idxHtml.includes('id="meter-vcall"'));
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  check('video overlay styles present', css.includes('.call-video-wrap') && css.includes('#local-video'));
+  const appJs2 = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  check('melodic ringtone (original tune, two volumes)',
+    appJs2.includes('RING_MELODY') && appJs2.includes("startRinging('soft')") && appJs2.includes("startRinging('full')"));
+  check('old dual-sine beep is gone', !appJs2.includes('1209') && !appJs2.includes("frequency.value = 941"));
+  check('video call flow in the client (720p, flag, prioritised audio)',
+    appJs2.includes('callIsVideo') && appJs2.includes('video: Boolean(isVideo)') && appJs2.includes('video: isVideo') && appJs2.includes('ideal: 1280')
+    && appJs2.includes('degradationPreference') && appJs2.includes('maxBitrate: 1500000')
+    && appJs2.includes("priority: 'high'") && appJs2.includes('facingMode'));
+
   console.log('== usage ==');
   const usage = await get('/api/usage', tokA);
   check('usage endpoint counts today', usage.status === 200 && usage.data.messagesSent === 3 && usage.data.bytesSent > 0, usage);
@@ -288,9 +326,11 @@ async function main() {
   const statsAnon = await get('/api/admin/stats');
   check('anonymous stats -> 401', statsAnon.status === 401, statsAnon);
 
-  // Admin stats: 4 users, 5 messages so far, 2 call offers so far.
+  // Admin stats: 4 users, 5 messages so far, 4 call offers so far
+  // (1 audio offer + 1 no-sub offer from the earlier sections, and
+  // the video + audio offers from the video-call section).
   const stats = await get('/api/admin/stats', tokA);
-  check('admin stats totals', stats.status === 200 && stats.data.users === 4 && stats.data.messages === 5 && stats.data.calls === 2, stats);
+  check('admin stats totals', stats.status === 200 && stats.data.users === 4 && stats.data.messages === 5 && stats.data.calls === 4, stats);
   const usersList = await get('/api/admin/users', tokA);
   const charlieRow = (usersList.data.users || []).find((u) => u.phone === CHARLIE);
   check('admin users list has Charlie, not blocked', usersList.status === 200 && usersList.data.users.length === 4 && charlieRow && charlieRow.blocked === 0, usersList);
