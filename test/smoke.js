@@ -587,6 +587,21 @@ async function main() {
     imgData.status === 200 && imgData.data.data === PNG_1X1 && imgData.data.mimeType === 'image/png', imgData);
   const imgDataSender = await get('/api/media/' + imgId, tokA);
   check('sender can download their own photo', imgDataSender.status === 200 && imgDataSender.data.data === PNG_1X1, imgDataSender);
+  // Captions (from the preview screen): the caption rides as the
+  // message body and renders under the photo/video; without one the
+  // body stays the plain label. A forwarded copy keeps the caption.
+  const capImg = await post('/api/messages/media', { to: FRIEND, mediaKind: 'image', fileName: 'cap-photo.png', mimeType: 'image/png', size: Buffer.from(PNG_1X1, 'base64').length, data: PNG_1X1, caption: 'Sunset at the beach', clientKey: 'cap1-' + Date.now() }, tokA);
+  check('photo with a caption stores the caption as the body',
+    capImg.status === 200 && capImg.data.message.body === 'Sunset at the beach', capImg);
+  const capVid = await post('/api/messages/media', { to: FRIEND, mediaKind: 'video', fileName: 'cap-video.mp4', mimeType: 'video/mp4', size: Buffer.from(FAKE_VIDEO, 'base64').length, data: FAKE_VIDEO, caption: 'Watch this', clientKey: 'cap2-' + Date.now() }, tokA);
+  check('video with a caption stores the caption as the body',
+    capVid.status === 200 && capVid.data.message.body === 'Watch this', capVid);
+  const capLong = await post('/api/messages/media', { to: FRIEND, mediaKind: 'image', fileName: 'long-cap.png', mimeType: 'image/png', size: Buffer.from(PNG_1X1, 'base64').length, data: PNG_1X1, caption: 'x'.repeat(1500), clientKey: 'cap3-' + Date.now() }, tokA);
+  check('caption longer than 1000 chars is trimmed to 1000',
+    capLong.status === 200 && capLong.data.message.body === 'x'.repeat(1000), capLong);
+  const capFwd = await post('/api/messages/' + capImg.data.message.id + '/forward', { targets: [{ to: GMAIL_USER }] }, tokA);
+  check('forwarded copy keeps the caption',
+    capFwd.status === 200 && capFwd.data.messages.length === 1 && capFwd.data.messages[0].body === 'Sunset at the beach' && capFwd.data.messages[0].forwarded === 1, capFwd);
   // Contact profile: /api/chat-media returns the peer info plus every
   // media item shared in this chat (metadata only, no bytes inline).
   const chatMedia = await get('/api/chat-media?with=' + FRIEND, tokA);
@@ -1398,6 +1413,35 @@ async function main() {
     && idxHtml2.includes('media-share-dialog') && idxHtml2.includes('btn-share-to-chat') && idxHtml2.includes('btn-share-outside')
     && styleCss.includes('.media-share-btn') && styleCss.includes('.msg-media { position: relative; }')
     && serverJs.includes('/api/messages/:id/forward') && serverJs.includes("error: 'view_once'"), null);
+
+  // Static: the media preview screen (WhatsApp-style). Every photo /
+  // video path opens the preview first — attach Photo/Video, the
+  // in-chat camera, the inbox camera chooser — and no photo/video
+  // sends directly any more (files and voice notes are unaffected).
+  // The preview carries a visible view-once "1" toggle, an HD toggle
+  // (photos only; videos always send original), a caption input, and
+  // Send/Cancel; HD off downscales to 1280px, HD on sends the
+  // original bytes. The caption rides to the server as the body and
+  // renders under the media in the bubble.
+  check('media preview screen: every photo/video path opens it first, with view-once "1", HD (photos only), caption and Send',
+    idxHtml2.includes('media-preview') && idxHtml2.includes('btn-media-preview-send')
+    && idxHtml2.includes('btn-media-preview-cancel') && idxHtml2.includes('media-preview-caption')
+    && idxHtml2.includes('btn-media-preview-viewonce') && idxHtml2.includes('btn-media-preview-hd')
+    && idxHtml2.includes('media-preview-quality-note')
+    && appJs.includes('function openMediaPreview') && appJs.includes('function sendMediaPreview')
+    && appJs.includes('function closeMediaPreview') && appJs.includes('function updateMediaPreviewToggles')
+    && appJs.includes("openMediaPreview('image', f)") && appJs.includes("openMediaPreview('video', f)")
+    && appJs.includes("openMediaPreview('image', pendingCameraFile)")
+    && !appJs.includes("sendMediaFile('image'") && !appJs.includes("sendMediaFile('video'")
+    && appJs.includes("pushBackLayer('media-preview'") && appJs.includes('media-preview-caption')
+    && appJs.includes("hd.classList.toggle('hidden', !isPhoto)")
+    && appJs.includes("media-preview-quality-note').classList.toggle('hidden', isPhoto)")
+    && appJs.includes('viewOnceNext = mediaPreview.viewOnce')
+    && appJs.includes('downscaleImageFile(p.file, 1280)')
+    && appJs.includes('uploadBody.caption') && appJs.includes('function captionHtml')
+    && appJs.includes('msg-caption') && serverJs.includes('body.caption')
+    && styleCss.includes('.media-preview') && styleCss.includes('.media-preview-toggle')
+    && styleCss.includes('.msg-caption'), null);
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
