@@ -450,6 +450,8 @@ button, input, textarea, select, a { touch-action: manipulation; }
 .settings-row-label { font-size: 13px; color: #888; }
 .settings-row-value { font-size: 16px; color: #111; word-break: break-word; }
 .settings-row-static { cursor: default; }
+.volume-slider-wrap { width: 100%; padding: 2px 20px 10px; }
+.volume-slider-wrap input[type="range"] { width: 100%; accent-color: var(--green, #25D366); }
 /* Settings sub-screens (Notifications / Storage and data / Accessibility /
    Help): hint text and section titles inside the full-screen overlay. */
 .settings-sub-hint { width: 100%; padding: 0 20px; margin: 8px 0 12px; font-size: 14px; color: #555; line-height: 1.6; }
