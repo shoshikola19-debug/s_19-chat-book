@@ -24,7 +24,9 @@ services:
         value: ""
       # Email (Gmail login) variables are optional too. Leave them empty
       # for test-code mode; set them in the Dashboard when ready.
-      # Resend free tier: 100 emails/day, no card.
+      # Recommended: EMAIL_PROVIDER=smtp with a Gmail App Password —
+      # free for ANY Gmail address (Resend free tier without a verified
+      # domain only sends to its own account email).
       - key: EMAIL_PROVIDER
         value: ""
       - key: EMAIL_API_URL
@@ -33,6 +35,16 @@ services:
         sync: false
       - key: EMAIL_FROM
         value: ""
+      - key: EMAIL_SMTP_HOST
+        value: ""
+      - key: EMAIL_SMTP_PORT
+        value: ""
+      - key: EMAIL_SMTP_SECURE
+        value: ""
+      - key: EMAIL_SMTP_USER
+        value: ""
+      - key: EMAIL_SMTP_PASS
+        sync: false
       # Permanent database: set DATABASE_URL to the Neon Postgres
       # connection string (Dashboard -> Environment). When it is set the
       # app uses Neon and data survives restarts; when it is empty the
