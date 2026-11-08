@@ -102,6 +102,13 @@ function applyTheme() {
   document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) => {
     b.classList.toggle('selected', b.dataset.accent === t.accent);
   });
+  // Gallery photo as the inbox background (this phone only).
+  let inboxBg = '';
+  try { inboxBg = localStorage.getItem('s19_inbox_bg') || ''; } catch {}
+  const app = $('app');
+  app.classList.toggle('has-photo', !!inboxBg);
+  app.style.backgroundImage = inboxBg ? 'url(' + inboxBg + ')' : '';
+  $('btn-inbox-bg-remove').classList.toggle('hidden', !inboxBg);
 }
 function setTheme(mode, accent) {
   const t = loadTheme();
@@ -114,6 +121,51 @@ $('btn-theme-light').addEventListener('click', () => setTheme('light'));
 $('btn-theme-dark').addEventListener('click', () => setTheme('dark'));
 document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) =>
   b.addEventListener('click', () => setTheme(null, b.dataset.accent)));
+
+// A gallery photo as a background: scaled down to at most 1280px on the
+// long side so it fits in the phone's local storage (a full phone photo
+// would not). This is a wallpaper, not a sent photo — photos sent in
+// chats still go at 100% original quality, untouched.
+function downscaleImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read_failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('bad_image'));
+      img.onload = () => {
+        const max = 1280;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+$('btn-inbox-bg-pick').addEventListener('click', () => $('inbox-bg-input').click());
+$('inbox-bg-input').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const url = await downscaleImageFile(file);
+    try { localStorage.setItem('s19_inbox_bg', url); }
+    catch { toast('ছবিটা বড় হয়ে গেছে — ছোট ছবি বেছে নাও'); return; }
+    applyTheme();
+    toast('ইনবক্সের ছবি বসানো হয়েছে');
+  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+});
+$('btn-inbox-bg-remove').addEventListener('click', () => {
+  try { localStorage.removeItem('s19_inbox_bg'); } catch {}
+  applyTheme();
+  toast('ইনবক্সের ছবি সরানো হয়েছে');
+});
 
 // ---- media storage (Tools tab) ------------------------------------------------
 // How much of the 1 GB free storage my media uses. Shown on the Tools tab.
@@ -499,6 +551,13 @@ function applyChatTheme() {
   const box = $('chat-messages');
   box.classList.remove('chat-theme-green', 'chat-theme-blue', 'chat-theme-purple', 'chat-theme-pink', 'chat-theme-dark');
   if (chatSettings && chatSettings.chatTheme) box.classList.add('chat-theme-' + chatSettings.chatTheme);
+  // Gallery photo for this chat (this phone only): it covers the colour
+  // theme. Picking a colour clears the photo again (see below).
+  let photo = '';
+  try { photo = localStorage.getItem('s19_chat_bg_' + activeChat) || ''; } catch {}
+  box.classList.toggle('has-photo', !!photo);
+  box.style.backgroundImage = photo ? 'url(' + photo + ')' : '';
+  $('btn-chat-bg-remove').classList.toggle('hidden', !photo);
   // Disappearing indicator next to the peer id.
   $('chat-peer-phone').textContent = displayId(activeChat) +
     (chatSettings && chatSettings.disappearing ? ' • ⏳ ' + disappearLabel(chatSettings.disappearing) : '');
@@ -594,9 +653,31 @@ $('btn-chat-theme-cancel').addEventListener('click', () => $('chat-theme-dialog'
 document.querySelectorAll('.chat-theme-opt').forEach((b) => {
   b.addEventListener('click', () => {
     if (!activeChat) return;
+    try { localStorage.removeItem('s19_chat_bg_' + activeChat); } catch {}
     $('chat-theme-dialog').classList.add('hidden');
     saveChatSettings({ chatTheme: b.dataset.chatTheme }, 'চ্যাট থিম বদলে গেছে');
   });
+});
+$('btn-chat-bg-pick').addEventListener('click', () => $('chat-bg-input').click());
+$('chat-bg-input').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file || !activeChat) return;
+  try {
+    const url = await downscaleImageFile(file);
+    try { localStorage.setItem('s19_chat_bg_' + activeChat, url); }
+    catch { toast('ছবিটা বড় হয়ে গেছে — ছোট ছবি বেছে নাও'); return; }
+    $('chat-theme-dialog').classList.add('hidden');
+    applyChatTheme();
+    saveChatSettings({ chatTheme: '' }, 'চ্যাটের ছবি বসানো হয়েছে');
+  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+});
+$('btn-chat-bg-remove').addEventListener('click', () => {
+  if (!activeChat) return;
+  try { localStorage.removeItem('s19_chat_bg_' + activeChat); } catch {}
+  $('chat-theme-dialog').classList.add('hidden');
+  applyChatTheme();
+  toast('চ্যাটের ছবি সরানো হয়েছে');
 });
 $('menu-clear').addEventListener('click', async () => {
   if (!activeChat) return;
