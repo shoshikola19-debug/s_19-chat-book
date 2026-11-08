@@ -424,6 +424,9 @@ function enterApp() {
   setupPushNotifications();
   checkAdmin();
   loadMyProfile();
+  // A ?chat=<peer> link (from "Add shortcut") jumps straight into
+  // that chat once the app is in.
+  handleDeepLink();
 }
 
 // ---- Settings: my photo, name and About ("Current mood") ----------------
@@ -561,18 +564,26 @@ async function loadInbox() {
   } catch { /* offline — keep the last list on screen */ }
 }
 const MISSED_PHONE_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/><line x1="23" y1="1" x2="17" y2="7"/><line x1="17" y1="1" x2="23" y2="7"/></svg>';
+// Favorites filter: when on, the inbox shows only favorited 1-to-1
+// chats (groups cannot be favorited — the chat ⋮ menu that sets the
+// flag only exists in 1-to-1 chats).
+let favoritesOnly = false;
 function renderInbox() {
   const q = chatSearch.trim().toLowerCase();
   const list = $('chat-list');
   list.innerHTML = '';
+  // Locked chats are hidden from the list entirely (see the chat-lock
+  // section) — they only surface through the "Locked chats" row below.
+  const lockedSet = new Set(getLockedChats());
   // 1-to-1 chats and groups share one list, newest first — exactly
   // like WhatsApp. A group row shows its name, the last message
   // prefixed with the sender's name ("Sany: Hi"), and a 👥 avatar.
-  const rows = conversations.filter((c) => !q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q))
+  const rows = conversations.filter((c) => !lockedSet.has(c.phone) && (!q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q)))
     .map((c) => ({ kind: 'chat', ...c }));
   const grows = myGroups.filter((g) => !q || g.name.toLowerCase().includes(q))
     .map((g) => ({ kind: 'group', ...g }));
-  const all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  let all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  if (favoritesOnly) all = all.filter((c) => c.kind === 'chat' && c.favorite);
   if (!all.length) {
     list.innerHTML = '<div class="empty-note">Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.</div>';
   }
@@ -615,15 +626,40 @@ function renderInbox() {
     row.addEventListener('click', () => openChat(c.phone, c.name));
     list.appendChild(row);
   }
+  // Locked chats stay hidden from the list; one row at the bottom opens
+  // them behind the PIN.
+  const locked = getLockedChats().filter((p) => conversations.some((c) => c.phone === p));
+  if (locked.length && !q) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">🔒</div><div class="chat-row-body">' +
+      '<div class="chat-row-top"><span class="chat-row-name">Locked chats</span>' +
+      '<span class="chat-row-time"></span></div>' +
+      '<div class="chat-row-top"><span class="chat-row-msg">' + bn(locked.length) + ' hidden chat' + (locked.length === 1 ? '' : 's') + '</span></div></div>';
+    row.addEventListener('click', async () => {
+      if (!(await verifyLockPin('Enter your PIN to see your locked chats.'))) return;
+      renderLockedChatsDialog();
+      $('locked-chats-dialog').classList.remove('hidden');
+    });
+    list.appendChild(row);
+  }
   // Total unread on the Chats tab (green circle, hidden at 0) — chats
-  // and groups together.
-  const totalUnread = conversations.reduce((s, c) => s + (c.unread || 0), 0)
+  // and groups together. Locked chats do not count while hidden.
+  const totalUnread = conversations.filter((c) => !lockedSet.has(c.phone)).reduce((s, c) => s + (c.unread || 0), 0)
     + myGroups.reduce((s, g) => s + (g.unread || 0), 0);
   const badge = $('nav-chats-badge');
   badge.textContent = bn(totalUnread);
   badge.classList.toggle('hidden', totalUnread === 0);
+  // Favorites chip: shown whenever at least one chat is favorited.
+  const favChip = $('favorites-chip');
+  favChip.classList.toggle('hidden', !conversations.some((c) => c.favorite));
+  favChip.classList.toggle('active', favoritesOnly);
   renderStartChatting();
 }
+$('favorites-chip').addEventListener('click', () => {
+  favoritesOnly = !favoritesOnly;
+  renderInbox();
+});
 // "Start chatting": contacts with no conversation yet — a row each with
 // a green Chat pill that opens the chat. Hidden while searching and
 // when there is nobody to start with.
@@ -831,10 +867,9 @@ function applyTicks(ticks) {
   });
 }
 // ---- new group + group info ---------------------------------------------------
-// Create from the + button: the add-contact dialog has a "New group"
-// link. Members are picked from contacts — as many as you want, there
-// is no cap. The creator becomes the group's admin.
-$('btn-new-group').addEventListener('click', () => {
+// New-group dialog, shared by the + button and the profile's
+// "Create group with <Name>" row (which pre-selects that person).
+function showNewGroupDialog(preselectPhone) {
   $('add-contact-dialog').classList.add('hidden');
   $('new-group-name').value = '';
   $('new-group-error').classList.add('hidden');
@@ -846,11 +881,13 @@ $('btn-new-group').addEventListener('click', () => {
   for (const c of allContacts) {
     const label = document.createElement('label');
     label.className = 'option-btn';
-    label.innerHTML = '<input type="checkbox" value="' + escapeHtml(c.phone) + '"> ' + escapeHtml(peerName(c));
+    const checked = preselectPhone && c.phone === preselectPhone ? ' checked' : '';
+    label.innerHTML = '<input type="checkbox" value="' + escapeHtml(c.phone) + '"' + checked + '> ' + escapeHtml(peerName(c));
     list.appendChild(label);
   }
   $('new-group-dialog').classList.remove('hidden');
-});
+}
+$('btn-new-group').addEventListener('click', () => showNewGroupDialog());
 $('btn-cancel-group').addEventListener('click', () => $('new-group-dialog').classList.add('hidden'));
 $('btn-confirm-group').addEventListener('click', async () => {
   const name = $('new-group-name').value.trim();
@@ -993,8 +1030,9 @@ function applyChatTheme() {
 }
 function updateChatMenuLabels() {
   if (!chatSettings) return;
-  $('menu-mute').textContent = chatSettings.muted ? '🔔 Unmute notifications' : '🔇 Mute notifications';
-  $('menu-block').textContent = chatSettings.blockedByMe ? '✅ Unblock' : '🚫 Block';
+  $('menu-mute').textContent = chatSettings.muted ? 'Unmute notifications' : 'Mute notifications';
+  $('menu-block').textContent = chatSettings.blockedByMe ? 'Unblock' : 'Block';
+  $('menu-favorite').textContent = chatSettings.favorite ? 'Remove from Favorites' : 'Add to Favorites';
 }
 function updateBlockedNote() {
   const note = $('chat-blocked-note');
@@ -1028,14 +1066,26 @@ $('btn-back-chats').addEventListener('click', () => {
   loadInbox();
 });
 
+// The menu has two views: the main list and the "More ▸" submenu.
+// It always opens on the main view — the submenu is only reached by
+// tapping More, and closes back to the main view when the menu hides.
+function resetMenuView() {
+  $('chat-menu-main').classList.remove('hidden');
+  $('chat-menu-more').classList.add('hidden');
+}
+function hideChatMenu() {
+  $('chat-menu').classList.add('hidden');
+  resetMenuView();
+}
 $('btn-chat-menu').addEventListener('click', (e) => {
   e.stopPropagation();
+  if ($('chat-menu').classList.contains('hidden')) resetMenuView();
   $('chat-menu').classList.toggle('hidden');
   $('attach-menu').classList.add('hidden');
 });
 document.addEventListener('click', (e) => {
   if (!$('chat-menu').classList.contains('hidden') && !e.target.closest('#chat-menu') && e.target.id !== 'btn-chat-menu') {
-    $('chat-menu').classList.add('hidden');
+    hideChatMenu();
   }
   if (!$('attach-menu').classList.contains('hidden') && !e.target.closest('#attach-menu') && e.target.id !== 'btn-attach') {
     $('attach-menu').classList.add('hidden');
@@ -1078,6 +1128,142 @@ document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
       secs === 0 ? 'Disappearing messages turned off' : 'Disappearing messages on — messages will delete after ' + disappearLabel(secs));
   });
 });
+// ---- chat ⋮ menu: new items (WhatsApp order) ------------------------------
+// New group → the New-group flow. View contact → the contact-info
+// screen. Search → the in-chat search bar. Media → the profile's media
+// grid. More ▸ swaps to the submenu (Report / Block / Clear chat /
+// Export chat / Add shortcut / Add to Favorites).
+$('menu-new-group').addEventListener('click', () => {
+  hideChatMenu();
+  showNewGroupDialog();
+});
+$('menu-view-contact').addEventListener('click', () => {
+  hideChatMenu();
+  openProfile();
+});
+$('menu-search').addEventListener('click', () => {
+  hideChatMenu();
+  openChatSearch();
+});
+$('menu-media').addEventListener('click', () => {
+  hideChatMenu();
+  openProfileMediaOnOpen = true;
+  openProfile();
+});
+$('menu-more').addEventListener('click', () => {
+  $('chat-menu-main').classList.add('hidden');
+  $('chat-menu-more').classList.remove('hidden');
+});
+$('menu-more-back').addEventListener('click', () => resetMenuView());
+$('menu-report').addEventListener('click', () => {
+  hideChatMenu();
+  if (!activeChat) return;
+  $('report-dialog-title').textContent = 'Report ' + ($('chat-peer-name').textContent || displayId(activeChat));
+  $('report-reason').value = '';
+  $('report-dialog').classList.remove('hidden');
+});
+$('btn-report-cancel').addEventListener('click', () => $('report-dialog').classList.add('hidden'));
+$('btn-report-submit').addEventListener('click', async () => {
+  if (!activeChat) return;
+  const reason = $('report-reason').value.trim();
+  $('report-dialog').classList.add('hidden');
+  try {
+    await api('/api/report', { method: 'POST', body: JSON.stringify({ peer: activeChat, reason }) });
+    toast('Reported — an admin will review it');
+  } catch { toast("Couldn't send the report — check your connection and try again"); }
+});
+$('menu-export').addEventListener('click', () => {
+  hideChatMenu();
+  exportChat();
+});
+$('menu-shortcut').addEventListener('click', () => {
+  hideChatMenu();
+  copyChatLink();
+});
+$('menu-favorite').addEventListener('click', () => {
+  hideChatMenu();
+  if (!activeChat) return;
+  const fav = !(chatSettings && chatSettings.favorite);
+  saveChatSettings({ favorite: fav }, fav ? 'Added to Favorites' : 'Removed from Favorites');
+});
+
+// ---- export chat (menu: More ▸ Export chat) --------------------------------
+// Downloads the whole 1-to-1 history as a .txt transcript, one line per
+// message. Paginates through /api/messages (200 per page) so long chats
+// export in full. Uses the same endpoint as the chat view, so Clear-chat
+// and disappearing rules apply exactly as on screen.
+async function exportChat() {
+  if (!activeChat) return;
+  const peer = conversations.find((c) => c.phone === activeChat) || {};
+  const peerName = peer.name || displayId(activeChat);
+  const myName = (session && session.name) || 'Me';
+  const lines = [];
+  let afterId = 0;
+  try {
+    for (;;) {
+      const r = await api('/api/messages?with=' + encodeURIComponent(activeChat) + '&afterId=' + afterId);
+      const msgs = r.messages || [];
+      if (!msgs.length) break;
+      for (const m of msgs) {
+        afterId = Math.max(afterId, m.id);
+        const when = new Date(m.created_at);
+        const stamp = when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ', ' +
+          when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const who = m.sender === session.phone ? myName : peerName;
+        if (m.deleted_for_all) { lines.push('[' + stamp + '] ' + who + ': [Deleted message]'); continue; }
+        if (m.media_kind) {
+          const kindLabel = m.media_kind === 'image' ? 'Photo' : m.media_kind === 'video' ? 'Video' : m.media_kind === 'voice' ? 'Voice message' : 'File';
+          const detail = (m.media_name ? m.media_name + ' ' : '') + (m.media_size ? '(' + fmtBytes(m.media_size) + ')' : '');
+          lines.push('[' + stamp + '] ' + who + ': [' + kindLabel + '] ' + detail);
+        } else {
+          lines.push('[' + stamp + '] ' + who + ': ' + (m.body || ''));
+        }
+      }
+      if (msgs.length < 200) break;
+    }
+  } catch {
+    toast("Couldn't export — check your connection and try again");
+    return;
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = peerName.replace(/[^A-Za-z0-9 _-]+/g, '').trim().replace(/\s+/g, '-') + '-chat.txt';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Chat exported');
+}
+
+// ---- chat shortcut (menu: More ▸ Add shortcut) ---------------------------
+// Browsers cannot place a per-chat icon on the home screen directly, so
+// the honest version is a deep link: opening it while logged in jumps
+// straight into this chat. The link is copied; handleDeepLink() on boot
+// does the opening.
+async function copyChatLink() {
+  if (!activeChat) return;
+  const url = 'https://s-19-chat-book.onrender.com/?chat=' + encodeURIComponent(activeChat);
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    window.prompt('Copy this chat link:', url);
+  }
+  toast('Chat link copied — paste it on your home screen');
+}
+function handleDeepLink() {
+  let chat = '';
+  try { chat = new URLSearchParams(window.location.search).get('chat') || ''; } catch { chat = ''; }
+  if (!chat || !/^[+0-9A-Za-z@._-]{6,64}$/.test(chat)) return;
+  const tryOpen = () => {
+    const peer = conversations.find((c) => c.phone === chat);
+    openChat(chat, peer ? peer.name : undefined);
+  };
+  // Wait for the inbox so the peer's name resolves, then open the chat.
+  if (conversations.length || myGroups.length) tryOpen();
+  else loadInbox().then(tryOpen).catch(tryOpen);
+}
 // Per-chat theme: pick first, PREVIEW it, then apply with "Done".
 // Nothing changes in the real chat until Apply — so themes and photos
 // can be compared before committing. Cancel discards the preview.
@@ -1168,25 +1354,64 @@ async function loadMediaUrl(id) {
   }
   return url;
 }
+// Set by the menu's "Media, links, and docs" item: open the profile
+// with the media grid already expanded.
+let openProfileMediaOnOpen = false;
 function updateProfileRows() {
   $('profile-mute-state').textContent = chatSettings && chatSettings.muted ? 'Off' : 'On';
   $('profile-disappearing-state').textContent = chatSettings && chatSettings.disappearing ? disappearLabel(chatSettings.disappearing) : 'Off';
+  // Media visibility: null = follow the global auto-save toggle.
+  const vis = chatSettings ? chatSettings.mediaVisibility : null;
+  $('profile-visibility-state').textContent = vis === 1 ? 'On' : vis === 0 ? 'Off' : 'Default (' + (autosaveOn() ? 'On' : 'Off') + ')';
+  // Manage storage: total size of this chat's shared media.
+  const total = (profileMedia || []).reduce((s, m) => s + (m.media_size || 0), 0);
+  $('profile-storage-size').textContent = fmtBytes(total);
+  // Chat lock toggle pill.
+  $('profile-lock-toggle').classList.toggle('on', !!profilePeer && isChatLocked(profilePeer));
 }
+// Groups shared with this person (from myGroups, loaded with the
+// inbox). Tap a row to open that group.
+function renderProfileGroups() {
+  const list = $('profile-groups-list');
+  const empty = $('profile-groups-empty');
+  list.innerHTML = '';
+  const shared = (myGroups || []).filter((g) => (g.members || []).some((m) => m.phone === profilePeer));
+  empty.classList.toggle('hidden', shared.length > 0);
+  for (const g of shared) {
+    const row = document.createElement('button');
+    row.className = 'profile-row profile-row-green';
+    row.type = 'button';
+    row.innerHTML = '<span class="profile-row-icon">' + USERS_SVG + '</span><span class="profile-row-label">' + escapeHtml(g.name) + '</span><span>›</span>';
+    row.addEventListener('click', () => {
+      $('profile-overlay').classList.add('hidden');
+      openGroup(g.id, g.name);
+    });
+    list.appendChild(row);
+  }
+}
+const USERS_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
 async function openProfile() {
   if (!activeChat) return;
   profilePeer = activeChat;
   const peer = conversations.find((c) => c.phone === activeChat) || {};
   $('profile-avatar').innerHTML = avatarHtml(peer.name, activeChat, peer.avatar);
   $('profile-name').textContent = peer.name || displayId(activeChat);
-  $('profile-phone').textContent = displayId(activeChat);
   $('profile-about').textContent = peer.about || '';
+  $('profile-phone').textContent = displayId(activeChat);
   $('profile-joined').textContent = '';
   $('profile-media-count').textContent = '…';
+  $('profile-storage-size').textContent = '…';
+  $('profile-create-group-label').textContent = 'Create group with ' + (peer.name || displayId(activeChat));
   $('profile-media-grid').classList.add('hidden');
   $('profile-media-grid').innerHTML = '';
+  profileMedia = [];
+  renderProfileGroups();
   updateProfileRows();
   $('profile-overlay').classList.remove('hidden');
   try {
+    if (!chatSettings) {
+      chatSettings = await api('/api/chat-settings?with=' + encodeURIComponent(activeChat));
+    }
     const r = await api('/api/chat-media?with=' + encodeURIComponent(activeChat));
     profileMedia = r.media || [];
     $('profile-media-count').textContent = bn(String(profileMedia.length));
@@ -1196,6 +1421,12 @@ async function openProfile() {
     if (r.peer) {
       if (r.peer.avatar) $('profile-avatar').innerHTML = '<img src="' + r.peer.avatar + '" alt="">';
       if (r.peer.about) $('profile-about').textContent = r.peer.about;
+    }
+    updateProfileRows();
+    if (openProfileMediaOnOpen) {
+      openProfileMediaOnOpen = false;
+      renderProfileMedia();
+      $('profile-media-grid').classList.remove('hidden');
     }
   } catch { $('profile-media-count').textContent = '0'; }
 }
@@ -1244,21 +1475,7 @@ $('chat-peer-box').addEventListener('click', () => {
   else openProfile();
 });
 $('btn-close-profile').addEventListener('click', () => $('profile-overlay').classList.add('hidden'));
-$('btn-profile-voice').addEventListener('click', () => {
-  const peer = profilePeer, name = $('profile-name').textContent;
-  $('profile-overlay').classList.add('hidden');
-  if (peer) startCall(peer, name, false);
-});
-$('btn-profile-video').addEventListener('click', () => {
-  const peer = profilePeer, name = $('profile-name').textContent;
-  $('profile-overlay').classList.add('hidden');
-  if (peer) startCall(peer, name, true);
-});
-$('btn-profile-search').addEventListener('click', () => {
-  $('profile-overlay').classList.add('hidden');
-  openChatSearch();
-});
-$('profile-media-row').addEventListener('click', () => {
+function toggleProfileMediaGrid() {
   const grid = $('profile-media-grid');
   if (grid.classList.contains('hidden')) {
     renderProfileMedia();
@@ -1266,7 +1483,11 @@ $('profile-media-row').addEventListener('click', () => {
   } else {
     grid.classList.add('hidden');
   }
-});
+}
+$('profile-media-row').addEventListener('click', toggleProfileMediaGrid);
+// Manage storage opens the same media grid — the total size is shown
+// on the row itself (computed from the chat-media metadata).
+$('profile-storage-row').addEventListener('click', toggleProfileMediaGrid);
 $('profile-mute-row').addEventListener('click', () => {
   if (!activeChat) return;
   const nowMuted = chatSettings && chatSettings.muted;
@@ -1278,6 +1499,162 @@ $('profile-disappearing-row').addEventListener('click', () => {
   $('profile-overlay').classList.add('hidden');
   $('menu-disappearing').click();
 });
+// Media visibility: per-chat auto-save override. Default follows the
+// global Settings toggle; On/Off override it either way.
+$('profile-visibility-row').addEventListener('click', () => {
+  const vis = chatSettings ? chatSettings.mediaVisibility : null;
+  document.querySelectorAll('#media-visibility-dialog .option-btn').forEach((b) => {
+    const v = b.dataset.vis;
+    b.classList.toggle('selected',
+      (v === 'default' && (vis === null || vis === undefined)) ||
+      (v === 'on' && vis === 1) || (v === 'off' && vis === 0));
+  });
+  $('media-visibility-dialog').classList.remove('hidden');
+});
+$('btn-visibility-cancel').addEventListener('click', () => $('media-visibility-dialog').classList.add('hidden'));
+document.querySelectorAll('#media-visibility-dialog .option-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (!activeChat) return;
+    const v = b.dataset.vis;
+    $('media-visibility-dialog').classList.add('hidden');
+    saveChatSettings({ mediaVisibility: v === 'default' ? null : (v === 'on' ? 1 : 0) },
+      v === 'default' ? 'Media visibility: follows the global setting'
+        : v === 'on' ? 'Photos and videos from this chat will be saved'
+        : 'Photos and videos from this chat will not be saved')
+      .then(updateProfileRows);
+  });
+});
+// Create group with this person: the New-group flow with them already
+// picked — more members can still be added before creating.
+$('profile-create-group-row').addEventListener('click', () => {
+  if (!profilePeer) return;
+  $('profile-overlay').classList.add('hidden');
+  showNewGroupDialog(profilePeer);
+});
+// Add this person to one of my groups.
+$('profile-add-to-groups-row').addEventListener('click', () => {
+  const box = $('add-to-group-list');
+  box.innerHTML = '';
+  if (!myGroups.length) {
+    box.innerHTML = '<div class="empty-note">You have no groups yet — create one first.</div>';
+  }
+  for (const g of myGroups) {
+    const already = (g.members || []).some((m) => m.phone === profilePeer);
+    const row = document.createElement('button');
+    row.className = 'profile-row';
+    row.type = 'button';
+    row.innerHTML = '<span class="profile-row-icon">👥</span><span class="profile-row-label">' + escapeHtml(g.name) + '</span><span>' + (already ? 'Member ✓' : '›') + '</span>';
+    if (!already) {
+      row.addEventListener('click', async () => {
+        try {
+          await api('/api/groups/' + g.id + '/members', { method: 'POST', body: JSON.stringify({ phones: [profilePeer] }) });
+          $('add-to-group-dialog').classList.add('hidden');
+          toast('Added to ' + g.name);
+          loadInbox();
+        } catch { toast("Couldn't add them — check your connection and try again"); }
+      });
+    }
+    box.appendChild(row);
+  }
+  $('add-to-group-dialog').classList.remove('hidden');
+});
+$('btn-add-to-group-close').addEventListener('click', () => $('add-to-group-dialog').classList.add('hidden'));
+
+// ---- chat lock (per-device PIN) -------------------------------------------
+// A locked chat is hidden from the inbox list. The lock lives on this
+// phone only (localStorage): the 4-digit PIN is a deterrent on a shared
+// device, not server security — the messages still exist on the server.
+const LOCK_PIN_KEY = 's19_chat_lock_pin';
+const LOCKED_CHATS_KEY = 's19_locked_chats';
+function getLockedChats() {
+  try { return JSON.parse(localStorage.getItem(LOCKED_CHATS_KEY) || '[]'); } catch { return []; }
+}
+function setLockedChats(list) {
+  try { localStorage.setItem(LOCKED_CHATS_KEY, JSON.stringify(list)); } catch { /* storage unavailable */ }
+}
+function isChatLocked(phone) { return getLockedChats().includes(phone); }
+function getLockPin() {
+  try { return localStorage.getItem(LOCK_PIN_KEY) || ''; } catch { return ''; }
+}
+// One PIN dialog for both flows: 'set' (PIN + repeat) and 'verify'.
+// Resolves with the typed PIN, or null on Cancel.
+let pinResolve = null;
+function showPinDialog(mode, message) {
+  return new Promise((resolve) => {
+    pinResolve = resolve;
+    $('pin-dialog-title').textContent = mode === 'set' ? 'Set a PIN' : 'Enter your PIN';
+    $('pin-dialog-message').textContent = message;
+    $('pin-dialog-input').value = '';
+    $('pin-dialog-confirm').value = '';
+    $('pin-dialog-confirm').classList.toggle('hidden', mode !== 'set');
+    $('pin-dialog').classList.remove('hidden');
+    $('pin-dialog-input').focus();
+  });
+}
+$('btn-pin-cancel').addEventListener('click', () => {
+  $('pin-dialog').classList.add('hidden');
+  if (pinResolve) { const r = pinResolve; pinResolve = null; r(null); }
+});
+$('btn-pin-ok').addEventListener('click', () => {
+  const pin = $('pin-dialog-input').value.trim();
+  const confirmPin = $('pin-dialog-confirm').value.trim();
+  const setting = !$('pin-dialog-confirm').classList.contains('hidden');
+  if (!/^\d{4}$/.test(pin)) { toast('Type a 4-digit PIN'); return; }
+  if (setting && pin !== confirmPin) { toast('The PINs do not match'); return; }
+  $('pin-dialog').classList.add('hidden');
+  if (pinResolve) { const r = pinResolve; pinResolve = null; r(pin); }
+});
+async function verifyLockPin(message) {
+  const pin = await showPinDialog('verify', message || 'Enter your 4-digit PIN to continue.');
+  if (pin === null) return false;
+  if (pin !== getLockPin()) { toast('Wrong PIN'); return false; }
+  return true;
+}
+async function lockChat(phone) {
+  if (!getLockPin()) {
+    const pin = await showPinDialog('set', 'Set a 4-digit PIN. You will need it to open locked chats.');
+    if (pin === null) return false;
+    try { localStorage.setItem(LOCK_PIN_KEY, pin); } catch { /* storage unavailable */ }
+  }
+  const list = getLockedChats();
+  if (!list.includes(phone)) { list.push(phone); setLockedChats(list); }
+  return true;
+}
+function unlockChat(phone) {
+  setLockedChats(getLockedChats().filter((p) => p !== phone));
+}
+$('profile-lock-row').addEventListener('click', async () => {
+  if (!profilePeer) return;
+  if (isChatLocked(profilePeer)) {
+    if (!(await verifyLockPin('Enter your PIN to unlock this chat.'))) return;
+    unlockChat(profilePeer);
+    toast('Chat unlocked');
+  } else {
+    if (!(await lockChat(profilePeer))) return;
+    toast('Chat locked and hidden from the inbox');
+    $('profile-overlay').classList.add('hidden');
+  }
+  updateProfileRows();
+  renderInbox();
+});
+function renderLockedChatsDialog() {
+  const box = $('locked-chats-list');
+  box.innerHTML = '';
+  for (const phone of getLockedChats()) {
+    const c = conversations.find((x) => x.phone === phone) || {};
+    const row = document.createElement('button');
+    row.className = 'profile-row';
+    row.type = 'button';
+    row.innerHTML = '<span class="profile-row-icon">🔒</span><span class="profile-row-label">' + escapeHtml(peerName(c) || displayId(phone)) + '</span><span>›</span>';
+    row.addEventListener('click', () => {
+      $('locked-chats-dialog').classList.add('hidden');
+      openChat(phone, c.name);
+    });
+    box.appendChild(row);
+  }
+  if (!box.children.length) box.innerHTML = '<div class="empty-note">No locked chats.</div>';
+}
+$('btn-locked-chats-close').addEventListener('click', () => $('locked-chats-dialog').classList.add('hidden'));
 
 // ---- In-chat search (from the profile's Search button) --------------------
 // Filters the loaded messages as you type; clearing restores the chat.
@@ -1580,8 +1957,16 @@ function markAutosaved(id) {
   } catch { /* storage full or unavailable — the in-memory cache still guards this session */ }
 }
 function maybeAutosave(m, url) {
-  if (!autosaveOn() || !m.id || m.sender === session.phone) return;
+  if (!m.id || m.sender === session.phone) return;
   if (m.media_kind !== 'image' && m.media_kind !== 'video') return;
+  // Per-chat override wins over the global toggle — but only for the
+  // 1-to-1 chat on screen (chatSettings belongs to it). Group chats,
+  // and anything rendered without settings, fall back to the global one.
+  let on = autosaveOn();
+  if (!m.group_id && chatSettings && chatSettings.mediaVisibility !== null && chatSettings.mediaVisibility !== undefined) {
+    on = chatSettings.mediaVisibility === 1;
+  }
+  if (!on) return;
   if (wasAutosaved(m.id)) return;
   markAutosaved(m.id);
   const a = document.createElement('a');
@@ -2778,19 +3163,49 @@ $('btn-send-post').addEventListener('click', async () => {
 async function loadAdmin() {
   if (!isAdminUser) return;
   try {
-    const [stats, users, channels, settings] = await Promise.all([
+    const [stats, users, channels, settings, reports] = await Promise.all([
       api('/api/admin/stats'),
       api('/api/admin/users'),
       api('/api/admin/channels'),
       api('/api/admin/settings'),
+      api('/api/admin/reports'),
     ]);
     $('admin-stat-users').textContent = bn(stats.users);
     $('admin-stat-messages').textContent = bn(stats.messages);
     $('admin-stat-calls').textContent = bn(stats.calls);
     renderAdminUsers(users.users || []);
     renderAdminChannels(channels.channels || []);
+    renderAdminReports(reports.reports || []);
     $('admin-banner-input').value = settings.banner || '';
   } catch { toast("Couldn't load admin info"); }
+}
+function renderAdminReports(reports) {
+  const list = $('admin-reports');
+  list.innerHTML = '';
+  if (!reports.length) {
+    list.innerHTML = '<div class="empty-note">No reports.</div>';
+    return;
+  }
+  for (const r of reports) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">⚠️</div>' +
+      '<div class="chat-row-body">' +
+        '<div class="chat-row-name">' + escapeHtml(r.reportedName || r.reported) + '</div>' +
+        '<div class="chat-row-msg">Reported by ' + escapeHtml(r.reporterName || r.reporter) +
+        (r.reason ? ' — ' + escapeHtml(r.reason) : '') + ' • ' + fmtDate(r.created_at) + '</div></div>' +
+      '<button class="btn-link" style="color:#D32F2F">Block</button>';
+    row.querySelector('.btn-link').addEventListener('click', async () => {
+      try {
+        await api('/api/admin/users/block', { method: 'POST', body: JSON.stringify({ phone: r.reported, blocked: true }) });
+        toast('Blocked ' + (r.reportedName || r.reported));
+        loadAdmin();
+      } catch (e) {
+        toast(e.message === 'cannot_block_admin' ? "You can't block an admin" : "Couldn't block");
+      }
+    });
+    list.appendChild(row);
+  }
 }
 function renderAdminUsers(users) {
   const list = $('admin-users');
