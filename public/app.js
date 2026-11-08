@@ -545,6 +545,7 @@ function switchTab(tab) {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   }
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  if (tab === 'chats') loadInbox(); // instant render from the saved inbox cache, then a background refresh
   if (tab === 'updates') loadUpdates();
   if (tab === 'calls') loadCallsTab();
   if (tab === 'tools') { renderMeter(); loadStorage(); }
@@ -579,6 +580,51 @@ let inboxRetryTimer = null;
 const INBOX_MAX_RETRIES = 3;
 const INBOX_RETRY_DELAY_MS = 3000;
 const INBOX_FETCH_TIMEOUT_MS = 30000;
+// Instant inbox: WhatsApp shows its saved chat list at once and
+// refreshes in the background. After every successful fetch the inbox
+// is saved to localStorage — only what the inbox renders (peer, name,
+// avatar, preview, time, unread, favorite, mute, missed-call flags;
+// groups the same way). On app open the saved list renders
+// immediately, before any network call.
+const INBOX_CACHE_KEY = 's19_inbox_cache';
+const INBOX_CACHE_MAX_ROWS = 100;
+let inboxCached = false; // the list on screen comes from the cache
+let inboxRefreshFailed = false; // background refresh failed while showing the cache
+let groupsLoaded = false;
+function saveInboxCache() {
+  try {
+    let prev = null;
+    try { prev = JSON.parse(localStorage.getItem(INBOX_CACHE_KEY) || 'null'); } catch {}
+    prev = prev || {};
+    const data = {
+      savedAt: Date.now(),
+      // Only the half that actually loaded this session is replaced,
+      // so a failed groups fetch never wipes the saved groups (and
+      // vice versa).
+      conversations: (inboxLoaded ? conversations : (prev.conversations || [])).slice(0, INBOX_CACHE_MAX_ROWS).map((c) => ({
+        phone: c.phone, name: c.name, avatar: c.avatar || '',
+        lastMessage: c.lastMessage || '', lastAt: c.lastAt || 0,
+        unread: c.unread || 0, favorite: c.favorite ? 1 : 0, muted: c.muted ? 1 : 0,
+        missedAt: c.missedAt || 0, missedVideo: c.missedVideo ? 1 : 0,
+      })),
+      groups: (groupsLoaded ? myGroups : (prev.groups || [])).slice(0, INBOX_CACHE_MAX_ROWS).map((g) => ({
+        id: g.id, name: g.name, lastMessage: g.lastMessage || '',
+        lastSenderName: g.lastSenderName || '', lastAt: g.lastAt || 0, unread: g.unread || 0,
+      })),
+    };
+    localStorage.setItem(INBOX_CACHE_KEY, JSON.stringify(data));
+  } catch { /* the cache is best-effort — storage full or blocked */ }
+}
+function restoreInboxCache() {
+  try {
+    const data = JSON.parse(localStorage.getItem(INBOX_CACHE_KEY) || 'null');
+    if (!data || !Array.isArray(data.conversations) || !Array.isArray(data.groups)) return false;
+    conversations = data.conversations;
+    myGroups = data.groups;
+    inboxCached = true;
+    return true;
+  } catch { return false; }
+}
 // One fetch at a time (the 3-second poll can overlap a retry), and a
 // fresh burst of up to 3 automatic retries, 3s apart, when the first
 // load fails — e.g. right after a deploy restarts the server, when the
@@ -586,21 +632,37 @@ const INBOX_FETCH_TIMEOUT_MS = 30000;
 // keeps trying in the background too, so the list recovers on its own
 // once the server is back.
 async function loadInbox() {
+  // Instant render: if we have never loaded fresh data this session,
+  // show the saved list at once — before any network call — exactly
+  // like WhatsApp. The fresh fetch below then replaces it.
+  if (!inboxLoaded && !inboxCached && restoreInboxCache()) {
+    inboxRefreshFailed = false;
+    renderInbox();
+  }
   if (!inboxLoading) {
-    if (!inboxLoaded && !inboxLoadFailed) renderInbox(); // "Loading chats…" while the first fetch is in flight
+    if (!inboxLoaded && !inboxCached && !inboxLoadFailed) renderInbox(); // "Loading chats…" while the first fetch is in flight
     inboxLoading = true;
     try {
       const r = await api('/api/conversations', { timeoutMs: INBOX_FETCH_TIMEOUT_MS });
       conversations = r.conversations || [];
       inboxLoaded = true;
+      inboxCached = false;
+      inboxRefreshFailed = false;
       inboxLoadFailed = false;
       inboxLoadAttempts = 0;
       if (inboxRetryTimer) { clearTimeout(inboxRetryTimer); inboxRetryTimer = null; }
+      saveInboxCache();
       renderInbox();
     } catch (e) {
       if (e && e.message === 'logged_out') return; // api() already logged out
       if (!inboxLoaded) {
-        if (inboxLoadAttempts < INBOX_MAX_RETRIES) {
+        if (inboxCached) {
+          // Keep the cached list on screen; only a small hint says
+          // the refresh failed. The 3-second poll keeps trying in
+          // the background, and the hint clears on the next success.
+          inboxRefreshFailed = true;
+          renderInbox();
+        } else if (inboxLoadAttempts < INBOX_MAX_RETRIES) {
           inboxLoadAttempts++;
           renderInbox(); // still "Loading chats…" — not failed yet
           if (!inboxRetryTimer) {
@@ -619,6 +681,8 @@ async function loadInbox() {
   try {
     const g = await api('/api/groups');
     myGroups = g.groups || [];
+    groupsLoaded = true;
+    saveInboxCache();
     renderInbox();
   } catch { /* offline — keep the last list on screen */ }
   try {
@@ -646,8 +710,10 @@ function renderInbox() {
   // Before the first successful load, never show the empty note: a
   // failed fetch is not an empty inbox. While the first fetch (and its
   // automatic retries) is still trying, show "Loading chats…"; once
-  // the retries are exhausted, show the tap-to-retry error row.
-  if (!inboxLoaded) {
+  // the retries are exhausted, show the tap-to-retry error row. When
+  // the list on screen comes from the cache, the rows below render
+  // from that cache through this same path.
+  if (!inboxLoaded && !inboxCached) {
     if (inboxLoadFailed) {
       list.innerHTML = '<div class="inbox-error" id="inbox-error">Couldn\'t load chats. Tap to retry.</div>';
       $('inbox-error').addEventListener('click', retryInboxLoad);
@@ -655,6 +721,14 @@ function renderInbox() {
       list.innerHTML = '<div class="inbox-loading">Loading chats…</div>';
     }
     return;
+  }
+  // Subtle non-blocking hint when the cached list could not be
+  // refreshed — the list itself stays exactly as saved.
+  if (inboxCached && inboxRefreshFailed) {
+    const hint = document.createElement('div');
+    hint.className = 'inbox-refresh-hint';
+    hint.textContent = "Couldn't refresh - showing saved chats.";
+    list.appendChild(hint);
   }
   // Locked chats are hidden from the list entirely (see the chat-lock
   // section) — they only surface through the "Locked chats" row below.
@@ -668,8 +742,15 @@ function renderInbox() {
     .map((g) => ({ kind: 'group', ...g }));
   let all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   if (favoritesOnly) all = all.filter((c) => c.kind === 'chat' && c.favorite);
-  if (!all.length) {
-    list.innerHTML = '<div class="empty-note">Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.</div>';
+  // The truly-empty note only appears after a successful load that
+  // returned zero chats (or a clean cached list that was empty when
+  // saved). A failed refresh never produces it — with a cached-empty
+  // list and a failed refresh, only the hint above shows.
+  if (!all.length && (inboxLoaded || !inboxRefreshFailed)) {
+    const note = document.createElement('div');
+    note.className = 'empty-note';
+    note.innerHTML = 'Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.';
+    list.appendChild(note);
   }
   for (const c of all) {
     if (c.kind === 'group') {
