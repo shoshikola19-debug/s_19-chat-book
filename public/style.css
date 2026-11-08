@@ -596,7 +596,7 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .status-viewer-name { font-size: 18px; font-weight: 700; margin-bottom: 18px; }
 .status-viewer-text { font-size: 26px; line-height: 1.6; word-break: break-word; }
 .dialog-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40;
+  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 65;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .dialog { background: #fff; border-radius: 14px; padding: 20px; width: 100%; max-width: 420px; }
