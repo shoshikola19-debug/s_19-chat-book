@@ -177,6 +177,8 @@ CREATE TABLE IF NOT EXISTS settings (
 --                 photos/videos: NULL = follow the global Settings
 --                 toggle, 1 = always auto-save, 0 = never auto-save.
 --   favorite      1 = this chat is in my Favorites (inbox filter chip).
+--   bubble_color  per-chat outgoing-bubble colour, '' = default green
+--                 (a #RRGGBB hex string when the user picked one).
 CREATE TABLE IF NOT EXISTS chat_settings (
   owner_phone TEXT NOT NULL,
   peer_phone TEXT NOT NULL,
@@ -187,6 +189,7 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   cleared_at INTEGER NOT NULL DEFAULT 0,
   media_visibility INTEGER,
   favorite INTEGER NOT NULL DEFAULT 0,
+  bubble_color TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (owner_phone, peer_phone)
 );
 -- Reports: a user reporting a peer to the admins (reason may be empty).
@@ -331,6 +334,7 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   cleared_at BIGINT NOT NULL DEFAULT 0,
   media_visibility INTEGER,
   favorite BOOLEAN NOT NULL DEFAULT FALSE,
+  bubble_color TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (owner_phone, peer_phone)
 );
 CREATE TABLE IF NOT EXISTS reports (
@@ -413,7 +417,8 @@ async function createDb({ dbPath }) {
     // every boot, fresh DBs already have them from the schema.
     await pool.query(`ALTER TABLE chat_settings
       ADD COLUMN IF NOT EXISTS media_visibility INTEGER,
-      ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE`);
+      ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS bubble_color TEXT NOT NULL DEFAULT ''`);
     // Idempotency key for media-upload retries (see db.js schema note).
     // NOTE: this index must ONLY be created here, AFTER the ALTER above
     // — never inside PG_SCHEMA. On an existing database the schema's
@@ -491,6 +496,7 @@ async function createDb({ dbPath }) {
   const csAdds = [
     ['media_visibility', 'INTEGER'],
     ['favorite', 'INTEGER NOT NULL DEFAULT 0'],
+    ['bubble_color', "TEXT NOT NULL DEFAULT ''"],
   ];
   for (const [col, def] of csAdds) {
     if (!csCols.includes(col)) db.exec(`ALTER TABLE chat_settings ADD COLUMN ${col} ${def}`);
