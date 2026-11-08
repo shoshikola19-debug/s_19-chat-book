@@ -251,6 +251,57 @@ function showScreen(id) {
   for (const s of SCREENS) $(s).classList.toggle('hidden', s !== id);
   if (id === 'screen-app') renderMeter();
 }
+
+// ---- Back navigation (Android / system back button) -----------------------
+// The app is a single page, so without history entries the system back
+// button exits the app from anywhere — even from inside a chat. Every
+// full-screen layer and modal dialog pushes ONE history entry when it
+// opens; a back press (popstate) closes only the topmost layer, one
+// press at a time. At the inbox the stack is empty, so back exits the
+// app as normal — no entry is ever pushed at load.
+// A layer closed programmatically (its action finished, or another
+// layer replaced it) is marked "dead" in the stack, but its history
+// entry stays put: the popstate handler skips dead entries by chaining
+// one more history.back(), so a dead entry never swallows a visible
+// back press. Closers must be idempotent — they can run twice.
+const backStack = []; // {id, close, dead} in open order, mirroring history
+function pushBackLayer(id, close) {
+  dismissBackLayer(id); // re-opening must not stack a second entry
+  history.pushState({ s19layer: id }, '');
+  backStack.push({ id, close, dead: false });
+}
+function dismissBackLayer(id) {
+  // Programmatic close: mark the entry dead (its history entry stays
+  // and is skipped by the popstate handler). It does NOT run the
+  // closer — the caller hides the layer itself. (Running the closer
+  // here would recurse, since closers call this to mark themselves.)
+  const e = backStack.find((x) => x.id === id);
+  if (!e) return false;
+  e.dead = true;
+  return true;
+}
+function goBackLayer(id) {
+  // In-app back / close button for layer `id`: let the system history
+  // do the closing when this layer is the top live one, so no stale
+  // entry remains. Otherwise dismiss it directly.
+  for (let i = backStack.length - 1; i >= 0; i--) {
+    const e = backStack[i];
+    if (e.dead) continue;
+    if (e.id === id) { history.back(); return; }
+    break;
+  }
+  dismissBackLayer(id);
+}
+window.addEventListener('popstate', () => {
+  if (!backStack.length) return; // at/below the base entry: exit as normal
+  const top = backStack.pop();
+  if (top.dead) { history.back(); return; } // skip it, keep going back
+  top.close();
+});
+// One-line closer for a plain overlay/dialog: hide the element and
+// mark its back layer dead. Used both as the registered closer (run by
+// popstate) and for programmatic closes.
+function hideLayer(elId) { $(elId).classList.add('hidden'); dismissBackLayer(elId); }
 function fillCountrySelect(selectEl, selectedDial) {
   const list = window.COUNTRIES || [['Bangladesh', '+880']];
   selectEl.innerHTML = '';
@@ -499,6 +550,11 @@ async function loadMyProfile() {
     renderMyProfile();
   } catch { /* offline — keep the session values on screen */ }
 }
+function closeSettings() {
+  $('settings-overlay').classList.add('hidden');
+  closeSettingsSubs();
+  dismissBackLayer('settings-overlay');
+}
 function openSettings() {
   if (!myProfile) return;
   $('settings-avatar').innerHTML = avatarHtml(myProfile.name, myProfile.phone, myProfile.avatar);
@@ -508,6 +564,7 @@ function openSettings() {
   renderAutosaveRow();
   renderPhotoGuardRow();
   $('settings-overlay').classList.remove('hidden');
+  pushBackLayer('settings-overlay', closeSettings);
 }
 // Inbox header gear: opens Settings directly (the old ⋮ menu only
 // ever held Settings, so nothing is lost by removing it).
@@ -531,7 +588,7 @@ $('file-camera').addEventListener('change', (e) => {
     b.type = 'button';
     b.innerHTML = '<b>' + escapeHtml(label) + '</b>' + (sub ? '<br><small>' + escapeHtml(sub) + '</small>' : '');
     b.addEventListener('click', () => {
-      $('send-photo-dialog').classList.add('hidden');
+      hideLayer('send-photo-dialog');
       onPick();
     });
     list.appendChild(b);
@@ -550,13 +607,14 @@ $('file-camera').addEventListener('change', (e) => {
     list.innerHTML = '<div class="empty-note">Add a friend first, then take a photo to send them.</div>';
   }
   $('send-photo-dialog').classList.remove('hidden');
+  pushBackLayer('send-photo-dialog', () => hideLayer('send-photo-dialog'));
 });
 $('btn-send-photo-cancel').addEventListener('click', () => {
-  $('send-photo-dialog').classList.add('hidden');
   pendingCameraFile = null;
+  goBackLayer('send-photo-dialog');
 });
 $('tools-profile-card').addEventListener('click', openSettings);
-$('btn-close-settings').addEventListener('click', () => $('settings-overlay').classList.add('hidden'));
+$('btn-close-settings').addEventListener('click', () => goBackLayer('settings-overlay'));
 // Tapping your own photo opens the guarded viewer; tapping the 📷
 // badge (or the photo, when none is set yet) opens the picker to
 // change it. The global avatar-tap handler below skips this wrap.
@@ -589,11 +647,12 @@ function openEditField(kind) {
   input.maxLength = isName ? 60 : 140;
   input.placeholder = isName ? 'Your name' : 'Current mood…';
   $('edit-field-dialog').classList.remove('hidden');
+  pushBackLayer('edit-field-dialog', () => hideLayer('edit-field-dialog'));
   input.focus();
 }
 $('settings-name-row').addEventListener('click', () => openEditField('name'));
 $('settings-about-row').addEventListener('click', () => openEditField('about'));
-$('btn-edit-field-cancel').addEventListener('click', () => $('edit-field-dialog').classList.add('hidden'));
+$('btn-edit-field-cancel').addEventListener('click', () => goBackLayer('edit-field-dialog'));
 $('btn-edit-field-save').addEventListener('click', async () => {
   const v = $('edit-field-input').value.trim();
   if (editFieldKind === 'name' && !v) { toast('Please enter a name'); return; }
@@ -602,7 +661,7 @@ $('btn-edit-field-save').addEventListener('click', async () => {
     body[editFieldKind] = v;
     myProfile = await api('/api/profile', { method: 'POST', body: JSON.stringify(body) });
     renderMyProfile();
-    $('edit-field-dialog').classList.add('hidden');
+    hideLayer('edit-field-dialog');
     openSettings();
     toast(editFieldKind === 'name' ? 'Name updated' : 'About updated');
   } catch { toast("Couldn't save — check your connection and try again"); }
@@ -948,6 +1007,7 @@ function renderInbox() {
       if (!(await verifyLockPin('Enter your PIN to see your locked chats.'))) return;
       renderLockedChatsDialog();
       $('locked-chats-dialog').classList.remove('hidden');
+      pushBackLayer('locked-chats-dialog', () => hideLayer('locked-chats-dialog'));
     });
     list.appendChild(row);
   }
@@ -1028,11 +1088,12 @@ $('btn-add-contact').addEventListener('click', () => {
   $('add-email-input').value = '';
   $('add-contact-error').classList.add('hidden');
   $('add-contact-dialog').classList.remove('hidden');
+  pushBackLayer('add-contact-dialog', () => hideLayer('add-contact-dialog'));
 });
 $('add-country-select').addEventListener('change', () => {
   $('add-dial-prefix').textContent = $('add-country-select').value;
 });
-$('btn-cancel-add').addEventListener('click', () => $('add-contact-dialog').classList.add('hidden'));
+$('btn-cancel-add').addEventListener('click', () => goBackLayer('add-contact-dialog'));
 $('btn-confirm-add').addEventListener('click', async () => {
   let body;
   if (addMethod === 'email') {
@@ -1055,7 +1116,7 @@ $('btn-confirm-add').addEventListener('click', async () => {
   }
   try {
     const r = await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
-    $('add-contact-dialog').classList.add('hidden');
+    hideLayer('add-contact-dialog');
     await loadInbox();
     openChat(r.contact.phone, r.contact.name);
   } catch (e) {
@@ -1096,6 +1157,7 @@ function openChat(phone, name) {
   $('emoji-panel').classList.add('hidden');
   updateBlockedNote();
   showScreen('screen-chat');
+  pushBackLayer('chat', closeChat);
   updateMicSend();
   fetchChatMessages();
   loadChatSettings();
@@ -1139,6 +1201,7 @@ function openGroup(id, name) {
   $('btn-emoji').disabled = false;
   $('btn-call-peer').disabled = false;
   showScreen('screen-chat');
+  pushBackLayer('chat', closeChat);
   updateMicSend();
   fetchGroupMessages();
   loadGroupInfo();
@@ -1195,7 +1258,7 @@ function applyTicks(ticks) {
 // New-group dialog, shared by the + button and the profile's
 // "Create group with <Name>" row (which pre-selects that person).
 function showNewGroupDialog(preselectPhone) {
-  $('add-contact-dialog').classList.add('hidden');
+  hideLayer('add-contact-dialog');
   $('new-group-name').value = '';
   $('new-group-error').classList.add('hidden');
   const list = $('new-group-members');
@@ -1211,9 +1274,10 @@ function showNewGroupDialog(preselectPhone) {
     list.appendChild(label);
   }
   $('new-group-dialog').classList.remove('hidden');
+  pushBackLayer('new-group-dialog', () => hideLayer('new-group-dialog'));
 }
 $('btn-new-group').addEventListener('click', () => showNewGroupDialog());
-$('btn-cancel-group').addEventListener('click', () => $('new-group-dialog').classList.add('hidden'));
+$('btn-cancel-group').addEventListener('click', () => goBackLayer('new-group-dialog'));
 $('btn-confirm-group').addEventListener('click', async () => {
   const name = $('new-group-name').value.trim();
   const phones = [...document.querySelectorAll('#new-group-members input:checked')].map((i) => i.value);
@@ -1229,7 +1293,7 @@ $('btn-confirm-group').addEventListener('click', async () => {
   }
   try {
     const r = await api('/api/groups', { method: 'POST', body: JSON.stringify({ name, members: phones }) });
-    $('new-group-dialog').classList.add('hidden');
+    hideLayer('new-group-dialog');
     await loadInbox();
     openGroup(r.group.id, r.group.name);
   } catch {
@@ -1247,6 +1311,7 @@ async function openGroupInfo() {
     groupInfo = r.group;
     renderGroupInfo();
     $('group-info-overlay').classList.remove('hidden');
+    pushBackLayer('group-info-overlay', () => hideLayer('group-info-overlay'));
   } catch { toast("Couldn't load the group info"); }
 }
 function renderGroupInfo() {
@@ -1285,7 +1350,7 @@ async function loadGroups() {
     renderInbox();
   } catch { /* offline */ }
 }
-$('btn-close-group-info').addEventListener('click', () => $('group-info-overlay').classList.add('hidden'));
+$('btn-close-group-info').addEventListener('click', () => goBackLayer('group-info-overlay'));
 $('btn-group-add-member').addEventListener('click', () => {
   if (!activeGroup || !groupInfo) return;
   const inGroup = new Set((groupInfo.members || []).map((m) => m.phone));
@@ -1302,14 +1367,15 @@ $('btn-group-add-member').addEventListener('click', () => {
     list.appendChild(label);
   }
   $('add-group-members-dialog').classList.remove('hidden');
+  pushBackLayer('add-group-members-dialog', () => hideLayer('add-group-members-dialog'));
 });
-$('btn-cancel-add-members').addEventListener('click', () => $('add-group-members-dialog').classList.add('hidden'));
+$('btn-cancel-add-members').addEventListener('click', () => goBackLayer('add-group-members-dialog'));
 $('btn-confirm-add-members').addEventListener('click', async () => {
   const phones = [...document.querySelectorAll('#add-group-members-list input:checked')].map((i) => i.value);
-  if (!phones.length) { $('add-group-members-dialog').classList.add('hidden'); return; }
+  if (!phones.length) { hideLayer('add-group-members-dialog'); return; }
   try {
     await api('/api/groups/' + activeGroup + '/members', { method: 'POST', body: JSON.stringify({ phones }) });
-    $('add-group-members-dialog').classList.add('hidden');
+    hideLayer('add-group-members-dialog');
     toast('Members added');
     openGroupInfo();
     loadGroups();
@@ -1320,11 +1386,10 @@ $('btn-group-leave').addEventListener('click', async () => {
   if (!confirm('Leave this group?')) return;
   try {
     await api('/api/groups/' + activeGroup + '/leave', { method: 'POST' });
+    dismissBackLayer('group-info-overlay');
     $('group-info-overlay').classList.add('hidden');
-    activeGroup = null;
-    groupInfo = null;
-    showScreen('screen-app');
-    loadInbox();
+    dismissBackLayer('chat');
+    closeChat();
     toast('You left the group');
   } catch { toast("Couldn't leave the group"); }
 });
@@ -1395,13 +1460,16 @@ function updateBlockedNote() {
   $('btn-emoji').disabled = disabled;
   $('btn-call-peer').disabled = disabled;
 }
-$('btn-back-chats').addEventListener('click', () => {
+// Back from a chat goes to the chats list, one step at a time —
+// never straight out of the app (see the back-navigation block above).
+function closeChat() {
   activeChat = null;
   activeGroup = null;
   groupInfo = null;
   showScreen('screen-app');
   loadInbox();
-});
+}
+$('btn-back-chats').addEventListener('click', () => goBackLayer('chat'));
 
 // The menu has two views: the main list and the "More ▸" submenu.
 // It always opens on the main view — the submenu is only reached by
@@ -1454,13 +1522,14 @@ $('menu-disappearing').addEventListener('click', () => {
     b.classList.toggle('selected', Number(b.dataset.disappearing) === (chatSettings ? chatSettings.disappearing : 0));
   });
   $('disappearing-dialog').classList.remove('hidden');
+  pushBackLayer('disappearing-dialog', () => hideLayer('disappearing-dialog'));
 });
-$('btn-disappearing-cancel').addEventListener('click', () => $('disappearing-dialog').classList.add('hidden'));
+$('btn-disappearing-cancel').addEventListener('click', () => goBackLayer('disappearing-dialog'));
 document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
   b.addEventListener('click', () => {
     if (!activeChat) return;
     const secs = Number(b.dataset.disappearing);
-    $('disappearing-dialog').classList.add('hidden');
+    hideLayer('disappearing-dialog');
     saveChatSettings({ disappearing: secs },
       secs === 0 ? 'Disappearing messages turned off' : 'Disappearing messages on — messages will delete after ' + disappearLabel(secs));
   });
@@ -1498,12 +1567,13 @@ $('menu-report').addEventListener('click', () => {
   $('report-dialog-title').textContent = 'Report ' + ($('chat-peer-name').textContent || displayId(activeChat));
   $('report-reason').value = '';
   $('report-dialog').classList.remove('hidden');
+  pushBackLayer('report-dialog', () => hideLayer('report-dialog'));
 });
-$('btn-report-cancel').addEventListener('click', () => $('report-dialog').classList.add('hidden'));
+$('btn-report-cancel').addEventListener('click', () => goBackLayer('report-dialog'));
 $('btn-report-submit').addEventListener('click', async () => {
   if (!activeChat) return;
   const reason = $('report-reason').value.trim();
-  $('report-dialog').classList.add('hidden');
+  hideLayer('report-dialog');
   try {
     await api('/api/report', { method: 'POST', body: JSON.stringify({ peer: activeChat, reason }) });
     toast('Reported — an admin will review it');
@@ -1528,7 +1598,7 @@ $('menu-starred').addEventListener('click', () => {
   openStarred();
 });
 $('profile-starred-row').addEventListener('click', () => {
-  $('profile-overlay').classList.add('hidden');
+  hideLayer('profile-overlay');
   openStarred();
 });
 
@@ -1539,6 +1609,12 @@ function openForward(m) {
   forwardTarget = m;
   renderForwardList();
   $('forward-dialog').classList.remove('hidden');
+  pushBackLayer('forward-dialog', closeForward);
+}
+function closeForward() {
+  $('forward-dialog').classList.add('hidden');
+  forwardTarget = null;
+  dismissBackLayer('forward-dialog');
 }
 function renderForwardList() {
   const list = $('forward-list');
@@ -1573,9 +1649,8 @@ async function doForward(selected) {
     const [kind, val] = k.split(':');
     return kind === 'group' ? { groupId: Number(val) } : { to: val };
   });
-  $('forward-dialog').classList.add('hidden');
   const target = forwardTarget;
-  forwardTarget = null;
+  closeForward();
   try {
     const r = await api('/api/messages/' + target.id + '/forward', { method: 'POST', body: JSON.stringify({ targets }) });
     toast('Forwarded to ' + bn(r.messages.length) + ' chat' + (r.messages.length === 1 ? '' : 's'));
@@ -1584,8 +1659,8 @@ async function doForward(selected) {
     toast(e.message === 'view_once' ? "View-once photos can't be forwarded" : "Couldn't forward — check your connection and try again");
   }
 }
-$('btn-forward-cancel').addEventListener('click', () => { $('forward-dialog').classList.add('hidden'); forwardTarget = null; });
-$('forward-dialog').addEventListener('click', (e) => { if (e.target.id === 'forward-dialog') { $('forward-dialog').classList.add('hidden'); forwardTarget = null; } });
+$('btn-forward-cancel').addEventListener('click', () => goBackLayer('forward-dialog'));
+$('forward-dialog').addEventListener('click', (e) => { if (e.target.id === 'forward-dialog') goBackLayer('forward-dialog'); });
 
 // ---- share button on a photo/video bubble ---------------------------------
 // The ⤴ button sits on the media itself (bottom-right), so sharing a
@@ -1609,15 +1684,17 @@ function openMediaShare(m) {
   if (!m || m.view_once || m.deleted_for_all) return;
   mediaShareTarget = m;
   $('media-share-dialog').classList.remove('hidden');
+  pushBackLayer('media-share-dialog', closeMediaShare);
 }
 function closeMediaShare() {
   $('media-share-dialog').classList.add('hidden');
   mediaShareTarget = null;
+  dismissBackLayer('media-share-dialog');
 }
 $('btn-share-to-chat').addEventListener('click', () => { const m = mediaShareTarget; closeMediaShare(); if (m) openForward(m); });
 $('btn-share-outside').addEventListener('click', () => { const m = mediaShareTarget; closeMediaShare(); if (m) shareOutside(m); });
-$('btn-media-share-cancel').addEventListener('click', closeMediaShare);
-$('media-share-dialog').addEventListener('click', (e) => { if (e.target.id === 'media-share-dialog') closeMediaShare(); });
+$('btn-media-share-cancel').addEventListener('click', () => goBackLayer('media-share-dialog'));
+$('media-share-dialog').addEventListener('click', (e) => { if (e.target.id === 'media-share-dialog') goBackLayer('media-share-dialog'); });
 
 function downloadBlob(blob, name) {
   const url = URL.createObjectURL(blob);
@@ -1672,6 +1749,7 @@ async function shareOutside(m) {
 // is loaded (the chat view holds the recent history).
 async function openStarred() {
   $('starred-overlay').classList.remove('hidden');
+  pushBackLayer('starred-overlay', () => hideLayer('starred-overlay'));
   const list = $('starred-list');
   list.innerHTML = '<div class="empty-note">Loading…</div>';
   try {
@@ -1693,7 +1771,7 @@ async function openStarred() {
       row.innerHTML = '<div class="starred-row-body">⭐ ' + escapeHtml(text) + '</div>' +
         '<div class="starred-row-meta">' + escapeHtml(who) + ' • ' + fmtDateLong(m.created_at) + ' ' + fmtTime(m.created_at) + '</div>';
       row.addEventListener('click', () => {
-        $('starred-overlay').classList.add('hidden');
+        hideLayer('starred-overlay');
         jumpToMessage(m.id);
       });
       list.appendChild(row);
@@ -1702,7 +1780,7 @@ async function openStarred() {
     list.innerHTML = '<div class="empty-note">Couldn\'t load starred messages.</div>';
   }
 }
-$('btn-close-starred').addEventListener('click', () => $('starred-overlay').classList.add('hidden'));
+$('btn-close-starred').addEventListener('click', () => goBackLayer('starred-overlay'));
 
 // ---- export chat (menu: More ▸ Export chat) --------------------------------
 // Downloads the whole 1-to-1 history as a .txt transcript, one line per
@@ -1993,13 +2071,14 @@ function openThemeOverlay() {
   $('theme-bubble-section').classList.remove('hidden');
   $('theme-ai-section').classList.add('hidden');
   $('theme-overlay').classList.remove('hidden');
+  pushBackLayer('theme-overlay', () => hideLayer('theme-overlay'));
 }
 $('menu-chat-theme').addEventListener('click', () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
   openThemeOverlay();
 });
-$('btn-close-theme').addEventListener('click', () => $('theme-overlay').classList.add('hidden'));
+$('btn-close-theme').addEventListener('click', () => goBackLayer('theme-overlay'));
 $('theme-tab-bubble').addEventListener('click', () => {
   $('theme-bubble-section').classList.remove('hidden');
   $('theme-ai-section').classList.add('hidden');
@@ -2017,11 +2096,16 @@ $('btn-theme-default').addEventListener('click', () => {
   if (!activeChat) return;
   try { localStorage.removeItem(chatPhotoKey(activeChat)); } catch {}
   try { localStorage.removeItem(chatDimKey(activeChat)); } catch {}
-  $('theme-overlay').classList.add('hidden');
+  hideLayer('theme-overlay');
   saveChatSettings({ chatTheme: '', bubbleColor: '' }, 'Default theme set');
 });
 // ---- Wallpaper screen ----
 let wallpaperReturnToTheme = false;
+function closeWallpaperOverlay() {
+  $('wallpaper-overlay').classList.add('hidden');
+  if (wallpaperReturnToTheme) $('theme-overlay').classList.remove('hidden');
+  dismissBackLayer('wallpaper-overlay');
+}
 function openWallpaperOverlay(fromTheme) {
   wallpaperReturnToTheme = !!fromTheme;
   renderThemeCards();
@@ -2029,11 +2113,9 @@ function openWallpaperOverlay(fromTheme) {
   $('wp-color-section').classList.add('hidden');
   $('wp-ai-section').classList.add('hidden');
   $('wallpaper-overlay').classList.remove('hidden');
+  pushBackLayer('wallpaper-overlay', closeWallpaperOverlay);
 }
-$('btn-close-wallpaper').addEventListener('click', () => {
-  $('wallpaper-overlay').classList.add('hidden');
-  if (wallpaperReturnToTheme) $('theme-overlay').classList.remove('hidden');
-});
+$('btn-close-wallpaper').addEventListener('click', () => goBackLayer('wallpaper-overlay'));
 $('wp-tab-gallery').addEventListener('click', () => $('chat-bg-input').click());
 $('wp-tab-color').addEventListener('click', () => {
   $('wp-ai-section').classList.add('hidden');
@@ -2093,6 +2175,7 @@ function openWallpaperPreview(src, bubble, from) {
   $('wallpaper-overlay').classList.add('hidden');
   $('theme-overlay').classList.add('hidden');
   $('wallpaper-preview').classList.remove('hidden');
+  pushBackLayer('wallpaper-preview', closeWallpaperPreview);
   renderPreviewWall();
 }
 function closeWallpaperPreview() {
@@ -2101,8 +2184,9 @@ function closeWallpaperPreview() {
   previewState = null;
   if (from === 'theme') $('theme-overlay').classList.remove('hidden');
   else $('wallpaper-overlay').classList.remove('hidden');
+  dismissBackLayer('wallpaper-preview');
 }
-$('btn-preview-back').addEventListener('click', closeWallpaperPreview);
+$('btn-preview-back').addEventListener('click', () => goBackLayer('wallpaper-preview'));
 $('btn-preview-done').addEventListener('click', () => {
   if (!activeChat || !previewState) return;
   const st = previewState;
@@ -2118,6 +2202,11 @@ $('btn-preview-done').addEventListener('click', () => {
   const patch = {};
   if (st.bubble !== currentBubbleColor()) patch.bubbleColor = st.bubble;
   if (chatSettings && chatSettings.chatTheme) patch.chatTheme = '';
+  // Done goes straight back to the chat — the theme/wallpaper screens
+  // it came from are not reshown, so their layers die here too.
+  dismissBackLayer('wallpaper-preview');
+  dismissBackLayer('wallpaper-overlay');
+  dismissBackLayer('theme-overlay');
   $('wallpaper-preview').classList.add('hidden');
   previewState = null;
   if (Object.keys(patch).length) saveChatSettings(patch, 'Theme set');
@@ -2265,7 +2354,7 @@ function renderProfileGroups() {
     row.type = 'button';
     row.innerHTML = '<span class="profile-row-icon">' + USERS_SVG + '</span><span class="profile-row-label">' + escapeHtml(g.name) + '</span><span>›</span>';
     row.addEventListener('click', () => {
-      $('profile-overlay').classList.add('hidden');
+      hideLayer('profile-overlay');
       openGroup(g.id, g.name);
     });
     list.appendChild(row);
@@ -2290,6 +2379,7 @@ async function openProfile() {
   renderProfileGroups();
   updateProfileRows();
   $('profile-overlay').classList.remove('hidden');
+  pushBackLayer('profile-overlay', () => hideLayer('profile-overlay'));
   try {
     if (!chatSettings) {
       chatSettings = await api('/api/chat-settings?with=' + encodeURIComponent(activeChat));
@@ -2356,7 +2446,7 @@ $('chat-peer-box').addEventListener('click', () => {
   if (activeGroup) openGroupInfo();
   else openProfile();
 });
-$('btn-close-profile').addEventListener('click', () => $('profile-overlay').classList.add('hidden'));
+$('btn-close-profile').addEventListener('click', () => goBackLayer('profile-overlay'));
 function toggleProfileMediaGrid() {
   const grid = $('profile-media-grid');
   if (grid.classList.contains('hidden')) {
@@ -2392,8 +2482,9 @@ $('profile-storage-row').addEventListener('click', () => {
   tot.innerHTML = '<b>Total</b> <span><b>' + fmtBytes(total) + '</b></span>';
   box.appendChild(tot);
   $('manage-storage-dialog').classList.remove('hidden');
+  pushBackLayer('manage-storage-dialog', () => hideLayer('manage-storage-dialog'));
 });
-$('btn-manage-storage-close').addEventListener('click', () => $('manage-storage-dialog').classList.add('hidden'));
+$('btn-manage-storage-close').addEventListener('click', () => goBackLayer('manage-storage-dialog'));
 $('profile-mute-row').addEventListener('click', () => {
   if (!activeChat) return;
   const nowMuted = chatSettings && chatSettings.muted;
@@ -2402,7 +2493,7 @@ $('profile-mute-row').addEventListener('click', () => {
     .then(updateProfileRows);
 });
 $('profile-disappearing-row').addEventListener('click', () => {
-  $('profile-overlay').classList.add('hidden');
+  hideLayer('profile-overlay');
   $('menu-disappearing').click();
 });
 // Media visibility: per-chat auto-save override. Default follows the
@@ -2416,13 +2507,14 @@ $('profile-visibility-row').addEventListener('click', () => {
       (v === 'on' && vis === 1) || (v === 'off' && vis === 0));
   });
   $('media-visibility-dialog').classList.remove('hidden');
+  pushBackLayer('media-visibility-dialog', () => hideLayer('media-visibility-dialog'));
 });
-$('btn-visibility-cancel').addEventListener('click', () => $('media-visibility-dialog').classList.add('hidden'));
+$('btn-visibility-cancel').addEventListener('click', () => goBackLayer('media-visibility-dialog'));
 document.querySelectorAll('#media-visibility-dialog .option-btn').forEach((b) => {
   b.addEventListener('click', () => {
     if (!activeChat) return;
     const v = b.dataset.vis;
-    $('media-visibility-dialog').classList.add('hidden');
+    hideLayer('media-visibility-dialog');
     saveChatSettings({ mediaVisibility: v === 'default' ? null : (v === 'on' ? 1 : 0) },
       v === 'default' ? 'Media visibility: follows the global setting'
         : v === 'on' ? 'Photos and videos from this chat will be saved'
@@ -2434,7 +2526,7 @@ document.querySelectorAll('#media-visibility-dialog .option-btn').forEach((b) =>
 // picked — more members can still be added before creating.
 $('profile-create-group-row').addEventListener('click', () => {
   if (!profilePeer) return;
-  $('profile-overlay').classList.add('hidden');
+  hideLayer('profile-overlay');
   showNewGroupDialog(profilePeer);
 });
 // Add this person to one of my groups.
@@ -2454,7 +2546,7 @@ $('profile-add-to-groups-row').addEventListener('click', () => {
       row.addEventListener('click', async () => {
         try {
           await api('/api/groups/' + g.id + '/members', { method: 'POST', body: JSON.stringify({ phones: [profilePeer] }) });
-          $('add-to-group-dialog').classList.add('hidden');
+          hideLayer('add-to-group-dialog');
           toast('Added to ' + g.name);
           loadInbox();
         } catch { toast("Couldn't add them — check your connection and try again"); }
@@ -2463,8 +2555,9 @@ $('profile-add-to-groups-row').addEventListener('click', () => {
     box.appendChild(row);
   }
   $('add-to-group-dialog').classList.remove('hidden');
+  pushBackLayer('add-to-group-dialog', () => hideLayer('add-to-group-dialog'));
 });
-$('btn-add-to-group-close').addEventListener('click', () => $('add-to-group-dialog').classList.add('hidden'));
+$('btn-add-to-group-close').addEventListener('click', () => goBackLayer('add-to-group-dialog'));
 
 // ---- chat lock (per-device PIN) -------------------------------------------
 // A locked chat is hidden from the inbox list. The lock lives on this
@@ -2485,6 +2578,13 @@ function getLockPin() {
 // One PIN dialog for both flows: 'set' (PIN + repeat) and 'verify'.
 // Resolves with the typed PIN, or null on Cancel.
 let pinResolve = null;
+// Closing the PIN dialog without a PIN counts as cancelling the flow:
+// the pending promise resolves with null.
+function cancelPinDialog() {
+  $('pin-dialog').classList.add('hidden');
+  if (pinResolve) { const r = pinResolve; pinResolve = null; r(null); }
+  dismissBackLayer('pin-dialog');
+}
 function showPinDialog(mode, message) {
   return new Promise((resolve) => {
     pinResolve = resolve;
@@ -2494,20 +2594,18 @@ function showPinDialog(mode, message) {
     $('pin-dialog-confirm').value = '';
     $('pin-dialog-confirm').classList.toggle('hidden', mode !== 'set');
     $('pin-dialog').classList.remove('hidden');
+    pushBackLayer('pin-dialog', cancelPinDialog);
     $('pin-dialog-input').focus();
   });
 }
-$('btn-pin-cancel').addEventListener('click', () => {
-  $('pin-dialog').classList.add('hidden');
-  if (pinResolve) { const r = pinResolve; pinResolve = null; r(null); }
-});
+$('btn-pin-cancel').addEventListener('click', () => goBackLayer('pin-dialog'));
 $('btn-pin-ok').addEventListener('click', () => {
   const pin = $('pin-dialog-input').value.trim();
   const confirmPin = $('pin-dialog-confirm').value.trim();
   const setting = !$('pin-dialog-confirm').classList.contains('hidden');
   if (!/^\d{4}$/.test(pin)) { toast('Type a 4-digit PIN'); return; }
   if (setting && pin !== confirmPin) { toast('The PINs do not match'); return; }
-  $('pin-dialog').classList.add('hidden');
+  hideLayer('pin-dialog');
   if (pinResolve) { const r = pinResolve; pinResolve = null; r(pin); }
 });
 async function verifyLockPin(message) {
@@ -2538,7 +2636,7 @@ $('profile-lock-row').addEventListener('click', async () => {
   } else {
     if (!(await lockChat(profilePeer))) return;
     toast('Chat locked and hidden from the inbox');
-    $('profile-overlay').classList.add('hidden');
+    hideLayer('profile-overlay');
   }
   updateProfileRows();
   renderInbox();
@@ -2553,14 +2651,14 @@ function renderLockedChatsDialog() {
     row.type = 'button';
     row.innerHTML = '<span class="profile-row-icon">🔒</span><span class="profile-row-label">' + escapeHtml(peerName(c) || displayId(phone)) + '</span><span>›</span>';
     row.addEventListener('click', () => {
-      $('locked-chats-dialog').classList.add('hidden');
+      hideLayer('locked-chats-dialog');
       openChat(phone, c.name);
     });
     box.appendChild(row);
   }
   if (!box.children.length) box.innerHTML = '<div class="empty-note">No locked chats.</div>';
 }
-$('btn-locked-chats-close').addEventListener('click', () => $('locked-chats-dialog').classList.add('hidden'));
+$('btn-locked-chats-close').addEventListener('click', () => goBackLayer('locked-chats-dialog'));
 
 // ---- In-chat search (from the profile's Search button) --------------------
 // Filters the loaded messages as you type; clearing restores the chat.
@@ -2740,16 +2838,41 @@ const chatMsgById = new Map(); // server id -> last message object on screen (fo
 let deleteTarget = null; // message row the delete dialog is about
 // Long-press (~500 ms) or right-click a bubble opens the message
 // action sheet (reply / react / forward / star / edit / delete).
-// A quick swipe right on a bubble replies to it, like WhatsApp.
+// A quick swipe right on a bubble replies to it, like WhatsApp — and
+// the bubble VISIBLY slides right under the finger while a ↩️ badge
+// fades in at its left edge (a fixed badge, positioned once at drag
+// start, so it stays in the space the bubble vacates instead of
+// sliding along with it).
+let swipeIc = null; // shared fixed ↩️ badge, created lazily
+function getSwipeIc() {
+  if (!swipeIc) {
+    swipeIc = document.createElement('div');
+    swipeIc.className = 'swipe-reply-ic';
+    swipeIc.setAttribute('aria-hidden', 'true');
+    swipeIc.textContent = '↩️';
+    document.body.appendChild(swipeIc);
+  }
+  return swipeIc;
+}
 function attachDeleteHandlers(div, m) {
   if (!m.id) return;
   let pressTimer = null;
   let swipeStart = null;
   let swipeDone = false;
+  let swipeRect = null; // bubble rect at drag start (before any transform)
+  const resetSwipeVisual = () => {
+    div.classList.remove('msg-swiping');
+    div.style.transform = '';
+    if (swipeIc) swipeIc.style.opacity = '0';
+  };
   div.addEventListener('pointerdown', (e) => {
     clearTimeout(pressTimer);
     swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
     swipeDone = false;
+    resetSwipeVisual();
+    // Capture the bubble's rect BEFORE any transform, so the ↩️ badge
+    // stays at the bubble's original left edge while it slides away.
+    swipeRect = div.getBoundingClientRect();
     pressTimer = setTimeout(() => { pressTimer = null; openMsgActions(m); }, 500);
   });
   // Swipe right to reply: detect it DURING the move, not only at
@@ -2762,14 +2885,30 @@ function attachDeleteHandlers(div, m) {
     if (!swipeStart || swipeDone || pressTimer === null) return;
     const dx = e.clientX - swipeStart.x;
     const dy = e.clientY - swipeStart.y;
-    if (dx > 60 && Math.abs(dy) < 40) {
-      clearTimeout(pressTimer);
-      swipeDone = true;
-      swipeStart = null;
-      startReply(m);
-    } else if (Math.abs(dy) > 40 || dx < -20) {
+    if (Math.abs(dy) > 40 || dx < -20) {
       clearTimeout(pressTimer);
       pressTimer = null;
+      resetSwipeVisual();
+      return;
+    }
+    if (dx > 0 && Math.abs(dy) < 40) {
+      // Slide the bubble with the finger (clamped at 72px) and fade
+      // the ↩️ badge in at the bubble's original left edge.
+      const shown = Math.min(dx, 72);
+      div.classList.add('msg-swiping');
+      div.style.transform = 'translateX(' + shown + 'px)';
+      const ic = getSwipeIc();
+      const r = swipeRect || div.getBoundingClientRect();
+      ic.style.left = Math.max(4, r.left - 36) + 'px';
+      ic.style.top = (r.top + r.height / 2 - 14) + 'px';
+      ic.style.opacity = String(Math.min(1, dx / 60));
+      if (dx > 60) {
+        clearTimeout(pressTimer);
+        swipeDone = true;
+        swipeStart = null;
+        resetSwipeVisual();
+        startReply(m);
+      }
     }
   });
   div.addEventListener('pointerup', (e) => {
@@ -2777,15 +2916,16 @@ function attachDeleteHandlers(div, m) {
     if (swipeStart && !swipeDone && Date.now() - swipeStart.t < 500) {
       const dx = e.clientX - swipeStart.x;
       const dy = e.clientY - swipeStart.y;
-      if (dx > 60 && Math.abs(dy) < 40) { swipeDone = true; startReply(m); }
+      if (dx > 60 && Math.abs(dy) < 40) { swipeDone = true; resetSwipeVisual(); startReply(m); }
     }
     swipeStart = null;
+    if (!swipeDone) resetSwipeVisual();
   });
   // Only the long-press timer is cleared here: nulling swipeStart would
   // kill the pointerup fallback, and the move handler has already fired
-  // by the time leave/cancel arrives.
+  // by the time leave/cancel arrives. The visual snaps back either way.
   for (const ev of ['pointerleave', 'pointercancel']) {
-    div.addEventListener(ev, () => { clearTimeout(pressTimer); });
+    div.addEventListener(ev, () => { clearTimeout(pressTimer); resetSwipeVisual(); });
   }
   div.addEventListener('contextmenu', (e) => { e.preventDefault(); openMsgActions(m); });
 }
@@ -2824,13 +2964,15 @@ function openMsgActions(m) {
   });
   row.appendChild(more);
   $('msg-action-dialog').classList.remove('hidden');
+  pushBackLayer('msg-action-dialog', closeMsgActions);
 }
 function closeMsgActions() {
   $('msg-action-dialog').classList.add('hidden');
   actionTarget = null;
+  dismissBackLayer('msg-action-dialog');
 }
-$('msg-action-cancel').addEventListener('click', closeMsgActions);
-$('msg-action-dialog').addEventListener('click', (e) => { if (e.target.id === 'msg-action-dialog') closeMsgActions(); });
+$('msg-action-cancel').addEventListener('click', () => goBackLayer('msg-action-dialog'));
+$('msg-action-dialog').addEventListener('click', (e) => { if (e.target.id === 'msg-action-dialog') goBackLayer('msg-action-dialog'); });
 $('msg-action-reply').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) startReply(m); });
 $('msg-action-forward').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) openForward(m); });
 $('msg-action-star').addEventListener('click', () => { const m = actionTarget; closeMsgActions(); if (m) toggleStar(m); });
@@ -2844,11 +2986,14 @@ function openDeleteMenu(m) {
   deleteTarget = m;
   $('btn-delete-everyone').classList.toggle('hidden', m.sender !== session.phone);
   $('delete-msg-dialog').classList.remove('hidden');
+  pushBackLayer('delete-msg-dialog', closeDeleteMenu);
 }
 function closeDeleteMenu() {
   $('delete-msg-dialog').classList.add('hidden');
   deleteTarget = null;
+  dismissBackLayer('delete-msg-dialog');
 }
+$('btn-delete-cancel').addEventListener('click', () => goBackLayer('delete-msg-dialog'));
 async function deleteMessage(scope) {
   const m = deleteTarget;
   if (!m || !m.id) return;
@@ -2880,8 +3025,7 @@ function pruneDateSeps() {
 }
 $('btn-delete-everyone').addEventListener('click', () => deleteMessage('all'));
 $('btn-delete-me').addEventListener('click', () => deleteMessage('me'));
-$('btn-delete-cancel').addEventListener('click', closeDeleteMenu);
-$('delete-msg-dialog').addEventListener('click', (e) => { if (e.target.id === 'delete-msg-dialog') closeDeleteMenu(); });
+$('delete-msg-dialog').addEventListener('click', (e) => { if (e.target.id === 'delete-msg-dialog') goBackLayer('delete-msg-dialog'); });
 
 // ---- message rendering helpers: quote, forwarded, reactions, meta ----
 // The reply quote above a bubble: sender name + quoted text (or media
@@ -2936,9 +3080,10 @@ function showWhoReacted(m, emoji) {
     (r.phone === session.phone ? ' (you)' : '') + '</div>').join('') ||
     '<div class="option-btn" style="cursor:default">No reactions</div>';
   $('reaction-who-dialog').classList.remove('hidden');
+  pushBackLayer('reaction-who-dialog', () => hideLayer('reaction-who-dialog'));
 }
-$('btn-reaction-who-close').addEventListener('click', () => $('reaction-who-dialog').classList.add('hidden'));
-$('reaction-who-dialog').addEventListener('click', (e) => { if (e.target.id === 'reaction-who-dialog') $('reaction-who-dialog').classList.add('hidden'); });
+$('btn-reaction-who-close').addEventListener('click', () => goBackLayer('reaction-who-dialog'));
+$('reaction-who-dialog').addEventListener('click', (e) => { if (e.target.id === 'reaction-who-dialog') goBackLayer('reaction-who-dialog'); });
 // Taps inside a bubble: quote → jump, reaction chip → who reacted,
 // view-once placeholder → open it once.
 $('chat-messages').addEventListener('click', (e) => {
@@ -3305,7 +3450,7 @@ $('settings-photoguard-row').addEventListener('click', () => {
 // full-screen overlays on top of the Settings overlay; the back button
 // closes the sub-screen and returns to Settings.
 const SETTINGS_SUB_OVERLAYS = ['settings-notif-overlay', 'settings-storage-overlay', 'settings-access-overlay', 'settings-help-overlay'];
-function closeSettingsSubs() { SETTINGS_SUB_OVERLAYS.forEach((id) => $(id).classList.add('hidden')); }
+function closeSettingsSubs() { SETTINGS_SUB_OVERLAYS.forEach((id) => hideLayer(id)); }
 $('btn-close-settings').addEventListener('click', closeSettingsSubs);
 function renderNotifRows() {
   const s = loadNotifSettings();
@@ -3322,8 +3467,9 @@ function renderNotifRows() {
 $('settings-notif-row').addEventListener('click', () => {
   renderNotifRows();
   $('settings-notif-overlay').classList.remove('hidden');
+  pushBackLayer('settings-notif-overlay', () => hideLayer('settings-notif-overlay'));
 });
-$('btn-close-notif').addEventListener('click', () => $('settings-notif-overlay').classList.add('hidden'));
+$('btn-close-notif').addEventListener('click', () => goBackLayer('settings-notif-overlay'));
 $('notif-msg-row').addEventListener('click', () => {
   saveNotifSettings({ msgSound: !loadNotifSettings().msgSound });
   renderNotifRows();
@@ -3382,7 +3528,7 @@ function renderRingtoneList() {
     list.appendChild(toneOptionButton(RING_NAMES[key], key === sel, () => {
       saveNotifSettings({ ringtone: key });
       renderNotifRows();
-      $('ringtone-dialog').classList.add('hidden');
+      hideLayer('ringtone-dialog');
       previewRingtone(key);
       toast('Ringtone: ' + RING_NAMES[key]);
     }));
@@ -3390,7 +3536,7 @@ function renderRingtoneList() {
   list.appendChild(toneOptionButton('Silent', sel === 'silent', () => {
     saveNotifSettings({ ringtone: 'silent' });
     renderNotifRows();
-    $('ringtone-dialog').classList.add('hidden');
+    hideLayer('ringtone-dialog');
     toast('Ringtone: Silent — calls will not ring');
   }));
   for (const t of customToneRegistry) {
@@ -3398,7 +3544,7 @@ function renderRingtoneList() {
     list.appendChild(toneOptionButton(t.name, key === sel, () => {
       saveNotifSettings({ ringtone: key });
       renderNotifRows();
-      $('ringtone-dialog').classList.add('hidden');
+      hideLayer('ringtone-dialog');
       previewRingtone(key);
       toast('Ringtone: ' + t.name);
     }, async () => {
@@ -3419,7 +3565,7 @@ function renderMsgToneList() {
     list.appendChild(toneOptionButton(MSG_TONE_NAMES[key], key === sel, () => {
       saveNotifSettings({ msgTone: key });
       renderNotifRows();
-      $('msgtone-dialog').classList.add('hidden');
+      hideLayer('msgtone-dialog');
       previewMsgTone(key);
       toast('Message tone: ' + MSG_TONE_NAMES[key]);
     }));
@@ -3427,7 +3573,7 @@ function renderMsgToneList() {
   list.appendChild(toneOptionButton('Silent', sel === 'silent', () => {
     saveNotifSettings({ msgTone: 'silent' });
     renderNotifRows();
-    $('msgtone-dialog').classList.add('hidden');
+    hideLayer('msgtone-dialog');
     toast('Message tone: Silent — no beep for new messages');
   }));
   for (const t of customToneRegistry) {
@@ -3435,7 +3581,7 @@ function renderMsgToneList() {
     list.appendChild(toneOptionButton(t.name, key === sel, () => {
       saveNotifSettings({ msgTone: key });
       renderNotifRows();
-      $('msgtone-dialog').classList.add('hidden');
+      hideLayer('msgtone-dialog');
       previewMsgTone(key);
       toast('Message tone: ' + t.name);
     }, async () => {
@@ -3464,16 +3610,18 @@ $('custom-tone-input').addEventListener('change', async (e) => {
 $('notif-ringtone-row').addEventListener('click', () => {
   renderRingtoneList();
   $('ringtone-dialog').classList.remove('hidden');
+  pushBackLayer('ringtone-dialog', () => hideLayer('ringtone-dialog'));
 });
-$('btn-ringtone-cancel').addEventListener('click', () => $('ringtone-dialog').classList.add('hidden'));
+$('btn-ringtone-cancel').addEventListener('click', () => goBackLayer('ringtone-dialog'));
 // + icon in the ringtone picker header: add your own tone from a file
 // (same file input as the "+ Add your own" row at the bottom of the list).
 $('btn-ringtone-add').addEventListener('click', () => { customToneTarget = 'ring'; $('custom-tone-input').click(); });
 $('notif-msgtone-row').addEventListener('click', () => {
   renderMsgToneList();
   $('msgtone-dialog').classList.remove('hidden');
+  pushBackLayer('msgtone-dialog', () => hideLayer('msgtone-dialog'));
 });
-$('btn-msgtone-cancel').addEventListener('click', () => $('msgtone-dialog').classList.add('hidden'));
+$('btn-msgtone-cancel').addEventListener('click', () => goBackLayer('msgtone-dialog'));
 // + icon in the message-tone picker header: same file add as the ringtone one.
 $('btn-msgtone-add').addEventListener('click', () => { customToneTarget = 'msg'; $('custom-tone-input').click(); });
 $('settings-storage-row').addEventListener('click', () => {
@@ -3481,8 +3629,9 @@ $('settings-storage-row').addEventListener('click', () => {
   renderMeter();
   loadStorage();
   $('settings-storage-overlay').classList.remove('hidden');
+  pushBackLayer('settings-storage-overlay', () => hideLayer('settings-storage-overlay'));
 });
-$('btn-close-storage').addEventListener('click', () => $('settings-storage-overlay').classList.add('hidden'));
+$('btn-close-storage').addEventListener('click', () => goBackLayer('settings-storage-overlay'));
 $('autodl-photos-row').addEventListener('click', () => {
   setAutosavePhotos(!autosavePhotosOn());
   toast(autosavePhotosOn() ? 'Photos will be saved automatically' : 'Photos will not be saved automatically');
@@ -3499,8 +3648,9 @@ function renderAccessRows() {
 $('settings-access-row').addEventListener('click', () => {
   renderAccessRows();
   $('settings-access-overlay').classList.remove('hidden');
+  pushBackLayer('settings-access-overlay', () => hideLayer('settings-access-overlay'));
 });
-$('btn-close-access').addEventListener('click', () => $('settings-access-overlay').classList.add('hidden'));
+$('btn-close-access').addEventListener('click', () => goBackLayer('settings-access-overlay'));
 $('access-text-row').addEventListener('click', () => {
   const a = loadA11y();
   try { localStorage.setItem('s19_a11y', JSON.stringify({ ...a, largeText: !a.largeText })); } catch { /* storage unavailable */ }
@@ -3515,8 +3665,9 @@ $('access-motion-row').addEventListener('click', () => {
 });
 $('settings-help-row').addEventListener('click', () => {
   $('settings-help-overlay').classList.remove('hidden');
+  pushBackLayer('settings-help-overlay', () => hideLayer('settings-help-overlay'));
 });
-$('btn-close-help').addEventListener('click', () => $('settings-help-overlay').classList.add('hidden'));
+$('btn-close-help').addEventListener('click', () => goBackLayer('settings-help-overlay'));
 // Contact us: there is no support email yet, so the app link is copied
 // with a note to send it to the admin with the question. Nothing is
 // invented here — no fake email address, no dead chat.
@@ -3564,14 +3715,16 @@ function openPhotoViewer(src, name) {
   if (!guard) dl.href = src;
   $('photo-viewer').classList.remove('hidden', 'photo-hidden');
   photoViewerOpen = true;
+  pushBackLayer('photo-viewer', closePhotoViewer);
 }
 function closePhotoViewer() {
   $('photo-viewer').classList.add('hidden');
   $('photo-viewer-img').removeAttribute('src');
   photoViewerOpen = false;
+  dismissBackLayer('photo-viewer');
 }
-$('btn-close-photo-viewer').addEventListener('click', closePhotoViewer);
-$('photo-viewer').addEventListener('click', (e) => { if (e.target.id === 'photo-viewer') closePhotoViewer(); });
+$('btn-close-photo-viewer').addEventListener('click', () => goBackLayer('photo-viewer'));
+$('photo-viewer').addEventListener('click', (e) => { if (e.target.id === 'photo-viewer') goBackLayer('photo-viewer'); });
 // Guarded: no long-press / right-click saving on the photo.
 $('photo-viewer-img').addEventListener('contextmenu', (e) => { if (photoGuardOn()) e.preventDefault(); });
 // Guarded: hide the photo the moment the app loses focus, show it
@@ -3662,6 +3815,7 @@ function openMediaViewer(url, kind) {
     img.classList.remove('hidden');
   }
   $('media-viewer').classList.remove('hidden');
+  pushBackLayer('media-viewer', closeMediaViewer);
 }
 function closeMediaViewer() {
   const vid = $('media-viewer-video');
@@ -3670,10 +3824,11 @@ function closeMediaViewer() {
   vid.classList.add('hidden');
   $('media-viewer').classList.add('hidden');
   $('media-viewer-img').src = '';
+  dismissBackLayer('media-viewer');
 }
-$('btn-close-media').addEventListener('click', closeMediaViewer);
+$('btn-close-media').addEventListener('click', () => goBackLayer('media-viewer'));
 $('media-viewer').addEventListener('click', (e) => {
-  if (e.target.id === 'media-viewer') closeMediaViewer();
+  if (e.target.id === 'media-viewer') goBackLayer('media-viewer');
 });
 
 // Offline outbox: messages typed without network wait here and send
@@ -4095,8 +4250,9 @@ async function setupPushNotifications() {
     // First explain in-app (Bengali) why notifications are needed, then
     // ask the browser permission from the Allow button's own tap.
     $('push-dialog').classList.remove('hidden');
+    pushBackLayer('push-dialog', () => hideLayer('push-dialog'));
     $('btn-push-allow').addEventListener('click', async () => {
-      $('push-dialog').classList.add('hidden');
+      hideLayer('push-dialog');
       try {
         const perm = await Notification.requestPermission();
         if (perm === 'granted') await subscribePush(reg);
@@ -4104,7 +4260,7 @@ async function setupPushNotifications() {
     }, { once: true });
     $('btn-push-later').addEventListener('click', () => {
       localStorage.setItem('s19_push_later_at', String(Date.now()));
-      $('push-dialog').classList.add('hidden');
+      hideLayer('push-dialog');
     }, { once: true });
   } catch { /* notifications are optional — polling keeps working */ }
 }
@@ -5080,7 +5236,7 @@ function showStatus(s) {
     del.addEventListener('click', async () => {
       try {
         await api('/api/statuses/' + viewingStatus.id, { method: 'DELETE' });
-        $('status-viewer').classList.add('hidden');
+        hideLayer('status-viewer');
         loadUpdates();
         toast('Status deleted');
       } catch { toast("Couldn't delete"); }
@@ -5089,8 +5245,9 @@ function showStatus(s) {
   }
   del.classList.toggle('hidden', !s.mine);
   $('status-viewer').classList.remove('hidden');
+  pushBackLayer('status-viewer', () => hideLayer('status-viewer'));
 }
-$('btn-close-status').addEventListener('click', () => $('status-viewer').classList.add('hidden'));
+$('btn-close-status').addEventListener('click', () => goBackLayer('status-viewer'));
 $('btn-post-status').addEventListener('click', async () => {
   const text = $('status-input').value.trim();
   if (!text) return;
@@ -5142,8 +5299,9 @@ $('btn-new-channel').addEventListener('click', () => {
   $('new-channel-desc').value = '';
   $('new-channel-error').classList.add('hidden');
   $('new-channel-dialog').classList.remove('hidden');
+  pushBackLayer('new-channel-dialog', () => hideLayer('new-channel-dialog'));
 });
-$('btn-cancel-channel').addEventListener('click', () => $('new-channel-dialog').classList.add('hidden'));
+$('btn-cancel-channel').addEventListener('click', () => goBackLayer('new-channel-dialog'));
 $('btn-confirm-channel').addEventListener('click', async () => {
   const name = $('new-channel-name').value.trim();
   const description = $('new-channel-desc').value.trim();
@@ -5154,7 +5312,7 @@ $('btn-confirm-channel').addEventListener('click', async () => {
   }
   try {
     const r = await api('/api/channels', { method: 'POST', body: JSON.stringify({ name, description }) });
-    $('new-channel-dialog').classList.add('hidden');
+    hideLayer('new-channel-dialog');
     loadChannels();
     openChannel(r.channel);
   } catch (e) {
@@ -5168,15 +5326,17 @@ async function openChannel(c) {
   $('channel-desc').textContent = c.description || '';
   $('channel-post-row').classList.toggle('hidden', !c.mine);
   showScreen('screen-channel');
+  pushBackLayer('channel', closeChannel);
   await api('/api/channels/' + c.id + '/read', { method: 'POST' }).catch(() => {});
   loadChannelPosts();
   loadChannels();
 }
-$('btn-back-updates').addEventListener('click', () => {
+function closeChannel() {
   openChannelId = null;
   showScreen('screen-app');
   switchTab('updates');
-});
+}
+$('btn-back-updates').addEventListener('click', () => goBackLayer('channel'));
 async function loadChannelPosts() {
   if (!openChannelId) return;
   try {
