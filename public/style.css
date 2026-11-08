@@ -387,6 +387,44 @@ body {
 .avatar-lg { width: 56px; height: 56px; font-size: 24px; }
 .profile-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
 .profile-about { font-size: 15px; color: #555; margin-top: 8px; text-align: center; padding: 0 24px; word-break: break-word; }
+/* Contact info screen (WhatsApp-style): header row with back arrow +
+   avatar + name, then the settings rows with grey icons. */
+.profile-info-top { align-items: center; gap: 14px; padding: 12px 16px 4px; }
+.profile-head-avatar {
+  width: 56px; height: 56px; border-radius: 50%; background: #FADBD8; color: #7B4B45;
+  display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; flex-shrink: 0;
+}
+.profile-head-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.profile-head-text { display: flex; flex-direction: column; min-width: 0; }
+.profile-info-top .profile-name { font-size: 19px; margin-top: 0; }
+.profile-info-top .profile-about { font-size: 14px; color: #888; margin-top: 2px; padding: 0; text-align: left; }
+.profile-sub { width: 100%; font-size: 13px; color: #888; padding: 2px 20px; }
+.profile-row { gap: 16px; }
+.profile-row-icon { color: #8696a0; flex-shrink: 0; display: flex; }
+.profile-row-icon svg { display: block; }
+.profile-row-label { flex: 1; }
+.profile-row-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.profile-row-sub { font-size: 13px; color: #888; }
+.profile-row-green .profile-row-icon { color: #00a884; }
+#profile-groups-section { width: 100%; }
+.profile-groups-empty { padding: 14px 20px; font-size: 15px; color: #888; }
+#profile-groups-list .profile-row { border-top: 0; }
+/* Chat lock toggle pill (WhatsApp-style switch). */
+.toggle-pill {
+  width: 46px; height: 26px; border-radius: 999px; background: #ccc; position: relative; flex-shrink: 0;
+}
+.toggle-pill .toggle-knob {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.toggle-pill.on { background: #25D366; }
+.toggle-pill.on .toggle-knob { left: 23px; }
+/* Favorites filter chip above the chat list. */
+.filter-chip {
+  margin: 8px 16px 0; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: #fff; font-size: 14px; font-family: inherit; cursor: pointer; color: var(--ink); align-self: flex-start;
+}
+.filter-chip.active { background: var(--green-pale); border-color: var(--green-light); font-weight: 700; }
 /* Settings screen: big tappable photo, editable name/about rows. */
 .settings-title { font-size: 18px; font-weight: 700; align-self: center; margin-left: 8px; }
 .settings-avatar-wrap { position: relative; margin-top: 8px; cursor: pointer; }
