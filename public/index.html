@@ -85,6 +85,10 @@
     <header class="app-header">
       <img src="logo.webp" class="logo-small" alt="S_19">
       <span class="app-title">S_19 CHAT BOOK</span>
+      <button id="btn-app-menu" class="call-btn" title="Menu">⋮</button>
+      <div id="app-menu" class="chat-menu hidden">
+        <button id="menu-settings" type="button">⚙️ Settings</button>
+      </div>
     </header>
 
     <!-- Chats -->
@@ -117,8 +121,8 @@
 
     <!-- Tools -->
     <div id="tab-tools" class="tab-page hidden">
-      <div class="profile-card">
-        <img src="logo.webp" class="logo-medium" alt="">
+      <div class="profile-card" id="tools-profile-card">
+        <div class="avatar avatar-lg" id="tools-avatar">?</div>
         <div><div id="tools-name" class="profile-name"></div><div id="tools-phone" class="profile-phone"></div></div>
       </div>
       <div class="section-title">Today's data use (estimate)</div>
@@ -388,6 +392,41 @@
     </div>
   </div>
 
+  <!-- ===== Settings (WhatsApp-style) ===== -->
+  <div id="settings-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-settings" class="back-btn">‹</button>
+      <span class="settings-title">Settings</span>
+    </div>
+    <div class="settings-avatar-wrap" id="settings-avatar-wrap">
+      <div class="profile-avatar" id="settings-avatar">?</div>
+      <span class="settings-avatar-camera">📷</span>
+    </div>
+    <div class="settings-hint">Tap the photo to change it</div>
+    <button id="settings-name-row" class="settings-row" type="button">
+      <span class="settings-row-label">Name</span><span id="settings-name" class="settings-row-value"></span>
+    </button>
+    <button id="settings-about-row" class="settings-row" type="button">
+      <span class="settings-row-label">About</span><span id="settings-about" class="settings-row-value"></span>
+    </button>
+    <div class="settings-row settings-row-static">
+      <span class="settings-row-label">Phone / Gmail</span><span id="settings-phone" class="settings-row-value"></span>
+    </div>
+    <input type="file" id="settings-avatar-input" accept="image/*" class="hidden">
+  </div>
+
+  <!-- ===== Edit name / about dialog ===== -->
+  <div id="edit-field-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="edit-field-title">Edit</h3>
+      <input id="edit-field-input" class="input" type="text" maxlength="140">
+      <div class="dialog-buttons">
+        <button id="btn-edit-field-cancel" class="btn-link">Cancel</button>
+        <button id="btn-edit-field-save" class="btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== Contact profile (WhatsApp-style) ===== -->
   <div id="profile-overlay" class="profile-overlay hidden">
     <div class="profile-top">
@@ -396,6 +435,7 @@
     <div class="profile-avatar" id="profile-avatar">?</div>
     <div class="profile-name" id="profile-name"></div>
     <div class="profile-phone" id="profile-phone"></div>
+    <div class="profile-about" id="profile-about"></div>
     <div class="profile-joined" id="profile-joined"></div>
     <div class="profile-actions">
       <button id="btn-profile-voice" class="profile-action" type="button">📞<span>Voice</span></button>
