@@ -3200,7 +3200,7 @@ async function openViewOnce(m, el) {
     mediaCache.set(m.id, url);
     m.viewed = 1;
     chatMsgById.set(m.id, m);
-    openMediaViewer(url, m.media_kind);
+    openMediaViewer(url, m.media_kind, true, m.id);
     const wrap = el && el.querySelector('.msg-media');
     if (wrap) wrap.innerHTML = '<div class="view-once-box opened">📷 ' + (m.media_kind === 'video' ? 'Video opened' : 'Photo opened') + '</div>';
   } catch (e) {
@@ -3811,7 +3811,17 @@ async function loadMediaInto(div, m) {
     wrap.querySelector('.media-retry').addEventListener('click', () => loadMediaInto(div, m));
   }
 }
-function openMediaViewer(url, kind) {
+// View-once guard (client-only deterrent — a browser/PWA app cannot
+// block the phone's hardware screenshot buttons or screen recording;
+// there is no web API for it, only a native Android app can do that
+// with FLAG_SECURE. Nothing here claims otherwise). While view-once
+// media is open in the viewer, losing focus hides it for good in that
+// viewing session: the server already wiped the bytes, so there is
+// nothing to re-fetch and the photo is never shown again.
+let mediaViewerViewOnce = false; // this viewing session is view-once media
+let mediaViewerViewOnceId = null; // message id, so the cached bytes can be dropped on hide
+let mediaViewerViewOnceHidden = false; // hidden by a focus loss — never re-shown
+function openMediaViewer(url, kind, viewOnce, msgId) {
   const img = $('media-viewer-img');
   const vid = $('media-viewer-video');
   if (kind === 'video') {
@@ -3826,7 +3836,15 @@ function openMediaViewer(url, kind) {
     img.src = url;
     img.classList.remove('hidden');
   }
-  $('media-viewer').classList.remove('hidden');
+  mediaViewerViewOnce = !!viewOnce;
+  mediaViewerViewOnceId = viewOnce ? msgId : null;
+  mediaViewerViewOnceHidden = false;
+  const viewer = $('media-viewer');
+  viewer.classList.toggle('media-vo', !!viewOnce);
+  viewer.classList.remove('media-hidden');
+  $('media-viewer-vo-hint').classList.toggle('hidden', !viewOnce);
+  $('media-viewer-vo-hidden').classList.add('hidden');
+  viewer.classList.remove('hidden');
   pushBackLayer('media-viewer', closeMediaViewer);
 }
 function closeMediaViewer() {
@@ -3834,9 +3852,42 @@ function closeMediaViewer() {
   vid.pause();
   vid.removeAttribute('src');
   vid.classList.add('hidden');
-  $('media-viewer').classList.add('hidden');
+  const viewer = $('media-viewer');
+  viewer.classList.add('hidden');
+  viewer.classList.remove('media-vo', 'media-hidden');
   $('media-viewer-img').src = '';
+  $('media-viewer-vo-hint').classList.add('hidden');
+  $('media-viewer-vo-hidden').classList.add('hidden');
+  mediaViewerViewOnce = false;
+  mediaViewerViewOnceId = null;
+  mediaViewerViewOnceHidden = false;
   dismissBackLayer('media-viewer');
+}
+// Hide view-once media the moment the app loses focus (switching apps,
+// pulling down the notification shade, screen lock). Unlike the
+// profile photo guard, this never re-shows: the bytes are already
+// wiped server-side and the cached copy is dropped too.
+function hideViewOnceMedia() {
+  if (!mediaViewerViewOnce || mediaViewerViewOnceHidden) return;
+  if ($('media-viewer').classList.contains('hidden')) return;
+  mediaViewerViewOnceHidden = true;
+  const vid = $('media-viewer-video');
+  vid.pause();
+  vid.removeAttribute('src');
+  $('media-viewer-img').src = '';
+  if (mediaViewerViewOnceId !== null && typeof mediaCache !== 'undefined') mediaCache.delete(mediaViewerViewOnceId);
+  const viewer = $('media-viewer');
+  viewer.classList.add('media-hidden');
+  $('media-viewer-vo-hint').classList.add('hidden');
+  $('media-viewer-vo-hidden').classList.remove('hidden');
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) hideViewOnceMedia(); });
+window.addEventListener('blur', hideViewOnceMedia);
+// No right-click / long-press save and no dragging on view-once media
+// while it is open. The normal (non-view-once) viewer is untouched.
+for (const el of [$('media-viewer-img'), $('media-viewer-video')]) {
+  el.addEventListener('contextmenu', (e) => { if (mediaViewerViewOnce) e.preventDefault(); });
+  el.addEventListener('dragstart', (e) => { if (mediaViewerViewOnce) e.preventDefault(); });
 }
 $('btn-close-media').addEventListener('click', () => goBackLayer('media-viewer'));
 $('media-viewer').addEventListener('click', (e) => {
