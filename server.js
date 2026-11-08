@@ -1,8 +1,11 @@
-// S_19 CHAT BOOK — single-file server (Node.js + Express + SQLite)
+// S_19 CHAT BOOK — single-file server (Node.js + Express)
 // ---------------------------------------------------------------------------
 // One service: serves the static frontend from ./public and a small JSON API
 // (users, contacts, 1-to-1 messages, statuses, channels, call signalling).
-// Database: SQLite file (DB_PATH env, default ./s19.db). No other services.
+// Database: Postgres (Neon) when DATABASE_URL is set, otherwise a local
+// SQLite file (DB_PATH env, default ./s19.db). The Render free tier has an
+// ephemeral disk, so on Render the data lives in Neon and survives
+// restarts; locally the SQLite file is used instead. See db.js.
 //
 // Login: 3 steps — phone number (+ country dial code) OR a Gmail address
 // -> 6-digit code -> name. The session token is stored in the browser
@@ -25,9 +28,8 @@
 
 const crypto = require('node:crypto');
 const path = require('node:path');
-const fs = require('node:fs');
 const express = require('express');
-const { DatabaseSync } = require('node:sqlite');
+const { createDb } = require('./db');
 const { sendOtp, isConfigured } = require('./sms');
 const emailSender = require('./email');
 
@@ -36,83 +38,15 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, 's19.db');
 const CODE_TTL_MS = 10 * 60 * 1000; // a code works for 10 minutes
 const STATUS_TTL_MS = 24 * 60 * 60 * 1000; // a status lives 24 hours
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec('PRAGMA foreign_keys = ON;');
+// Set in start() before the server listens, so no request can arrive
+// before the database is ready.
+let db;
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  phone TEXT PRIMARY KEY,
-  name TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  phone TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS otp_codes (
-  phone TEXT PRIMARY KEY,
-  code_hash TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS contacts (
-  owner_phone TEXT NOT NULL,
-  contact_phone TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (owner_phone, contact_phone)
-);
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  sender TEXT NOT NULL,
-  receiver TEXT NOT NULL,
-  body TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  delivered INTEGER NOT NULL DEFAULT 0,
-  read INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
-CREATE TABLE IF NOT EXISTS statuses (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  phone TEXT NOT NULL,
-  text TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_statuses_phone ON statuses (phone, expires_at);
-CREATE TABLE IF NOT EXISTS channels (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  description TEXT NOT NULL DEFAULT '',
-  owner_phone TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS channel_follows (
-  channel_id INTEGER NOT NULL,
-  phone TEXT NOT NULL,
-  last_read_at INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (channel_id, phone)
-);
-CREATE TABLE IF NOT EXISTS channel_posts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  channel_id INTEGER NOT NULL,
-  phone TEXT NOT NULL,
-  text TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_channel_posts ON channel_posts (channel_id, id);
-CREATE TABLE IF NOT EXISTS call_signals (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_phone TEXT NOT NULL,
-  to_phone TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  payload TEXT NOT NULL DEFAULT '{}',
-  created_at INTEGER NOT NULL,
-  consumed INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_call_signals_to ON call_signals (to_phone, consumed);
-`);
+// Express 4 does not catch errors from async handlers, so wrap them:
+// a rejection goes to the error middleware instead of hanging the request.
+const ah = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -165,11 +99,11 @@ function newToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const h = req.get('Authorization') || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!token) return res.status(401).json({ ok: false, error: 'no_token' });
-  const row = db.prepare('SELECT phone FROM sessions WHERE token = ?').get(token);
+  const row = await db.get('SELECT phone FROM sessions WHERE token = ?', token);
   if (!row) return res.status(401).json({ ok: false, error: 'bad_token' });
   req.phone = row.phone;
   req.token = token;
@@ -190,8 +124,8 @@ function codeRateLimited(phone) {
   return false;
 }
 
-function publicUser(phone) {
-  const u = db.prepare('SELECT phone, name FROM users WHERE phone = ?').get(phone);
+async function publicUser(phone) {
+  const u = await db.get('SELECT phone, name FROM users WHERE phone = ?', phone);
   return u ? { phone: u.phone, name: u.name } : { phone, name: '' };
 }
 
@@ -210,7 +144,7 @@ app.use((req, _res, next) => {
 // configured) the reply includes testCode so the screen can show it. In
 // SMS/email mode the code is sent for real and the reply only says
 // { ok, sms: true } or { ok, email: true }.
-app.post('/api/request-code', async (req, res) => {
+app.post('/api/request-code', ah(async (req, res) => {
   const body = req.body || {};
   // Identity: a Gmail address (email field) OR a phone number (phone + dial).
   const isEmail = body.email !== undefined && body.email !== null && String(body.email).trim() !== '';
@@ -226,12 +160,12 @@ app.post('/api/request-code', async (req, res) => {
     return res.status(429).json({ ok: false, error: 'too_many_codes' });
   }
   const code = String(Math.floor(100000 + Math.random() * 900000));
-  db.prepare(
+  await db.run(
     `INSERT INTO otp_codes (phone, code_hash, expires_at, attempts)
      VALUES (?, ?, ?, 0)
      ON CONFLICT(phone) DO UPDATE SET code_hash = excluded.code_hash,
        expires_at = excluded.expires_at, attempts = 0`,
-  ).run(phone, hashCode(code), now() + CODE_TTL_MS);
+    phone, hashCode(code), now() + CODE_TTL_MS);
 
   if (isEmail) {
     if (emailSender.isConfigured()) {
@@ -251,11 +185,11 @@ app.post('/api/request-code', async (req, res) => {
     return res.json({ ok: true, sms: false, smsError: r.reason, testCode: code });
   }
   return res.json({ ok: true, sms: false, testCode: code });
-});
+}));
 
 // Step 2: verify the code. Returns a session token + whether this is a
 // brand-new number (then the client asks for the name — step 3).
-app.post('/api/verify-code', (req, res) => {
+app.post('/api/verify-code', ah(async (req, res) => {
   const body = req.body || {};
   const isEmail = body.email !== undefined && body.email !== null && String(body.email).trim() !== '';
   const phone = isEmail ? normalizeEmail(body.email) : normalizePhone(body.phone, body.dial);
@@ -263,7 +197,7 @@ app.post('/api/verify-code', (req, res) => {
   if (!phone || code.length !== 6 || (isEmail && !isEmailAddr(phone))) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
-  const row = db.prepare('SELECT * FROM otp_codes WHERE phone = ?').get(phone);
+  const row = await db.get('SELECT * FROM otp_codes WHERE phone = ?', phone);
   if (!row) return res.status(400).json({ ok: false, error: 'no_code' });
   if (row.expires_at < now()) {
     return res.status(400).json({ ok: false, error: 'code_expired' });
@@ -272,13 +206,13 @@ app.post('/api/verify-code', (req, res) => {
     return res.status(429).json({ ok: false, error: 'too_many_attempts' });
   }
   if (row.code_hash !== hashCode(code)) {
-    db.prepare('UPDATE otp_codes SET attempts = attempts + 1 WHERE phone = ?').run(phone);
+    await db.run('UPDATE otp_codes SET attempts = attempts + 1 WHERE phone = ?', phone);
     return res.status(400).json({ ok: false, error: 'wrong_code' });
   }
-  db.prepare('DELETE FROM otp_codes WHERE phone = ?').run(phone);
-  const exists = db.prepare('SELECT phone, name FROM users WHERE phone = ?').get(phone);
+  await db.run('DELETE FROM otp_codes WHERE phone = ?', phone);
+  const exists = await db.get('SELECT phone, name FROM users WHERE phone = ?', phone);
   const token = newToken();
-  db.prepare('INSERT INTO sessions (token, phone, created_at) VALUES (?, ?, ?)').run(token, phone, now());
+  await db.run('INSERT INTO sessions (token, phone, created_at) VALUES (?, ?, ?)', token, phone, now());
   return res.json({
     ok: true,
     token,
@@ -286,33 +220,33 @@ app.post('/api/verify-code', (req, res) => {
     isNewUser: !exists,
     name: exists ? exists.name : '',
   });
-});
+}));
 
 // Step 3: set / change the display name.
-app.post('/api/set-name', auth, (req, res) => {
+app.post('/api/set-name', ah(auth), ah(async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 60);
   if (!name) return res.status(400).json({ ok: false, error: 'bad_name' });
-  db.prepare(
+  await db.run(
     `INSERT INTO users (phone, name, created_at) VALUES (?, ?, ?)
      ON CONFLICT(phone) DO UPDATE SET name = excluded.name`,
-  ).run(req.phone, name, now());
+    req.phone, name, now());
   return res.json({ ok: true, phone: req.phone, name });
-});
+}));
 
-app.get('/api/me', auth, (req, res) => {
-  return res.json({ ok: true, ...publicUser(req.phone) });
-});
+app.get('/api/me', ah(auth), ah(async (req, res) => {
+  return res.json({ ok: true, ...(await publicUser(req.phone)) });
+}));
 
-app.post('/api/logout', auth, (req, res) => {
-  db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+app.post('/api/logout', ah(auth), ah(async (req, res) => {
+  await db.run('DELETE FROM sessions WHERE token = ?', req.token);
   return res.json({ ok: true });
-});
+}));
 
 // ---- contacts + 1-to-1 chats ------------------------------------------------
 
 // Add a friend by number OR by Gmail address. The friend does NOT need
 // to have added you back — either side can start the chat.
-app.post('/api/contacts', auth, (req, res) => {
+app.post('/api/contacts', ah(auth), ah(async (req, res) => {
   const raw = req.body && (req.body.email || req.body.phone);
   const phone = normalizePeer(raw, req.body && req.body.dial);
   if (!validIdentity(phone)) {
@@ -321,50 +255,44 @@ app.post('/api/contacts', auth, (req, res) => {
   if (phone === req.phone) {
     return res.status(400).json({ ok: false, error: 'self_contact' });
   }
-  db.prepare(
-    'INSERT OR IGNORE INTO contacts (owner_phone, contact_phone, created_at) VALUES (?, ?, ?)',
-  ).run(req.phone, phone, now());
-  return res.json({ ok: true, contact: publicUser(phone) });
-});
+  await db.run(
+    'INSERT INTO contacts (owner_phone, contact_phone, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+    req.phone, phone, now());
+  return res.json({ ok: true, contact: await publicUser(phone) });
+}));
 
-app.get('/api/contacts', auth, (req, res) => {
-  const rows = db
-    .prepare('SELECT contact_phone FROM contacts WHERE owner_phone = ? ORDER BY created_at')
-    .all(req.phone);
-  return res.json({ ok: true, contacts: rows.map((r) => publicUser(r.contact_phone)) });
-});
+app.get('/api/contacts', ah(auth), ah(async (req, res) => {
+  const rows = await db.all(
+    'SELECT contact_phone FROM contacts WHERE owner_phone = ? ORDER BY created_at',
+    req.phone);
+  const contacts = [];
+  for (const r of rows) contacts.push(await publicUser(r.contact_phone));
+  return res.json({ ok: true, contacts });
+}));
 
 // Inbox: one row per 1-to-1 conversation (contacts + anyone who messaged
 // me), newest first, with the last message and unread count.
-app.get('/api/conversations', auth, (req, res) => {
+app.get('/api/conversations', ah(auth), ah(async (req, res) => {
   // A message counts as delivered as soon as the other person's app is
   // open (it polls the inbox), even before they open the chat.
-  db.prepare('UPDATE messages SET delivered = 1 WHERE receiver = ? AND delivered = 0').run(req.phone);
+  await db.run('UPDATE messages SET delivered = TRUE WHERE receiver = ? AND delivered = FALSE', req.phone);
   const peers = new Map();
-  for (const r of db
-    .prepare('SELECT contact_phone AS peer FROM contacts WHERE owner_phone = ?')
-    .all(req.phone)) peers.set(r.peer, true);
-  for (const r of db
-    .prepare('SELECT DISTINCT sender AS peer FROM messages WHERE receiver = ?')
-    .all(req.phone)) peers.set(r.peer, true);
-  for (const r of db
-    .prepare('SELECT DISTINCT receiver AS peer FROM messages WHERE sender = ?')
-    .all(req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT contact_phone AS peer FROM contacts WHERE owner_phone = ?', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT sender AS peer FROM messages WHERE receiver = ?', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT receiver AS peer FROM messages WHERE sender = ?', req.phone)) peers.set(r.peer, true);
 
   const out = [];
   for (const peer of peers.keys()) {
-    const last = db
-      .prepare(
-        `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
-         WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)
-         ORDER BY id DESC LIMIT 1`,
-      )
-      .get(req.phone, peer, peer, req.phone);
-    const unread = db
-      .prepare('SELECT COUNT(*) AS n FROM messages WHERE sender = ? AND receiver = ? AND read = 0')
-      .get(peer, req.phone).n;
+    const last = await db.get(
+      `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
+       WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)
+       ORDER BY id DESC LIMIT 1`,
+      req.phone, peer, peer, req.phone);
+    const unread = (await db.get(
+      'SELECT COUNT(*) AS n FROM messages WHERE sender = ? AND receiver = ? AND read = FALSE',
+      peer, req.phone)).n;
     out.push({
-      ...publicUser(peer),
+      ...(await publicUser(peer)),
       lastMessage: last ? last.body : '',
       lastAt: last ? last.created_at : 0,
       lastId: last ? last.id : 0,
@@ -373,79 +301,70 @@ app.get('/api/conversations', auth, (req, res) => {
   }
   out.sort((a, b) => b.lastAt - a.lastAt);
   return res.json({ ok: true, conversations: out });
-});
+}));
 
 // Incremental message fetch: only messages with id > afterId are returned,
 // so a weak connection never re-downloads the whole history.
-app.get('/api/messages', auth, (req, res) => {
+app.get('/api/messages', ah(auth), ah(async (req, res) => {
   const withPhone = normalizePeer(req.query.with || '');
   const afterId = Number(req.query.afterId || 0);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
-  const rows = db
-    .prepare(
-      `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
-       WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
-         AND id > ? ORDER BY id ASC LIMIT 200`,
-    )
-    .all(req.phone, withPhone, withPhone, req.phone, afterId);
+  const rows = await db.all(
+    `SELECT id, sender, receiver, body, created_at, delivered, read FROM messages
+     WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+       AND id > ? ORDER BY id ASC LIMIT 200`,
+    req.phone, withPhone, withPhone, req.phone, afterId);
   // Messages from the peer that I just received count as delivered now.
-  db.prepare(
-    'UPDATE messages SET delivered = 1 WHERE sender = ? AND receiver = ? AND delivered = 0',
-  ).run(withPhone, req.phone);
+  await db.run(
+    'UPDATE messages SET delivered = TRUE WHERE sender = ? AND receiver = ? AND delivered = FALSE',
+    withPhone, req.phone);
   // Tick state for MY messages in this conversation — returned on every
   // fetch, even when there are no new messages, so the sender's ticks
   // update from ✓ to ✓✓ to seen without re-downloading the history.
-  const ticks = db
-    .prepare(
-      `SELECT id, delivered, read FROM messages
-       WHERE sender = ? AND receiver = ? ORDER BY id DESC LIMIT 100`,
-    )
-    .all(req.phone, withPhone);
+  const ticks = await db.all(
+    `SELECT id, delivered, read FROM messages
+     WHERE sender = ? AND receiver = ? ORDER BY id DESC LIMIT 100`,
+    req.phone, withPhone);
   return res.json({ ok: true, messages: rows, ticks });
-});
+}));
 
-app.post('/api/messages', auth, (req, res) => {
+app.post('/api/messages', ah(auth), ah(async (req, res) => {
   const to = normalizePeer(req.body && (req.body.to || req.body.email), req.body && req.body.dial);
   const body = String((req.body && req.body.body) || '').trim().slice(0, 4000);
   if (!validIdentity(to) || !body) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
   if (to === req.phone) return res.status(400).json({ ok: false, error: 'self_message' });
-  const info = db
-    .prepare('INSERT INTO messages (sender, receiver, body, created_at) VALUES (?, ?, ?, ?)')
-    .run(req.phone, to, body, now());
-  const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(Number(info.lastInsertRowid));
+  const inserted = await db.get(
+    'INSERT INTO messages (sender, receiver, body, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    req.phone, to, body, now());
+  const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
   return res.json({ ok: true, message: row });
-});
+}));
 
 // Mark a conversation as read (clears my unread count for that peer).
-app.post('/api/messages/read', auth, (req, res) => {
+app.post('/api/messages/read', ah(auth), ah(async (req, res) => {
   const withPhone = normalizePeer(req.body && req.body.with);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
-  db.prepare('UPDATE messages SET read = 1, delivered = 1 WHERE sender = ? AND receiver = ?').run(
-    withPhone,
-    req.phone,
-  );
+  await db.run(
+    'UPDATE messages SET read = TRUE, delivered = TRUE WHERE sender = ? AND receiver = ?',
+    withPhone, req.phone);
   return res.json({ ok: true });
-});
+}));
 
 // Today's message traffic for the data meter (Tools tab).
-app.get('/api/usage', auth, (req, res) => {
+app.get('/api/usage', ah(auth), ah(async (req, res) => {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const t0 = dayStart.getTime();
-  const sent = db
-    .prepare(
-      `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS b FROM messages
-       WHERE sender = ? AND created_at >= ?`,
-    )
-    .get(req.phone, t0);
-  const received = db
-    .prepare(
-      `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS b FROM messages
-       WHERE receiver = ? AND created_at >= ?`,
-    )
-    .get(req.phone, t0);
+  const sent = await db.get(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS b FROM messages
+     WHERE sender = ? AND created_at >= ?`,
+    req.phone, t0);
+  const received = await db.get(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(body)), 0) AS b FROM messages
+     WHERE receiver = ? AND created_at >= ?`,
+    req.phone, t0);
   return res.json({
     ok: true,
     day: dayStart.toISOString().slice(0, 10),
@@ -454,55 +373,50 @@ app.get('/api/usage', auth, (req, res) => {
     bytesSent: sent.b,
     bytesReceived: received.b,
   });
-});
+}));
 
 // ---- statuses (24 hours) ----------------------------------------------------
 
 // Post a text status. It is visible to my contacts (and to me) for 24
 // hours, then it disappears (expired rows are ignored and cleaned up).
-app.post('/api/statuses', auth, (req, res) => {
+app.post('/api/statuses', ah(auth), ah(async (req, res) => {
   const text = String((req.body && req.body.text) || '').trim().slice(0, 500);
   if (!text) return res.status(400).json({ ok: false, error: 'bad_text' });
   const t = now();
-  const info = db
-    .prepare('INSERT INTO statuses (phone, text, created_at, expires_at) VALUES (?, ?, ?, ?)')
-    .run(req.phone, text, t, t + STATUS_TTL_MS);
-  return res.json({ ok: true, status: { id: Number(info.lastInsertRowid), phone: req.phone, text, created_at: t } });
-});
+  const inserted = await db.get(
+    'INSERT INTO statuses (phone, text, created_at, expires_at) VALUES (?, ?, ?, ?) RETURNING id',
+    req.phone, text, t, t + STATUS_TTL_MS);
+  return res.json({ ok: true, status: { id: inserted.id, phone: req.phone, text, created_at: t } });
+}));
 
 // My status + my contacts' statuses (newest first). `mine: true` marks my own.
-app.get('/api/statuses', auth, (req, res) => {
+app.get('/api/statuses', ah(auth), ah(async (req, res) => {
   const t = now();
-  const peers = db
-    .prepare('SELECT contact_phone FROM contacts WHERE owner_phone = ?')
-    .all(req.phone)
+  const peers = (await db.all('SELECT contact_phone FROM contacts WHERE owner_phone = ?', req.phone))
     .map((r) => r.contact_phone);
   // People who added me can also see my status, and vice versa.
-  const reverse = db
-    .prepare('SELECT owner_phone FROM contacts WHERE contact_phone = ?')
-    .all(req.phone)
+  const reverse = (await db.all('SELECT owner_phone FROM contacts WHERE contact_phone = ?', req.phone))
     .map((r) => r.owner_phone);
   const visible = [...new Set([req.phone, ...peers, ...reverse])];
   const placeholders = visible.map(() => '?').join(',');
-  const rows = db
-    .prepare(
-      `SELECT id, phone, text, created_at, expires_at FROM statuses
-       WHERE phone IN (${placeholders}) AND expires_at > ? ORDER BY created_at DESC LIMIT 100`,
-    )
-    .all(...visible, t);
-  return res.json({
-    ok: true,
-    statuses: rows.map((r) => ({ ...r, mine: r.phone === req.phone, name: publicUser(r.phone).name })),
-  });
-});
+  const rows = await db.all(
+    `SELECT id, phone, text, created_at, expires_at FROM statuses
+     WHERE phone IN (${placeholders}) AND expires_at > ? ORDER BY created_at DESC LIMIT 100`,
+    ...visible, t);
+  const statuses = [];
+  for (const r of rows) {
+    statuses.push({ ...r, mine: r.phone === req.phone, name: (await publicUser(r.phone)).name });
+  }
+  return res.json({ ok: true, statuses });
+}));
 
-app.delete('/api/statuses/:id', auth, (req, res) => {
-  const row = db.prepare('SELECT * FROM statuses WHERE id = ?').get(Number(req.params.id));
+app.delete('/api/statuses/:id', ah(auth), ah(async (req, res) => {
+  const row = await db.get('SELECT * FROM statuses WHERE id = ?', Number(req.params.id));
   if (!row) return res.status(404).json({ ok: false, error: 'not_found' });
   if (row.phone !== req.phone) return res.status(403).json({ ok: false, error: 'not_owner' });
-  db.prepare('DELETE FROM statuses WHERE id = ?').run(row.id);
+  await db.run('DELETE FROM statuses WHERE id = ?', row.id);
   return res.json({ ok: true });
-});
+}));
 
 // ---- channels ---------------------------------------------------------------
 // Anyone can create a channel. Every channel can be found by searching its
@@ -510,58 +424,58 @@ app.delete('/api/statuses/:id', auth, (req, res) => {
 // everyone else follows and reads. The unread badge counts posts newer
 // than the follower's last-read time and clears when the channel is opened.
 
-app.post('/api/channels', auth, (req, res) => {
+app.post('/api/channels', ah(auth), ah(async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
   const description = String((req.body && req.body.description) || '').trim().slice(0, 300);
   if (!name) return res.status(400).json({ ok: false, error: 'bad_name' });
   const t = now();
   try {
-    const info = db
-      .prepare('INSERT INTO channels (name, description, owner_phone, created_at) VALUES (?, ?, ?, ?)')
-      .run(name, description, req.phone, t);
+    const inserted = await db.get(
+      'INSERT INTO channels (name, description, owner_phone, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+      name, description, req.phone, t);
     // The creator automatically follows their own channel.
-    db.prepare('INSERT OR IGNORE INTO channel_follows (channel_id, phone, last_read_at) VALUES (?, ?, ?)').run(
-      Number(info.lastInsertRowid),
-      req.phone,
-      t,
-    );
+    await db.run(
+      'INSERT INTO channel_follows (channel_id, phone, last_read_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+      inserted.id, req.phone, t);
     return res.json({
       ok: true,
-      channel: { id: Number(info.lastInsertRowid), name, description, owner_phone: req.phone, created_at: t },
+      channel: { id: inserted.id, name, description, owner_phone: req.phone, created_at: t },
     });
   } catch (e) {
-    if (String(e && e.message).includes('UNIQUE')) {
+    const msg = String((e && e.message) || '');
+    // SQLite: "UNIQUE constraint failed"; Postgres: error 23505
+    // ("duplicate key value violates unique constraint").
+    if ((e && e.code === '23505') || msg.includes('UNIQUE') || /duplicate key/i.test(msg)) {
       return res.status(409).json({ ok: false, error: 'name_taken' });
     }
     throw e;
   }
-});
+}));
 
 // Search all channels by name/description. Empty query = list all (newest first).
-app.get('/api/channels', auth, (req, res) => {
+// LOWER() on both sides keeps the search case-insensitive on both engines
+// (SQLite LIKE is case-insensitive, Postgres LIKE is not).
+app.get('/api/channels', ah(auth), ah(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const like = `%${q}%`;
   const rows = q
-    ? db
-        .prepare(
-          `SELECT * FROM channels WHERE name LIKE ? OR description LIKE ? ORDER BY created_at DESC LIMIT 100`,
-        )
-        .all(like, like)
-    : db.prepare('SELECT * FROM channels ORDER BY created_at DESC LIMIT 100').all();
-  const out = rows.map((c) => {
-    const followers = db.prepare('SELECT COUNT(*) AS n FROM channel_follows WHERE channel_id = ?').get(c.id).n;
-    const follow = db
-      .prepare('SELECT last_read_at FROM channel_follows WHERE channel_id = ? AND phone = ?')
-      .get(c.id, req.phone);
-    const lastPost = db
-      .prepare('SELECT text, created_at FROM channel_posts WHERE channel_id = ? ORDER BY id DESC LIMIT 1')
-      .get(c.id);
+    ? await db.all(
+        `SELECT * FROM channels WHERE LOWER(name) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?) ORDER BY created_at DESC LIMIT 100`,
+        like, like)
+    : await db.all('SELECT * FROM channels ORDER BY created_at DESC LIMIT 100');
+  const out = [];
+  for (const c of rows) {
+    const followers = (await db.get('SELECT COUNT(*) AS n FROM channel_follows WHERE channel_id = ?', c.id)).n;
+    const follow = await db.get(
+      'SELECT last_read_at FROM channel_follows WHERE channel_id = ? AND phone = ?',
+      c.id, req.phone);
+    const lastPost = await db.get(
+      'SELECT text, created_at FROM channel_posts WHERE channel_id = ? ORDER BY id DESC LIMIT 1',
+      c.id);
     const unread = follow
-      ? db
-          .prepare('SELECT COUNT(*) AS n FROM channel_posts WHERE channel_id = ? AND created_at > ?')
-          .get(c.id, follow.last_read_at).n
+      ? (await db.get('SELECT COUNT(*) AS n FROM channel_posts WHERE channel_id = ? AND created_at > ?', c.id, follow.last_read_at)).n
       : 0;
-    return {
+    out.push({
       ...c,
       mine: c.owner_phone === req.phone,
       followed: Boolean(follow),
@@ -569,99 +483,91 @@ app.get('/api/channels', auth, (req, res) => {
       lastPost: lastPost ? lastPost.text : '',
       lastPostAt: lastPost ? lastPost.created_at : 0,
       unread,
-    };
-  });
+    });
+  }
   return res.json({ ok: true, channels: out });
-});
+}));
 
-app.post('/api/channels/:id/follow', auth, (req, res) => {
+app.post('/api/channels/:id/follow', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
-  const ch = db.prepare('SELECT * FROM channels WHERE id = ?').get(id);
+  const ch = await db.get('SELECT * FROM channels WHERE id = ?', id);
   if (!ch) return res.status(404).json({ ok: false, error: 'not_found' });
-  db.prepare(
-    'INSERT OR IGNORE INTO channel_follows (channel_id, phone, last_read_at) VALUES (?, ?, ?)',
-  ).run(id, req.phone, now());
+  await db.run(
+    'INSERT INTO channel_follows (channel_id, phone, last_read_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+    id, req.phone, now());
   return res.json({ ok: true });
-});
+}));
 
 // Opening a channel marks it read (clears the unread badge).
-app.post('/api/channels/:id/read', auth, (req, res) => {
+app.post('/api/channels/:id/read', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
-  db.prepare('UPDATE channel_follows SET last_read_at = ? WHERE channel_id = ? AND phone = ?').run(
-    now(),
-    id,
-    req.phone,
-  );
+  await db.run('UPDATE channel_follows SET last_read_at = ? WHERE channel_id = ? AND phone = ?', now(), id, req.phone);
   return res.json({ ok: true });
-});
+}));
 
-app.get('/api/channels/:id/posts', auth, (req, res) => {
+app.get('/api/channels/:id/posts', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
   const afterId = Number(req.query.afterId || 0);
-  const ch = db.prepare('SELECT * FROM channels WHERE id = ?').get(id);
+  const ch = await db.get('SELECT * FROM channels WHERE id = ?', id);
   if (!ch) return res.status(404).json({ ok: false, error: 'not_found' });
-  const rows = db
-    .prepare(
-      `SELECT id, channel_id, phone, text, created_at FROM channel_posts
-       WHERE channel_id = ? AND id > ? ORDER BY id ASC LIMIT 200`,
-    )
-    .all(id, afterId);
+  const rows = await db.all(
+    `SELECT id, channel_id, phone, text, created_at FROM channel_posts
+     WHERE channel_id = ? AND id > ? ORDER BY id ASC LIMIT 200`,
+    id, afterId);
   return res.json({ ok: true, channel: ch, posts: rows });
-});
+}));
 
-app.post('/api/channels/:id/posts', auth, (req, res) => {
+app.post('/api/channels/:id/posts', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
   const text = String((req.body && req.body.text) || '').trim().slice(0, 2000);
   if (!text) return res.status(400).json({ ok: false, error: 'bad_text' });
-  const ch = db.prepare('SELECT * FROM channels WHERE id = ?').get(id);
+  const ch = await db.get('SELECT * FROM channels WHERE id = ?', id);
   if (!ch) return res.status(404).json({ ok: false, error: 'not_found' });
   if (ch.owner_phone !== req.phone) {
     return res.status(403).json({ ok: false, error: 'not_owner' });
   }
-  const info = db
-    .prepare('INSERT INTO channel_posts (channel_id, phone, text, created_at) VALUES (?, ?, ?, ?)')
-    .run(id, req.phone, text, now());
+  const inserted = await db.get(
+    'INSERT INTO channel_posts (channel_id, phone, text, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    id, req.phone, text, now());
   return res.json({
     ok: true,
-    post: { id: Number(info.lastInsertRowid), channel_id: id, phone: req.phone, text, created_at: now() },
+    post: { id: inserted.id, channel_id: id, phone: req.phone, text, created_at: now() },
   });
-});
+}));
 
 // ---- voice-call signalling (WebRTC) -----------------------------------------
 // The server only passes signalling messages between the two phones; the
 // voice itself goes peer-to-peer over WebRTC (STUN). Polling keeps it
 // working on weak networks where a websocket would drop.
 
-app.post('/api/calls/signal', auth, (req, res) => {
+app.post('/api/calls/signal', ah(auth), ah(async (req, res) => {
   const to = normalizePeer(req.body && req.body.to, req.body && req.body.dial);
   const kind = String((req.body && req.body.kind) || '');
   const payload = req.body && req.body.payload ? req.body.payload : {};
   if (!to || !['offer', 'answer', 'ice', 'end'].includes(kind)) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
-  db.prepare(
+  await db.run(
     'INSERT INTO call_signals (from_phone, to_phone, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(req.phone, to, kind, JSON.stringify(payload), now());
+    req.phone, to, kind, JSON.stringify(payload), now());
   return res.json({ ok: true });
-});
+}));
 
 // Fetch my pending signals and mark them consumed.
-app.get('/api/calls/signals', auth, (req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT id, from_phone, kind, payload, created_at FROM call_signals
-       WHERE to_phone = ? AND consumed = 0 ORDER BY id ASC LIMIT 50`,
-    )
-    .all(req.phone);
+app.get('/api/calls/signals', ah(auth), ah(async (req, res) => {
+  const rows = await db.all(
+    `SELECT id, from_phone, kind, payload, created_at FROM call_signals
+     WHERE to_phone = ? AND consumed = FALSE ORDER BY id ASC LIMIT 50`,
+    req.phone);
   if (rows.length) {
     const ids = rows.map((r) => r.id);
-    db.prepare(`UPDATE call_signals SET consumed = 1 WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    await db.run(`UPDATE call_signals SET consumed = TRUE WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
   }
   return res.json({
     ok: true,
     signals: rows.map((r) => ({ ...r, from: r.from_phone, payload: JSON.parse(r.payload || '{}') })),
   });
-});
+}));
 
 // ---- static frontend + start -------------------------------------------------
 
@@ -671,19 +577,34 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Errors from async handlers end up here as JSON, not an HTML error page.
+app.use((err, _req, res, _next) => {
+  console.error('[api error]', err && err.message);
+  if (res.headersSent) return;
+  res.status(500).json({ ok: false, error: 'server_error' });
+});
+
 // Clean up expired statuses and consumed signals every hour.
-setInterval(() => {
+setInterval(async () => {
   try {
-    db.prepare('DELETE FROM statuses WHERE expires_at <= ?').run(now());
-    db.prepare('DELETE FROM call_signals WHERE consumed = 1 AND created_at < ?').run(now() - 60 * 60 * 1000);
+    await db.run('DELETE FROM statuses WHERE expires_at <= ?', now());
+    await db.run('DELETE FROM call_signals WHERE consumed = TRUE AND created_at < ?', now() - 60 * 60 * 1000);
   } catch (e) {
     console.error('[cleanup]', e && e.message);
   }
 }, 60 * 60 * 1000);
 
-app.listen(PORT, () => {
-  console.log(`S_19 CHAT BOOK running on http://localhost:${PORT}`);
-  console.log(`SMS mode: ${isConfigured() ? 'REAL SMS (' + process.env.SMS_PROVIDER + ')' : 'TEST CODE on screen'}`);
-  console.log(`Email mode: ${emailSender.isConfigured() ? 'REAL EMAIL (' + process.env.EMAIL_PROVIDER + ')' : 'TEST CODE on screen'}`);
-  console.log(`DB: ${DB_PATH}`);
+async function start() {
+  db = await createDb({ dbPath: DB_PATH });
+  app.listen(PORT, () => {
+    console.log(`S_19 CHAT BOOK running on http://localhost:${PORT}`);
+    console.log(`SMS mode: ${isConfigured() ? 'REAL SMS (' + process.env.SMS_PROVIDER + ')' : 'TEST CODE on screen'}`);
+    console.log(`Email mode: ${emailSender.isConfigured() ? 'REAL EMAIL (' + process.env.EMAIL_PROVIDER + ')' : 'TEST CODE on screen'}`);
+    console.log(`DB: ${db.label}`);
+  });
+}
+
+start().catch((e) => {
+  console.error('Failed to start server:', e && e.message);
+  process.exit(1);
 });
