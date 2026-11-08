@@ -126,6 +126,17 @@ async function main() {
   check('countries.js has 248 entries, BD first', cj.status === 200 && cjText.includes('Bangladesh') && cjText.includes('"+880"'));
   const logo = await fetch(BASE + '/logo.webp');
   check('logo.webp serves', logo.status === 200 && (logo.headers.get('content-type') || '').includes('webp'));
+  const manifest = await fetch(BASE + '/manifest.json');
+  const manifestData = await manifest.json().catch(() => null);
+  check('manifest serves for Add to Home screen',
+    manifest.status === 200 && (manifest.headers.get('content-type') || '').includes('manifest')
+    && manifestData && manifestData.name === 'S_19 CHAT BOOK' && manifestData.display === 'standalone', manifestData);
+  const icon192 = await fetch(BASE + '/icon-192.png');
+  check('app icon 192 serves', icon192.status === 200 && (icon192.headers.get('content-type') || '').includes('png'));
+  const swJs = await fetch(BASE + '/sw.js');
+  const swText = await swJs.text();
+  check('service worker has a fetch handler (installable)',
+    swJs.status === 200 && swText.includes("addEventListener('fetch'"));
   const idxText = await (await fetch(BASE + '/')).text();
   check('index offers Gmail login', idxText.includes('Gmail'));
 
