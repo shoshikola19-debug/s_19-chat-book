@@ -505,6 +505,39 @@ async function main() {
   check('chat-media needs a peer', chatMediaBad.status === 400, chatMediaBad);
   const chatMediaAnon = await get('/api/chat-media?with=' + FRIEND);
   check('chat-media needs a session', chatMediaAnon.status === 401, chatMediaAnon);
+
+  console.log('== my profile (Settings) ==');
+  // Avatar + About: set them, read them back from /api/me, and confirm a
+  // friend sees them in the inbox list. The avatar is a small data URL.
+  const AVATAR_TINY = 'data:image/png;base64,' + PNG_1X1;
+  const profAbout = await post('/api/profile', { about: 'Current mood: building my own app!' }, tokA);
+  check('set About', profAbout.status === 200 && profAbout.data.about === 'Current mood: building my own app!', profAbout);
+  const profAvatar = await post('/api/profile', { avatar: AVATAR_TINY }, tokA);
+  check('set avatar', profAvatar.status === 200 && profAvatar.data.avatar === AVATAR_TINY, profAvatar);
+  const meProf = await get('/api/me', tokA);
+  check('my profile reads back avatar + about',
+    meProf.status === 200 && meProf.data.avatar === AVATAR_TINY && meProf.data.about === 'Current mood: building my own app!', meProf);
+  const convsAvatar = await get('/api/conversations', tokB);
+  const avConv = (convsAvatar.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('friend sees my avatar and About in the inbox',
+    convsAvatar.status === 200 && avConv && avConv.avatar === AVATAR_TINY && avConv.about === 'Current mood: building my own app!', avConv);
+  const profName = await post('/api/profile', { name: 'Bijoy Test' }, tokA);
+  check('rename via profile', profName.status === 200 && profName.data.name === 'Bijoy Test', profName);
+  const profBadAvatar = await post('/api/profile', { avatar: 'not-an-image' }, tokA);
+  check('non-image avatar rejected', profBadAvatar.status === 400 && profBadAvatar.data.error === 'bad_avatar', profBadAvatar);
+  const profBigAvatar = await post('/api/profile', { avatar: 'data:image/png;base64,' + 'A'.repeat(160000) }, tokA);
+  check('oversize avatar rejected', profBigAvatar.status === 413 && profBigAvatar.data.error === 'avatar_too_big', profBigAvatar);
+  const profEmptyName = await post('/api/profile', { name: '   ' }, tokA);
+  check('empty name rejected', profEmptyName.status === 400 && profEmptyName.data.error === 'bad_name', profEmptyName);
+  const profLongAbout = await post('/api/profile', { about: 'x'.repeat(200) }, tokA);
+  check('About over 140 chars is capped, not rejected',
+    profLongAbout.status === 200 && profLongAbout.data.about.length === 140, profLongAbout);
+  const profAnon = await post('/api/profile', { about: 'hi' });
+  check('profile needs a session', profAnon.status === 401, profAnon);
+  const profEmpty = await post('/api/profile', {}, tokA);
+  check('profile with nothing to change rejected', profEmpty.status === 400, profEmpty);
+  const profClearAvatar = await post('/api/profile', { avatar: '' }, tokA);
+  check('avatar can be removed', profClearAvatar.status === 200 && profClearAvatar.data.avatar === '', profClearAvatar);
   const imgDataStranger = await get('/api/media/' + imgId, tokG);
   check('a stranger cannot download the photo', imgDataStranger.status === 403, imgDataStranger);
   const vid = await sendMedia(FRIEND, 'video', 'test-video.mp4', 'video/mp4', FAKE_VIDEO, tokA);
