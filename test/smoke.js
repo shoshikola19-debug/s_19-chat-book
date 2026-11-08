@@ -1205,6 +1205,49 @@ async function main() {
     swipeBlock.includes("addEventListener('pointermove'") && swipeBlock.includes('startReply(m)')
     && swipeBlock.includes('swipeDone') && !leaveBlock.includes('swipeStart = null')
     && /\.msg \{[^}]*touch-action: pan-y/.test(styleCss));
+  // Swipe-to-reply VISIBLY slides the bubble: while the finger drags
+  // right the bubble translates 1:1 (clamped at 72px) with the
+  // transition off, a ↩️ badge fades in at the vacated left edge, and
+  // a drag that stops short snaps back. Bijoy reported 2026-11-08
+  // 23:23 that the pull was invisible — only "Reply" appeared later.
+  check('swipe-to-reply visibly slides the bubble aside: translateX follows the finger (clamped 72px), msg-swiping disables the transition mid-drag, the reply-arrow badge fades in with dx and resets on snap-back',
+    swipeBlock.includes("div.style.transform = 'translateX('") && swipeBlock.includes('Math.min(dx, 72)')
+    && swipeBlock.includes('msg-swiping') && swipeBlock.includes('getSwipeIc')
+    && swipeBlock.includes('resetSwipeVisual') && swipeBlock.includes('dx / 60')
+    && /\.msg \{[^}]*transition: transform \.18s ease/.test(styleCss)
+    && /\.msg\.msg-swiping \{ transition: none; \}/.test(styleCss)
+    && /\.swipe-reply-ic \{[^}]*opacity: 0;[^}]*transition: opacity \.12s/.test(styleCss));
+  // Back navigation, one step at a time: Bijoy reported 2026-11-08
+  // 23:25 that one back press from inside a chat exited the whole
+  // app. Every layer pushes one history entry on open; popstate closes
+  // only the topmost layer; in-app back arrows go through
+  // history.back() so no stale entry remains; at the inbox the stack
+  // is empty and back exits as normal (no entry is pushed at load —
+  // pushState appears exactly once, inside pushBackLayer).
+  check('back button goes one step at a time: layers push a history entry on open and popstate closes the topmost; chat, settings, profile, theme, wallpaper, viewers and dialogs wired',
+    appJs.includes('history.pushState({ s19layer: id },') && appJs.includes("window.addEventListener('popstate'")
+    && appJs.includes('history.back()') && appJs.includes('function pushBackLayer')
+    && appJs.includes('function goBackLayer') && appJs.includes('function dismissBackLayer')
+    && appJs.includes("pushBackLayer('chat'") && appJs.includes("pushBackLayer('channel'")
+    && appJs.includes("pushBackLayer('settings-overlay'") && appJs.includes("pushBackLayer('profile-overlay'")
+    && appJs.includes("pushBackLayer('settings-notif-overlay'") && appJs.includes("pushBackLayer('settings-storage-overlay'")
+    && appJs.includes("pushBackLayer('settings-access-overlay'") && appJs.includes("pushBackLayer('settings-help-overlay'")
+    && appJs.includes("pushBackLayer('edit-field-dialog'") && appJs.includes("pushBackLayer('theme-overlay'")
+    && appJs.includes("pushBackLayer('wallpaper-overlay'") && appJs.includes("pushBackLayer('wallpaper-preview'")
+    && appJs.includes("pushBackLayer('starred-overlay'") && appJs.includes("pushBackLayer('group-info-overlay'")
+    && appJs.includes("pushBackLayer('status-viewer'") && appJs.includes("pushBackLayer('photo-viewer'")
+    && appJs.includes("pushBackLayer('media-viewer'") && appJs.includes("pushBackLayer('msg-action-dialog'")
+    && appJs.includes("pushBackLayer('delete-msg-dialog'") && appJs.includes("pushBackLayer('reaction-who-dialog'")
+    && appJs.includes("pushBackLayer('ringtone-dialog'") && appJs.includes("pushBackLayer('msgtone-dialog'")
+    && appJs.includes("pushBackLayer('forward-dialog'") && appJs.includes("pushBackLayer('media-share-dialog'")
+    && appJs.includes("pushBackLayer('disappearing-dialog'") && appJs.includes("pushBackLayer('report-dialog'")
+    && appJs.includes("pushBackLayer('send-photo-dialog'") && appJs.includes("pushBackLayer('manage-storage-dialog'")
+    && appJs.includes("pushBackLayer('media-visibility-dialog'") && appJs.includes("pushBackLayer('add-to-group-dialog'")
+    && appJs.includes("pushBackLayer('pin-dialog'") && appJs.includes("pushBackLayer('locked-chats-dialog'")
+    && appJs.includes("pushBackLayer('add-contact-dialog'") && appJs.includes("pushBackLayer('new-group-dialog'")
+    && appJs.includes("pushBackLayer('add-group-members-dialog'") && appJs.includes("pushBackLayer('new-channel-dialog'")
+    && appJs.includes("pushBackLayer('push-dialog'")
+    && (appJs.match(/history\.pushState/g) || []).length === 1, null);
 
   // --- forward ---
   const fwd = await post('/api/messages/' + baseId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokB);
