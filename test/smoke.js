@@ -41,6 +41,26 @@ async function get(p, token) {
   return { status: r.status, data: await r.json().catch(() => null) };
 }
 
+// Direct SQL against the scratch DB (both engines), for test setup the
+// API cannot do — e.g. backdating a message's expiry so the test does
+// not have to wait 24 hours. The server keeps running on the same DB.
+async function execSql(sql, ...params) {
+  if (PG_URL) {
+    const { Client } = require('pg');
+    const { cleanConnectionString } = require('../db');
+    const client = new Client({ connectionString: cleanConnectionString(PG_URL), ssl: { rejectUnauthorized: false } });
+    await client.connect();
+    let i = 0;
+    await client.query(sql.replace(/\?/g, () => '$' + ++i), params);
+    await client.end();
+  } else {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(DB);
+    db.prepare(sql).run(...params);
+    db.close();
+  }
+}
+
 async function login(phone, name) {
   const rc = await post('/api/request-code', { phone });
   check(`request-code ${phone} returns test code`, rc.status === 200 && rc.data.ok && typeof rc.data.testCode === 'string' && rc.data.testCode.length === 6, rc);
@@ -339,6 +359,133 @@ async function main() {
   check('deleted channel is gone', chListAfter.status === 200 && !chListAfter.data.channels.some((c) => c.name === 'Admin Delete Test'), chListAfter);
   const delMissing = await fetch(BASE + '/api/admin/channels/999999', { method: 'DELETE', headers: { Authorization: 'Bearer ' + tokA } });
   check('admin delete of missing channel -> 404', delMissing.status === 404);
+
+  console.log('== chat settings: theme / mute / disappearing / clear / block ==');
+  const set0 = await get('/api/chat-settings?with=' + FRIEND, tokA);
+  check('chat settings default (not muted, no disappearing, default theme, not blocked)',
+    set0.status === 200 && set0.data.muted === 0 && set0.data.disappearing === 0 && set0.data.chatTheme === '' && set0.data.blockedByMe === 0 && set0.data.blockedByPeer === 0, set0);
+  const setTheme = await post('/api/chat-settings', { with: FRIEND, chatTheme: 'blue' }, tokA);
+  check('set per-chat theme blue', setTheme.status === 200 && setTheme.data.chatTheme === 'blue', setTheme);
+  const setThemeBad = await post('/api/chat-settings', { with: FRIEND, chatTheme: 'rainbow' }, tokA);
+  check('bad chat theme rejected', setThemeBad.status === 400 && setThemeBad.data.error === 'bad_theme', setThemeBad);
+  const setThemeBack = await post('/api/chat-settings', { with: FRIEND, chatTheme: '' }, tokA);
+  check('reset per-chat theme to default', setThemeBack.status === 200 && setThemeBack.data.chatTheme === '', setThemeBack);
+  const setDispBad = await post('/api/chat-settings', { with: FRIEND, disappearing: 12345 }, tokA);
+  check('bad disappearing value rejected', setDispBad.status === 400 && setDispBad.data.error === 'bad_disappearing', setDispBad);
+  // Mute: the friend mutes Bijoy. Messages still deliver (only the push
+  // is skipped) and the inbox row carries the muted flag.
+  const setMute = await post('/api/chat-settings', { with: BIJOY, muted: true }, tokB);
+  check('friend mutes Bijoy chat', setMute.status === 200 && setMute.data.muted === 1, setMute);
+  const mutedMsg = await post('/api/messages', { to: FRIEND, body: 'Muted chat message still delivers' }, tokA);
+  check('message to a muted chat still delivers', mutedMsg.status === 200 && mutedMsg.data.ok, mutedMsg);
+  const mutedInbox = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('muted friend receives the message', mutedInbox.status === 200 && mutedInbox.data.messages.some((m) => m.body.includes('Muted chat message')), mutedInbox);
+  const convsMuted = await get('/api/conversations', tokB);
+  const mutedConv = (convsMuted.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('inbox row carries muted flag', convsMuted.status === 200 && mutedConv && mutedConv.muted === 1, mutedConv);
+  const setUnmute = await post('/api/chat-settings', { with: BIJOY, muted: false }, tokB);
+  check('friend unmutes Bijoy chat', setUnmute.status === 200 && setUnmute.data.muted === 0, setUnmute);
+  // Disappearing: Bijoy sets 24h; the message gets expires_at; backdate
+  // it in the DB and it hides from fetch and from the inbox preview.
+  const setDisp = await post('/api/chat-settings', { with: FRIEND, disappearing: 86400 }, tokA);
+  check('set disappearing 24h', setDisp.status === 200 && setDisp.data.disappearing === 86400, setDisp);
+  const dispMsg = await post('/api/messages', { to: FRIEND, body: 'This message will disappear' }, tokA);
+  check('message in disappearing chat gets expires_at',
+    dispMsg.status === 200 && dispMsg.data.message.expires_at > dispMsg.data.message.created_at
+    && dispMsg.data.message.expires_at - dispMsg.data.message.created_at === 86400 * 1000, dispMsg);
+  const dispId = dispMsg.data.message.id;
+  await execSql('UPDATE messages SET expires_at = ? WHERE id = ?', Date.now() - 1000, dispId);
+  const dispGone = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('expired message hidden from fetch', dispGone.status === 200 && !dispGone.data.messages.some((m) => m.id === dispId), dispGone);
+  const convsDisp = await get('/api/conversations', tokB);
+  const dispConv = (convsDisp.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('expired message not the inbox preview', convsDisp.status === 200 && dispConv && !dispConv.lastMessage.includes('will disappear'), dispConv);
+  const setDispOff = await post('/api/chat-settings', { with: FRIEND, disappearing: 0 }, tokA);
+  check('disappearing off again', setDispOff.status === 200 && setDispOff.data.disappearing === 0, setDispOff);
+  // Clear chat: Bijoy clears; his view empties, the friend keeps history,
+  // and a message sent after the clear shows up again.
+  const clearMsg = await post('/api/messages', { to: FRIEND, body: 'Message before clear' }, tokA);
+  check('message before clear sends', clearMsg.status === 200, clearMsg);
+  const clear = await post('/api/chat-settings/clear', { with: FRIEND }, tokA);
+  check('clear chat', clear.status === 200 && clear.data.ok, clear);
+  const clearedView = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('cleared chat is empty for me', clearedView.status === 200 && clearedView.data.messages.length === 0, clearedView);
+  const friendKeeps = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  check('friend still sees the history after my clear', friendKeeps.status === 200 && friendKeeps.data.messages.some((m) => m.body.includes('Message before clear')), friendKeeps);
+  const afterClear = await post('/api/messages', { to: FRIEND, body: 'Message after clear' }, tokA);
+  check('message after clear sends', afterClear.status === 200, afterClear);
+  const clearedView2 = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('only the new message shows after clear', clearedView2.status === 200 && clearedView2.data.messages.length === 1 && clearedView2.data.messages[0].body.includes('Message after clear'), clearedView2);
+  // Per-user block: Bijoy blocks the friend; messages and calls stop in
+  // BOTH directions; unblock restores. The admin block is untouched —
+  // the friend's session keeps working (GET /api/me still 200).
+  const blockU = await post('/api/chat-settings', { with: FRIEND, blocked: true }, tokA);
+  check('Bijoy blocks friend (per-user)', blockU.status === 200 && blockU.data.blockedByMe === 1, blockU);
+  const blockedMsg = await post('/api/messages', { to: BIJOY, body: 'blocked bondhu message' }, tokB);
+  check('blocked friend cannot message me', blockedMsg.status === 403 && blockedMsg.data.error === 'blocked_by_peer', blockedMsg);
+  const blockedMsgMe = await post('/api/messages', { to: FRIEND, body: 'ami block korechi' }, tokA);
+  check('I cannot message someone I blocked', blockedMsgMe.status === 403 && blockedMsgMe.data.error === 'you_blocked', blockedMsgMe);
+  const blockedCall = await post('/api/calls/signal', { to: BIJOY, kind: 'offer', payload: { sdp: 'x', type: 'offer' } }, tokB);
+  check('blocked friend cannot call me', blockedCall.status === 403 && blockedCall.data.error === 'blocked_by_peer', blockedCall);
+  const meFriend = await get('/api/me', tokB);
+  check('per-user block does not admin-block (session still works)', meFriend.status === 200, meFriend);
+  const unblockU = await post('/api/chat-settings', { with: FRIEND, blocked: false }, tokA);
+  check('Bijoy unblocks friend', unblockU.status === 200 && unblockU.data.blockedByMe === 0, unblockU);
+  const afterUnblock = await post('/api/messages', { to: BIJOY, body: 'Unblocked, kotha bolo' }, tokB);
+  check('message works again after unblock', afterUnblock.status === 200, afterUnblock);
+
+  console.log('== media messages ==');
+  // Small fixtures: a 1x1 PNG, a few fake video/voice bytes, a text file.
+  const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const FAKE_VIDEO = Buffer.from('000000186674797069736f6d0000000000000000', 'hex').toString('base64');
+  const FAKE_VOICE = Buffer.from('1a45dfa3', 'hex').toString('base64');
+  const FILE_TEXT = Buffer.from('Hello, this is a test document for S_19 CHAT BOOK.', 'utf8').toString('base64');
+  async function sendMedia(to, kind, fileName, mimeType, data, token, duration) {
+    return post('/api/messages/media', { to, mediaKind: kind, fileName, mimeType, size: Buffer.from(data, 'base64').length, data, duration }, token);
+  }
+  const img = await sendMedia(FRIEND, 'image', 'test-photo.png', 'image/png', PNG_1X1, tokA);
+  check('send photo (original bytes, no compression)', img.status === 200 && img.data.message.media_kind === 'image' && img.data.message.body === '📷 ছবি', img);
+  const imgId = img.data.message.id;
+  const imgFetch = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const imgMsg = (imgFetch.data.messages || []).find((m) => m.id === imgId);
+  check('receiver fetch lists the photo with metadata, no bytes inline',
+    imgFetch.status === 200 && imgMsg && imgMsg.media_kind === 'image' && imgMsg.has_media === 1 && !('media_data' in imgMsg), imgMsg);
+  const imgData = await get('/api/media/' + imgId, tokB);
+  check('receiver downloads the photo bytes unchanged',
+    imgData.status === 200 && imgData.data.data === PNG_1X1 && imgData.data.mimeType === 'image/png', imgData);
+  const imgDataSender = await get('/api/media/' + imgId, tokA);
+  check('sender can download their own photo', imgDataSender.status === 200 && imgDataSender.data.data === PNG_1X1, imgDataSender);
+  const imgDataStranger = await get('/api/media/' + imgId, tokG);
+  check('a stranger cannot download the photo', imgDataStranger.status === 403, imgDataStranger);
+  const vid = await sendMedia(FRIEND, 'video', 'test-video.mp4', 'video/mp4', FAKE_VIDEO, tokA);
+  check('send video', vid.status === 200 && vid.data.message.media_kind === 'video' && vid.data.message.body === '🎥 ভিডিও', vid);
+  const vidData = await get('/api/media/' + vid.data.message.id, tokB);
+  check('receiver downloads the video bytes unchanged', vidData.status === 200 && vidData.data.data === FAKE_VIDEO, vidData);
+  const voice = await sendMedia(FRIEND, 'voice', 'voice-1.webm', 'audio/webm', FAKE_VOICE, tokA, 7);
+  check('send voice note with duration', voice.status === 200 && voice.data.message.media_kind === 'voice' && voice.data.message.media_duration === 7 && voice.data.message.body === '🎤 ভয়েস', voice);
+  const file = await sendMedia(FRIEND, 'file', 'notes.txt', 'text/plain', FILE_TEXT, tokA);
+  check('send file', file.status === 200 && file.data.message.media_kind === 'file' && file.data.message.body === '📄 notes.txt', file);
+  const fileData = await get('/api/media/' + file.data.message.id, tokB);
+  check('receiver downloads the file bytes unchanged', fileData.status === 200 && fileData.data.data === FILE_TEXT, fileData);
+  const convsMedia = await get('/api/conversations', tokB);
+  const mediaConv = (convsMedia.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('inbox preview shows the last media label', convsMedia.status === 200 && mediaConv && mediaConv.lastMessage === '📄 notes.txt', mediaConv);
+  const mediaTicks = await get('/api/messages?with=' + FRIEND + '&afterId=' + file.data.message.id, tokA);
+  check('media message ticks arrive on empty fetch',
+    mediaTicks.status === 200 && mediaTicks.data.ticks.some((t) => t.id === imgId && t.delivered === 1), mediaTicks);
+  const storage = await get('/api/storage', tokA);
+  check('storage endpoint counts my media', storage.status === 200 && storage.data.mediaCount >= 4 && storage.data.mediaBytes > 0 && storage.data.limitBytes === 1073741824, storage);
+  // Size caps: real oversized bytes are rejected (photo 10 MB, file
+  // 5 MB); the video cap is exercised through the declared size — the
+  // same code path checks both the declared and the decoded size.
+  const BIG_PHOTO = Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64');
+  const bigPhoto = await sendMedia(FRIEND, 'image', 'big.png', 'image/png', BIG_PHOTO, tokA);
+  check('photo over 10 MB rejected', bigPhoto.status === 413 && bigPhoto.data.error === 'file_too_big', { status: bigPhoto.status, error: bigPhoto.data && bigPhoto.data.error });
+  const BIG_FILE = Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64');
+  const bigFile = await sendMedia(FRIEND, 'file', 'big.txt', 'text/plain', BIG_FILE, tokA);
+  check('file over 5 MB rejected', bigFile.status === 413 && bigFile.data.error === 'file_too_big', { status: bigFile.status, error: bigFile.data && bigFile.data.error });
+  const bigVideoDeclared = await post('/api/messages/media', { to: FRIEND, mediaKind: 'video', fileName: 'big.mp4', mimeType: 'video/mp4', size: 60 * 1024 * 1024, data: FAKE_VIDEO }, tokA);
+  check('video over 50 MB declared size rejected', bigVideoDeclared.status === 413 && bigVideoDeclared.data.error === 'file_too_big', { status: bigVideoDeclared.status, error: bigVideoDeclared.data && bigVideoDeclared.data.error });
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
