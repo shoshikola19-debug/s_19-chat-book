@@ -39,6 +39,33 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, 's19.db');
 const CODE_TTL_MS = 10 * 60 * 1000; // a code works for 10 minutes
 const STATUS_TTL_MS = 24 * 60 * 60 * 1000; // a status lives 24 hours
 
+// Broadcast announcements are sent from this special sender identity.
+// It is NOT a real user: it has a row in `users` only so publicUser()
+// can give it a name, and the message endpoints accept it as a peer.
+const SYSTEM_SENDER = 'S_19 CHAT BOOK';
+
+// Admin panel: who may use it, from the ADMIN_USERS env var — a
+// comma-separated list of full international phone numbers
+// (8801XXXXXXXXX) or Gmail addresses. If it is unset, nobody is admin
+// and the Admin tab stays hidden for everyone. Set it in the Render
+// Dashboard (Environment tab); the server only ever logs the count,
+// never the identities themselves.
+function normalizeAdminEntry(s) {
+  s = String(s || '').trim();
+  if (!s) return '';
+  if (s.includes('@')) return s.toLowerCase();
+  let d = s.replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('0')) d = '880' + d.slice(1); // 01XXXXXXXXX -> 8801XXXXXXXXX
+  return d;
+}
+const ADMIN_USERS = new Set(
+  (process.env.ADMIN_USERS || '').split(',').map(normalizeAdminEntry).filter(Boolean)
+);
+function isAdmin(phone) {
+  return Boolean(phone) && ADMIN_USERS.has(phone);
+}
+
 // Set in start() before the server listens, so no request can arrive
 // before the database is ready.
 let db;
@@ -106,8 +133,22 @@ async function auth(req, res, next) {
   if (!token) return res.status(401).json({ ok: false, error: 'no_token' });
   const row = await db.get('SELECT phone FROM sessions WHERE token = ?', token);
   if (!row) return res.status(401).json({ ok: false, error: 'bad_token' });
+  // A blocked user is kicked out immediately, even with a live session:
+  // this one check gates every protected endpoint, so a blocked user
+  // cannot send messages, call, or use any other API. Unblocking makes
+  // the same token work again — no re-login needed.
+  const u = await db.get('SELECT blocked FROM users WHERE phone = ?', row.phone);
+  if (u && u.blocked) return res.status(401).json({ ok: false, error: 'blocked' });
   req.phone = row.phone;
   req.token = token;
+  next();
+}
+
+// Admin-only routes: runs after auth, so req.phone is set. 403 for
+// everyone else — the client hides the Admin tab for non-admins, but the
+// server is the real gate.
+function adminAuth(req, res, next) {
+  if (!isAdmin(req.phone)) return res.status(403).json({ ok: false, error: 'not_admin' });
   next();
 }
 
@@ -126,8 +167,18 @@ function codeRateLimited(phone) {
 }
 
 async function publicUser(phone) {
+  if (phone === SYSTEM_SENDER) return { phone, name: 'S_19 CHAT BOOK' };
   const u = await db.get('SELECT phone, name FROM users WHERE phone = ?', phone);
   return u ? { phone: u.phone, name: u.name } : { phone, name: '' };
+}
+
+// A peer identity, except the broadcast sender is accepted as-is:
+// normalizePeer() would strip it to '' because it is not a phone number
+// or an email address.
+function normalizePeerOrSystem(raw, dial) {
+  const s = String(raw || '').trim();
+  if (s === SYSTEM_SENDER) return SYSTEM_SENDER;
+  return normalizePeer(s, dial);
 }
 
 const app = express();
@@ -156,6 +207,12 @@ app.post('/api/request-code', ah(async (req, res) => {
     }
   } else if (!phone || phone.length < 8 || phone.length > 15) {
     return res.status(400).json({ ok: false, error: 'bad_phone' });
+  }
+  // Blocked users get no code at all (and no SMS/email is spent on them).
+  // Checked before the rate limit, so a blocked user always gets 'blocked'.
+  const existingUser = await db.get('SELECT blocked FROM users WHERE phone = ?', phone);
+  if (existingUser && existingUser.blocked) {
+    return res.status(403).json({ ok: false, error: 'blocked' });
   }
   if (codeRateLimited(phone)) {
     return res.status(429).json({ ok: false, error: 'too_many_codes' });
@@ -198,6 +255,12 @@ app.post('/api/verify-code', ah(async (req, res) => {
   if (!phone || code.length !== 6 || (isEmail && !isEmailAddr(phone))) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
   }
+  // Checked before the code itself, so a blocked user always gets
+  // 'blocked' even with a wrong or missing code.
+  const blockedUser = await db.get('SELECT blocked FROM users WHERE phone = ?', phone);
+  if (blockedUser && blockedUser.blocked) {
+    return res.status(403).json({ ok: false, error: 'blocked' });
+  }
   const row = await db.get('SELECT * FROM otp_codes WHERE phone = ?', phone);
   if (!row) return res.status(400).json({ ok: false, error: 'no_code' });
   if (row.expires_at < now()) {
@@ -235,7 +298,9 @@ app.post('/api/set-name', ah(auth), ah(async (req, res) => {
 }));
 
 app.get('/api/me', ah(auth), ah(async (req, res) => {
-  return res.json({ ok: true, ...(await publicUser(req.phone)) });
+  // isAdmin tells the client whether to show the Admin tab. The server
+  // still enforces admin on every /api/admin/* route — the tab is only UI.
+  return res.json({ ok: true, ...(await publicUser(req.phone)), isAdmin: isAdmin(req.phone) });
 }));
 
 app.post('/api/logout', ah(auth), ah(async (req, res) => {
@@ -307,7 +372,7 @@ app.get('/api/conversations', ah(auth), ah(async (req, res) => {
 // Incremental message fetch: only messages with id > afterId are returned,
 // so a weak connection never re-downloads the whole history.
 app.get('/api/messages', ah(auth), ah(async (req, res) => {
-  const withPhone = normalizePeer(req.query.with || '');
+  const withPhone = normalizePeerOrSystem(req.query.with || '');
   const afterId = Number(req.query.afterId || 0);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
   const rows = await db.all(
@@ -330,7 +395,7 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
 }));
 
 app.post('/api/messages', ah(auth), ah(async (req, res) => {
-  const to = normalizePeer(req.body && (req.body.to || req.body.email), req.body && req.body.dial);
+  const to = normalizePeerOrSystem(req.body && (req.body.to || req.body.email), req.body && req.body.dial);
   const body = String((req.body && req.body.body) || '').trim().slice(0, 4000);
   if (!validIdentity(to) || !body) {
     return res.status(400).json({ ok: false, error: 'bad_input' });
@@ -356,7 +421,7 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
 
 // Mark a conversation as read (clears my unread count for that peer).
 app.post('/api/messages/read', ah(auth), ah(async (req, res) => {
-  const withPhone = normalizePeer(req.body && req.body.with);
+  const withPhone = normalizePeerOrSystem(req.body && req.body.with);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
   await db.run(
     'UPDATE messages SET read = TRUE, delivered = TRUE WHERE sender = ? AND receiver = ?',
@@ -627,6 +692,118 @@ app.delete('/api/push/subscribe', ah(auth), ah(async (req, res) => {
   return res.json({ ok: true });
 }));
 
+// ---- admin panel ------------------------------------------------------------
+// Admins are named by the ADMIN_USERS env var (see top of this file).
+// Every route here requires auth + adminAuth — a non-admin gets 403,
+// even if they guess the URL. The client hides the Admin tab for
+// non-admins, but this server check is the real gate.
+
+// Stats: totals for the panel's top cards. Calls = call attempts
+// (one 'offer' signal per call attempt).
+app.get('/api/admin/stats', ah(auth), adminAuth, ah(async (req, res) => {
+  const users = (await db.get('SELECT COUNT(*) AS n FROM users')).n;
+  const messages = (await db.get('SELECT COUNT(*) AS n FROM messages')).n;
+  const calls = (await db.get("SELECT COUNT(*) AS n FROM call_signals WHERE kind = 'offer'")).n;
+  return res.json({ ok: true, users, messages, calls });
+}));
+
+// All users, newest first, with their blocked flag.
+app.get('/api/admin/users', ah(auth), adminAuth, ah(async (req, res) => {
+  const rows = await db.all('SELECT phone, name, created_at, blocked FROM users ORDER BY created_at DESC LIMIT 500');
+  return res.json({ ok: true, users: rows.map((r) => ({ ...r, blocked: r.blocked ? 1 : 0 })) });
+}));
+
+// Block or unblock a user. Blocking takes effect at once: the auth
+// middleware rejects the user's live session on the next request, so they
+// cannot log in, send messages, or call. Unblocking makes the same
+// session work again — no re-login needed. An admin cannot block another
+// admin (or themself) by accident.
+app.post('/api/admin/users/block', ah(auth), adminAuth, ah(async (req, res) => {
+  const phone = normalizePeer(req.body && req.body.phone);
+  const blocked = req.body && req.body.blocked === true;
+  if (!validIdentity(phone)) return res.status(400).json({ ok: false, error: 'bad_phone' });
+  const user = await db.get('SELECT phone FROM users WHERE phone = ?', phone);
+  if (!user) return res.status(404).json({ ok: false, error: 'not_found' });
+  if (blocked && isAdmin(phone)) return res.status(403).json({ ok: false, error: 'cannot_block_admin' });
+  // TRUE/FALSE as SQL literals: native boolean on Postgres, 1/0 on SQLite.
+  await db.run(`UPDATE users SET blocked = ${blocked ? 'TRUE' : 'FALSE'} WHERE phone = ?`, phone);
+  return res.json({ ok: true, phone, blocked });
+}));
+
+// All channels, with follower counts, for the panel's channel list.
+app.get('/api/admin/channels', ah(auth), adminAuth, ah(async (req, res) => {
+  const rows = await db.all('SELECT * FROM channels ORDER BY created_at DESC LIMIT 200');
+  const out = [];
+  for (const c of rows) {
+    const followers = (await db.get('SELECT COUNT(*) AS n FROM channel_follows WHERE channel_id = ?', c.id)).n;
+    out.push({ ...c, followers });
+  }
+  return res.json({ ok: true, channels: out });
+}));
+
+// Delete any channel (admin only — the normal owner-only rule stays for
+// regular users). Posts and follows go with it.
+app.delete('/api/admin/channels/:id', ah(auth), adminAuth, ah(async (req, res) => {
+  const id = Number(req.params.id);
+  const ch = await db.get('SELECT * FROM channels WHERE id = ?', id);
+  if (!ch) return res.status(404).json({ ok: false, error: 'not_found' });
+  await db.run('DELETE FROM channel_posts WHERE channel_id = ?', id);
+  await db.run('DELETE FROM channel_follows WHERE channel_id = ?', id);
+  await db.run('DELETE FROM channels WHERE id = ?', id);
+  return res.json({ ok: true });
+}));
+
+// Broadcast an announcement to ALL users. It is stored as a normal
+// 1-to-1 message from "S_19 CHAT BOOK" into every user's inbox — the
+// same delivery path as a regular message (it appears in each user's
+// chat list, and a push notification goes out like any other message),
+// not a second channel system. Blocked users are skipped: they cannot
+// log in to read it anyway.
+app.post('/api/admin/broadcast', ah(auth), adminAuth, ah(async (req, res) => {
+  const text = String((req.body && req.body.text) || '').trim().slice(0, 4000);
+  if (!text) return res.status(400).json({ ok: false, error: 'bad_text' });
+  const t = now();
+  const r = await db.run(
+    `INSERT INTO messages (sender, receiver, body, created_at)
+     SELECT ?, phone, ?, ? FROM users WHERE phone != ? AND blocked = FALSE`,
+    SYSTEM_SENDER, text, t, SYSTEM_SENDER);
+  const recipients = r.changes || 0;
+  // Notify everyone, even with the app closed — fire-and-forget, like a
+  // normal message; a push failure never blocks the reply.
+  const users = await db.all('SELECT phone FROM users WHERE phone != ? AND blocked = FALSE', SYSTEM_SENDER);
+  for (const u of users) {
+    push.sendPushToUser(db, u.phone, {
+      title: 'S_19 CHAT BOOK',
+      body: 'নতুন ঘোষণা',
+      tag: 'announce',
+      type: 'announcement',
+      peer: SYSTEM_SENDER,
+    }).catch(() => {});
+  }
+  return res.json({ ok: true, recipients });
+}));
+
+// The panel's one setting: the welcome-screen banner text. Empty = hidden.
+app.get('/api/admin/settings', ah(auth), adminAuth, ah(async (req, res) => {
+  const row = await db.get("SELECT value FROM settings WHERE key = 'banner'");
+  return res.json({ ok: true, banner: row ? row.value : '' });
+}));
+app.post('/api/admin/settings', ah(auth), adminAuth, ah(async (req, res) => {
+  const banner = String((req.body && req.body.banner) || '').trim().slice(0, 300);
+  await db.run(
+    `INSERT INTO settings (key, value) VALUES ('banner', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    banner);
+  return res.json({ ok: true, banner });
+}));
+
+// Public (no login needed): the welcome screen fetches this before login
+// to show the admin's banner, if one is set.
+app.get('/api/banner', ah(async (req, res) => {
+  const row = await db.get("SELECT value FROM settings WHERE key = 'banner'");
+  return res.json({ ok: true, banner: row ? row.value : '' });
+}));
+
 // ---- static frontend + start -------------------------------------------------
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -661,6 +838,7 @@ async function start() {
     console.log(`Email mode: ${emailSender.isConfigured() ? 'REAL EMAIL (' + process.env.EMAIL_PROVIDER + ')' : 'TEST CODE on screen'}`);
     console.log(`DB: ${db.label}`);
     console.log(`Push notifications: ${pushOn ? 'ENABLED (VAPID)' : 'disabled (no VAPID keys set)'}`);
+    console.log(`Admin panel: ${ADMIN_USERS.size ? ADMIN_USERS.size + ' admin(s) configured' : 'no admins (ADMIN_USERS not set)'}`);
   });
 }
 
