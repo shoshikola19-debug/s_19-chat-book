@@ -1283,11 +1283,23 @@ function applyChatTheme() {
   box.classList.remove('chat-theme-green', 'chat-theme-blue', 'chat-theme-purple', 'chat-theme-pink', 'chat-theme-dark');
   if (chatSettings && chatSettings.chatTheme) box.classList.add('chat-theme-' + chatSettings.chatTheme);
   // Gallery photo for this chat (this phone only): it covers the colour
-  // theme. Picking a colour clears the photo again (see below).
+  // theme. The stored value is one of: a data: URL (picked photo),
+  // wallpapers/<file>.jpg (bundled), gradient:<css> or color:#RRGGBB.
   const photo = savedChatPhoto(activeChat);
+  const dim = savedChatDim(activeChat);
+  const w = wallpaperWithDim(photo, dim);
   box.classList.toggle('has-photo', !!photo);
-  box.style.backgroundImage = photo ? 'url(' + photo + ')' : '';
-  $('btn-chat-bg-remove').classList.toggle('hidden', !photo);
+  box.style.backgroundImage = w.image;
+  box.style.backgroundColor = w.color;
+  // Outgoing-bubble colour for this chat (server-stored, '' = default).
+  const bc = chatSettings && chatSettings.bubbleColor ? chatSettings.bubbleColor : '';
+  if (bc) {
+    box.style.setProperty('--bubble-mine', bc);
+    box.style.setProperty('--bubble-mine-text', bubbleTextFor(bc));
+  } else {
+    box.style.removeProperty('--bubble-mine');
+    box.style.removeProperty('--bubble-mine-text');
+  }
   // Last seen / disappearing indicator under the peer's name.
   updatePeerSubline();
 }
@@ -1527,78 +1539,435 @@ function handleDeepLink() {
   if (conversations.length || myGroups.length) tryOpen();
   else loadInbox().then(tryOpen).catch(tryOpen);
 }
-// Per-chat theme: pick first, PREVIEW it, then apply with "Done".
-// Nothing changes in the real chat until Apply — so themes and photos
-// can be compared before committing. Cancel discards the preview.
-let pendingChatTheme = '';
-let pendingChatPhoto = '';
+// ---- Chat theme + Wallpaper (WhatsApp-style) --------------------------
+// A per-chat theme is a wallpaper + an outgoing-bubble colour. The
+// wallpaper lives on this phone only (localStorage; picked photos are
+// downscaled to 1280px — photos SENT in chats stay 100% original, this
+// rule does not change). The bubble colour is stored on the server in
+// chat_settings, so it survives reinstalls. "Only you can see this
+// theme." 1-to-1 chats only — group chats keep the default look.
+// Wallpaper src encoding (stored in s19_chat_bg_<peer>):
+//   data:...            picked gallery photo (data URL, legacy format)
+//   wallpapers/<file>   bundled photo (served from /wallpapers/)
+//   gradient:<css>      CSS gradient wallpaper
+//   color:#RRGGBB       solid colour wallpaper
 function chatPhotoKey(peer) { return 's19_chat_bg_' + peer; }
+function chatDimKey(peer) { return 's19_chat_dim_' + peer; }
 function savedChatPhoto(peer) {
   try { return localStorage.getItem(chatPhotoKey(peer)) || ''; } catch { return ''; }
 }
-function updateThemePreview() {
-  const p = $('chat-theme-preview');
-  p.classList.remove('chat-theme-green', 'chat-theme-blue', 'chat-theme-purple', 'chat-theme-pink', 'chat-theme-dark');
-  if (pendingChatPhoto) {
-    p.classList.add('has-photo');
-    p.style.backgroundImage = 'url(' + pendingChatPhoto + ')';
-  } else {
-    p.classList.remove('has-photo');
-    p.style.backgroundImage = '';
-    if (pendingChatTheme) p.classList.add('chat-theme-' + pendingChatTheme);
+function savedChatDim(peer) {
+  try {
+    const d = Number(localStorage.getItem(chatDimKey(peer)) || 0);
+    return isNaN(d) ? 0 : Math.max(0, Math.min(80, d));
+  } catch { return 0; }
+}
+// Split a stored wallpaper src into a CSS background image / colour.
+function wallpaperCss(src) {
+  if (!src) return { image: '', color: '' };
+  if (src.indexOf('gradient:') === 0) return { image: src.slice(9), color: '' };
+  if (src.indexOf('color:') === 0) return { image: '', color: src.slice(6) };
+  return { image: 'url("' + src + '")', color: '' };
+}
+// The same wallpaper with a dark overlay for the brightness slider:
+// a dimmed photo/gradient gets a black gradient layer on top; a solid
+// colour is mixed toward black by the dim amount (0 = full bright).
+function wallpaperWithDim(src, dim) {
+  const base = wallpaperCss(src);
+  const d = Math.max(0, Math.min(80, dim || 0)) / 100;
+  if (base.image) {
+    return d > 0
+      ? { image: 'linear-gradient(rgba(0,0,0,' + d + '), rgba(0,0,0,' + d + ')), ' + base.image, color: '' }
+      : base;
   }
-  document.querySelectorAll('.chat-theme-opt').forEach((b) => {
-    b.classList.toggle('selected', !pendingChatPhoto && b.dataset.chatTheme === pendingChatTheme);
-  });
-  $('btn-chat-bg-remove').classList.toggle('hidden', !pendingChatPhoto && !savedChatPhoto(activeChat));
+  if (base.color) return { image: '', color: d > 0 ? darkenHex(base.color, d) : base.color };
+  return base;
+}
+function darkenHex(hex, f) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const r = Math.round(((n >> 16) & 255) * (1 - f));
+  const g = Math.round(((n >> 8) & 255) * (1 - f));
+  const b = Math.round((n & 255) * (1 - f));
+  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+}
+// Readable bubble text: dark bubbles get light text, pale ones dark.
+function bubbleTextFor(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return '#111B21';
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum < 0.45 ? '#E9EDEF' : '#111B21';
+}
+const BUNDLED_WALLPAPERS = {
+  palm: 'wallpapers/media-generation-nature-palm-0-d7019b95-33b0-4080-a168-11452696861b.jpg',
+  desert: 'wallpapers/media-generation-nature-desert-0-b72be574-928d-4c61-89d6-f58db9cb588d.jpg',
+  mountain: 'wallpapers/media-generation-nature-mountain-0-1a82b33a-a647-4613-b63b-14fbe7b99b41.jpg',
+  aiDream: 'wallpapers/media-generation-ai-dream-0-6ab45dc5-0529-4c8b-8b2d-8e21d10edefa.jpg',
+};
+const WALLPAPER_GRADIENTS = {
+  sunset: 'linear-gradient(180deg, #3E7CB1 0%, #8FC1E3 45%, #F7F3D8 100%)',
+  iridescent: 'linear-gradient(135deg, #f6d5f7 0%, #c9f0ff 35%, #ffe9a8 70%, #f9a8d4 100%)',
+  midnight: 'linear-gradient(160deg, #0B1220 0%, #1B2A4A 55%, #05070F 100%)',
+};
+// Outgoing-bubble colours (first = WhatsApp green default).
+const BUBBLE_COLORS = ['#D9FDD3', '#00A884', '#34B7F1', '#D6EAF8', '#EADCF8', '#FCE4EC', '#FFE0B2', '#FFF9C4', '#B2DFDB', '#005C4B'];
+const WALLPAPER_COLORS = ['#ECE5DD', '#D9FDD3', '#D6EAF8', '#EADCF8', '#FCE4EC', '#FFE0B2', '#FFF9C4', '#B2DFDB', '#0B141A', '#075E54'];
+// Theme cards pair a wallpaper with a bubble colour.
+const THEME_CARDS = {
+  featured: [
+    { name: 'Sunset sky', src: 'gradient:' + WALLPAPER_GRADIENTS.sunset, bubble: '#D6EAF8' },
+    { name: 'Iridescent', src: 'gradient:' + WALLPAPER_GRADIENTS.iridescent, bubble: '#EADCF8' },
+    { name: 'Midnight', src: 'gradient:' + WALLPAPER_GRADIENTS.midnight, bubble: '#005C4B' },
+    { name: 'AI dream', src: BUNDLED_WALLPAPERS.aiDream, bubble: '#FCE4EC' },
+  ],
+  nature: [
+    { name: 'Palm sunset', src: BUNDLED_WALLPAPERS.palm, bubble: '#D9FDD3' },
+    { name: 'Desert dunes', src: BUNDLED_WALLPAPERS.desert, bubble: '#FFE0B2' },
+    { name: 'Mountain lake', src: BUNDLED_WALLPAPERS.mountain, bubble: '#D6EAF8' },
+  ],
+  live: [
+    { name: 'Iridescent', src: 'gradient:' + WALLPAPER_GRADIENTS.iridescent, bubble: '#EADCF8' },
+    { name: 'Sunset sky', src: 'gradient:' + WALLPAPER_GRADIENTS.sunset, bubble: '#34B7F1' },
+    { name: 'Midnight', src: 'gradient:' + WALLPAPER_GRADIENTS.midnight, bubble: '#B2DFDB' },
+  ],
+};
+// "Use AI" shows AI-made wallpapers bundled with the app — there is no
+// live image service connected, so nothing is generated on demand.
+const AI_CARDS = [
+  { name: 'AI dream', src: BUNDLED_WALLPAPERS.aiDream, bubble: '#FCE4EC' },
+  { name: 'AI iridescent', src: 'gradient:' + WALLPAPER_GRADIENTS.iridescent, bubble: '#EADCF8' },
+  { name: 'AI midnight', src: 'gradient:' + WALLPAPER_GRADIENTS.midnight, bubble: '#005C4B' },
+];
+function cardBackgroundStyle(src) {
+  const w = wallpaperCss(src);
+  return w.image ? { backgroundImage: w.image } : { backgroundColor: w.color };
+}
+function renderThemeCards() {
+  for (const section of ['featured', 'nature', 'live']) {
+    const box = $('theme-cards-' + section);
+    if (!box || box.dataset.built) continue;
+    box.dataset.built = '1';
+    for (const card of THEME_CARDS[section]) {
+      const b = document.createElement('button');
+      b.className = 'theme-card';
+      b.type = 'button';
+      Object.assign(b.style, cardBackgroundStyle(card.src));
+      b.style.setProperty('--bubble-mine', card.bubble);
+      b.style.setProperty('--bubble-mine-text', bubbleTextFor(card.bubble));
+      b.innerHTML = '<span class="theme-card-bubbles"><span class="mini-bubble theirs">Hi!</span>' +
+        '<span class="mini-bubble mine">Hello 😊</span></span>' +
+        '<span class="theme-card-name">' + escapeHtml(card.name) + '</span>';
+      b.addEventListener('click', () => openWallpaperPreview(card.src, card.bubble, 'theme'));
+      box.appendChild(b);
+    }
+  }
+  for (const [boxId, cards, withBubbles] of [
+    ['wp-cards-featured', THEME_CARDS.featured, false],
+    ['wp-cards-nature', THEME_CARDS.nature, false],
+    ['wp-cards-live', THEME_CARDS.live, false],
+    ['wp-cards-ai', AI_CARDS, false],
+    ['theme-cards-ai', AI_CARDS, true],
+  ]) {
+    const box = $(boxId);
+    if (!box || box.dataset.built) continue;
+    box.dataset.built = '1';
+    for (const card of cards) {
+      const b = document.createElement('button');
+      b.className = 'theme-card';
+      b.type = 'button';
+      Object.assign(b.style, cardBackgroundStyle(card.src));
+      if (withBubbles) {
+        b.style.setProperty('--bubble-mine', card.bubble);
+        b.style.setProperty('--bubble-mine-text', bubbleTextFor(card.bubble));
+        b.innerHTML = '<span class="theme-card-bubbles"><span class="mini-bubble theirs">Hi!</span>' +
+          '<span class="mini-bubble mine">Hello 😊</span></span>' +
+          '<span class="theme-card-name">' + escapeHtml(card.name) + '</span>';
+      } else {
+        b.innerHTML = '<span class="theme-card-name">' + escapeHtml(card.name) + '</span>';
+      }
+      b.addEventListener('click', () => openWallpaperPreview(card.src, currentBubbleColor(), 'wallpaper'));
+      box.appendChild(b);
+    }
+  }
+}
+function currentBubbleColor() {
+  return (chatSettings && chatSettings.bubbleColor) || '';
+}
+function renderBubblePalette() {
+  const box = $('bubble-palette');
+  if (!box || box.dataset.built) return;
+  box.dataset.built = '1';
+  for (const c of BUBBLE_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'bubble-swatch';
+    b.type = 'button';
+    b.style.background = c;
+    b.title = c;
+    b.dataset.bubble = c;
+    b.addEventListener('click', () => {
+      if (!activeChat) return;
+      document.querySelectorAll('.bubble-swatch').forEach((x) => x.classList.toggle('selected', x.dataset.bubble === c));
+      const mini = $('bubble-mini-preview');
+      mini.style.setProperty('--bubble-mine', c);
+      mini.style.setProperty('--bubble-mine-text', bubbleTextFor(c));
+      saveChatSettings({ bubbleColor: c }, 'Bubble colour changed');
+    });
+    box.appendChild(b);
+  }
+  const cur = currentBubbleColor() || '#D9FDD3';
+  document.querySelectorAll('.bubble-swatch').forEach((x) => x.classList.toggle('selected', x.dataset.bubble === cur));
+  const mini = $('bubble-mini-preview');
+  mini.style.setProperty('--bubble-mine', cur);
+  mini.style.setProperty('--bubble-mine-text', bubbleTextFor(cur));
+}
+function renderWallpaperColors() {
+  const box = $('wp-color-palette');
+  if (!box || box.dataset.built) return;
+  box.dataset.built = '1';
+  for (const c of WALLPAPER_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'bubble-swatch';
+    b.type = 'button';
+    b.style.background = c;
+    b.title = c;
+    b.addEventListener('click', () => openWallpaperPreview('color:' + c, currentBubbleColor(), 'wallpaper'));
+    box.appendChild(b);
+  }
+}
+// ---- Chat theme screen ----
+function openThemeOverlay() {
+  if (!activeChat) return;
+  renderThemeCards();
+  renderBubblePalette();
+  $('theme-bubble-section').classList.remove('hidden');
+  $('theme-ai-section').classList.add('hidden');
+  $('theme-overlay').classList.remove('hidden');
 }
 $('menu-chat-theme').addEventListener('click', () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
-  pendingChatTheme = chatSettings ? chatSettings.chatTheme : '';
-  pendingChatPhoto = savedChatPhoto(activeChat);
-  updateThemePreview();
-  $('chat-theme-dialog').classList.remove('hidden');
+  openThemeOverlay();
 });
-$('btn-chat-theme-cancel').addEventListener('click', () => $('chat-theme-dialog').classList.add('hidden'));
-document.querySelectorAll('.chat-theme-opt').forEach((b) => {
-  b.addEventListener('click', () => {
-    if (!activeChat) return;
-    pendingChatTheme = b.dataset.chatTheme;
-    pendingChatPhoto = '';
-    updateThemePreview();
-  });
+$('btn-close-theme').addEventListener('click', () => $('theme-overlay').classList.add('hidden'));
+$('theme-tab-bubble').addEventListener('click', () => {
+  $('theme-bubble-section').classList.remove('hidden');
+  $('theme-ai-section').classList.add('hidden');
 });
-$('btn-chat-bg-pick').addEventListener('click', () => $('chat-bg-input').click());
+$('theme-tab-ai').addEventListener('click', () => {
+  renderThemeCards();
+  $('theme-bubble-section').classList.add('hidden');
+  $('theme-ai-section').classList.remove('hidden');
+});
+$('theme-tab-wallpaper').addEventListener('click', () => {
+  $('theme-overlay').classList.add('hidden');
+  openWallpaperOverlay(true);
+});
+$('btn-theme-default').addEventListener('click', () => {
+  if (!activeChat) return;
+  try { localStorage.removeItem(chatPhotoKey(activeChat)); } catch {}
+  try { localStorage.removeItem(chatDimKey(activeChat)); } catch {}
+  $('theme-overlay').classList.add('hidden');
+  saveChatSettings({ chatTheme: '', bubbleColor: '' }, 'Default theme set');
+});
+// ---- Wallpaper screen ----
+let wallpaperReturnToTheme = false;
+function openWallpaperOverlay(fromTheme) {
+  wallpaperReturnToTheme = !!fromTheme;
+  renderThemeCards();
+  renderWallpaperColors();
+  $('wp-color-section').classList.add('hidden');
+  $('wp-ai-section').classList.add('hidden');
+  $('wallpaper-overlay').classList.remove('hidden');
+}
+$('btn-close-wallpaper').addEventListener('click', () => {
+  $('wallpaper-overlay').classList.add('hidden');
+  if (wallpaperReturnToTheme) $('theme-overlay').classList.remove('hidden');
+});
+$('wp-tab-gallery').addEventListener('click', () => $('chat-bg-input').click());
+$('wp-tab-color').addEventListener('click', () => {
+  $('wp-ai-section').classList.add('hidden');
+  $('wp-color-section').classList.remove('hidden');
+});
+$('wp-tab-ai').addEventListener('click', () => {
+  renderThemeCards();
+  $('wp-color-section').classList.add('hidden');
+  $('wp-ai-section').classList.remove('hidden');
+});
 $('chat-bg-input').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
   if (!file || !activeChat) return;
   try {
-    pendingChatPhoto = await downscaleImageFile(file);
-    pendingChatTheme = '';
-    updateThemePreview();
+    const url = await downscaleImageFile(file);
+    openWallpaperPreview(url, currentBubbleColor(), 'wallpaper');
   } catch { toast("Couldn't read that photo — choose another one"); }
 });
-$('btn-chat-bg-remove').addEventListener('click', () => {
-  pendingChatPhoto = '';
-  updateThemePreview();
-});
-$('btn-chat-theme-apply').addEventListener('click', () => {
-  if (!activeChat) return;
-  if (pendingChatPhoto) {
-    try { localStorage.setItem(chatPhotoKey(activeChat), pendingChatPhoto); }
-    catch { toast('That photo is too big — choose a smaller one'); return; }
-    $('chat-theme-dialog').classList.add('hidden');
-    applyChatTheme();
-    saveChatSettings({ chatTheme: '' }, 'Chat photo set');
+// ---- Wallpaper preview: pan / pinch-zoom / brightness ----
+let previewState = null; // {src, bubble, dim, zoom, panX, panY, from}
+function previewPeerName() {
+  const n = ($('chat-peer-name') && $('chat-peer-name').textContent || '').trim();
+  return n || 'this';
+}
+function renderPreviewWall() {
+  if (!previewState) return;
+  const wall = $('preview-wall');
+  const w = wallpaperWithDim(previewState.src, previewState.dim);
+  wall.style.backgroundImage = w.image;
+  wall.style.backgroundColor = w.color;
+  wall.style.transform = 'translate(' + previewState.panX + 'px,' + previewState.panY + 'px) scale(' + previewState.zoom + ')';
+  const mine = $('preview-mock-mine');
+  if (previewState.bubble) {
+    mine.style.background = previewState.bubble;
+    mine.style.color = bubbleTextFor(previewState.bubble);
   } else {
-    try { localStorage.removeItem(chatPhotoKey(activeChat)); } catch {}
-    $('chat-theme-dialog').classList.add('hidden');
-    applyChatTheme();
-    saveChatSettings({ chatTheme: pendingChatTheme }, 'Chat theme changed');
+    mine.style.background = '';
+    mine.style.color = '';
   }
+  const fill = $('preview-dim-fill');
+  const thumb = $('preview-dim-thumb');
+  const slider = $('preview-dim');
+  const pct = (previewState.dim / 80) * 100;
+  fill.style.height = pct + '%';
+  const range = Math.max(0, slider.clientHeight - 48);
+  thumb.style.bottom = (8 + (previewState.dim / 80) * range) + 'px';
+}
+function openWallpaperPreview(src, bubble, from) {
+  if (!activeChat) return;
+  previewState = {
+    src, bubble: bubble || '',
+    dim: savedChatDim(activeChat), zoom: 1, panX: 0, panY: 0, from: from || 'wallpaper',
+  };
+  $('preview-mock-name').textContent = previewPeerName();
+  $('preview-mock-mine').textContent = 'Only your "' + previewPeerName() + '" chat will change. Only you see your chat themes.';
+  $('wallpaper-overlay').classList.add('hidden');
+  $('theme-overlay').classList.add('hidden');
+  $('wallpaper-preview').classList.remove('hidden');
+  renderPreviewWall();
+}
+function closeWallpaperPreview() {
+  $('wallpaper-preview').classList.add('hidden');
+  previewState = null;
+  if (wallpaperReturnToTheme) $('theme-overlay').classList.remove('hidden');
+  else $('wallpaper-overlay').classList.remove('hidden');
+}
+$('btn-preview-back').addEventListener('click', closeWallpaperPreview);
+$('btn-preview-done').addEventListener('click', () => {
+  if (!activeChat || !previewState) return;
+  const st = previewState;
+  try {
+    if (st.src) {
+      localStorage.setItem(chatPhotoKey(activeChat), st.src);
+      localStorage.setItem(chatDimKey(activeChat), String(st.dim));
+    } else {
+      localStorage.removeItem(chatPhotoKey(activeChat));
+      localStorage.removeItem(chatDimKey(activeChat));
+    }
+  } catch { toast('That photo is too big — choose a smaller one'); return; }
+  const patch = {};
+  if (st.bubble !== currentBubbleColor()) patch.bubbleColor = st.bubble;
+  if (chatSettings && chatSettings.chatTheme) patch.chatTheme = '';
+  $('wallpaper-preview').classList.add('hidden');
+  previewState = null;
+  if (Object.keys(patch).length) saveChatSettings(patch, 'Theme set');
+  else { applyChatTheme(); toast('Wallpaper set'); }
 });
+// Pan with one finger / mouse drag, pinch with two — custom pointer
+// handlers on the stage (the wall itself has touch-action: none, so
+// the browser never hijacks the gesture into a page zoom).
+(function () {
+  const stage = $('preview-stage');
+  if (!stage) return;
+  const pointers = new Map();
+  let pinchStart = 0;
+  let pinchZoom = 1;
+  let lastMid = null;
+  stage.addEventListener('pointerdown', (e) => {
+    if (!previewState) return;
+    if (e.target.closest('.dim-slider') || e.target.closest('.preview-zoom')) return;
+    stage.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      const pts = [...pointers.values()];
+      pinchStart = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchZoom = previewState.zoom;
+      lastMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!previewState || !pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      previewState.panX += e.clientX - prev.x;
+      previewState.panY += e.clientY - prev.y;
+      clampPreviewPan();
+      renderPreviewWall();
+    } else if (pointers.size === 2 && pinchStart > 0) {
+      const pts = [...pointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      previewState.zoom = Math.max(1, Math.min(3, pinchZoom * (dist / pinchStart)));
+      if (lastMid) {
+        previewState.panX += mid.x - lastMid.x;
+        previewState.panY += mid.y - lastMid.y;
+      }
+      lastMid = mid;
+      clampPreviewPan();
+      renderPreviewWall();
+    }
+  });
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) { pinchStart = 0; lastMid = null; }
+  };
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  function clampPreviewPan() {
+    const s = previewState;
+    const lim = 240 * s.zoom;
+    s.panX = Math.max(-lim, Math.min(lim, s.panX));
+    s.panY = Math.max(-lim, Math.min(lim, s.panY));
+    if (s.zoom <= 1) { s.panX = 0; s.panY = 0; }
+  }
+})();
+$('btn-preview-zoom-in').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!previewState) return;
+  previewState.zoom = Math.max(1, Math.min(3, previewState.zoom + 0.25));
+  renderPreviewWall();
+});
+$('btn-preview-zoom-out').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!previewState) return;
+  previewState.zoom = Math.max(1, Math.min(3, previewState.zoom - 0.25));
+  if (previewState.zoom <= 1) { previewState.panX = 0; previewState.panY = 0; }
+  renderPreviewWall();
+});
+// Brightness slider: drag the sun (or tap the pill) — top is full
+// bright (dim 0), bottom is darkest (dim 80). Live-dims the preview.
+(function () {
+  const slider = $('preview-dim');
+  if (!slider) return;
+  let dragging = false;
+  function setFromEvent(e) {
+    if (!previewState) return;
+    const r = slider.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    previewState.dim = Math.round(frac * 80);
+    renderPreviewWall();
+  }
+  slider.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    dragging = true;
+    slider.setPointerCapture(e.pointerId);
+    setFromEvent(e);
+  });
+  slider.addEventListener('pointermove', (e) => { if (dragging) setFromEvent(e); });
+  slider.addEventListener('pointerup', () => { dragging = false; });
+  slider.addEventListener('pointercancel', () => { dragging = false; });
+})();
 
 // ---- Contact profile (WhatsApp-style) ------------------------------------
 // Tap the name/avatar in a chat header to open it: big avatar, name,
