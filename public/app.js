@@ -2722,7 +2722,7 @@ function docCardHtml(m, href) {
     : '<span class="doc-card">' + inner + '</span>';
 }
 // ---- WhatsApp essentials: reactions, reply, forward, star, pin, view-once, edit ----
-const QUICK_REACTIONS = ['❤️', '😂', '😮', '😢', '🙏', '👍', '🔥', '🎉'];
+const QUICK_REACTIONS = ['❤️', '😂', '😮', '😢', '🙏', '👍', '🔥'];
 const EDIT_WINDOW_MS = 15 * 60 * 1000; // WhatsApp-style edit window
 const FORWARD_MAX = 5;
 let replyTarget = null;   // message being replied to (quote preview above the input)
