@@ -553,8 +553,7 @@ function applyChatTheme() {
   if (chatSettings && chatSettings.chatTheme) box.classList.add('chat-theme-' + chatSettings.chatTheme);
   // Gallery photo for this chat (this phone only): it covers the colour
   // theme. Picking a colour clears the photo again (see below).
-  let photo = '';
-  try { photo = localStorage.getItem('s19_chat_bg_' + activeChat) || ''; } catch {}
+  const photo = savedChatPhoto(activeChat);
   box.classList.toggle('has-photo', !!photo);
   box.style.backgroundImage = photo ? 'url(' + photo + ')' : '';
   $('btn-chat-bg-remove').classList.toggle('hidden', !photo);
@@ -641,21 +640,46 @@ document.querySelectorAll('#disappearing-dialog .option-btn').forEach((b) => {
       secs === 0 ? 'গায়েব মেসেজ বন্ধ করা হয়েছে' : 'গায়েব মেসেজ চালু — ' + disappearLabel(secs) + ' পর মেসেজ মুছে যাবে');
   });
 });
+// Per-chat theme: pick first, PREVIEW it, then apply with "বসাও".
+// Nothing changes in the real chat until Apply — so themes and photos
+// can be compared before committing. Cancel discards the preview.
+let pendingChatTheme = '';
+let pendingChatPhoto = '';
+function chatPhotoKey(peer) { return 's19_chat_bg_' + peer; }
+function savedChatPhoto(peer) {
+  try { return localStorage.getItem(chatPhotoKey(peer)) || ''; } catch { return ''; }
+}
+function updateThemePreview() {
+  const p = $('chat-theme-preview');
+  p.classList.remove('chat-theme-green', 'chat-theme-blue', 'chat-theme-purple', 'chat-theme-pink', 'chat-theme-dark');
+  if (pendingChatPhoto) {
+    p.classList.add('has-photo');
+    p.style.backgroundImage = 'url(' + pendingChatPhoto + ')';
+  } else {
+    p.classList.remove('has-photo');
+    p.style.backgroundImage = '';
+    if (pendingChatTheme) p.classList.add('chat-theme-' + pendingChatTheme);
+  }
+  document.querySelectorAll('.chat-theme-opt').forEach((b) => {
+    b.classList.toggle('selected', !pendingChatPhoto && b.dataset.chatTheme === pendingChatTheme);
+  });
+  $('btn-chat-bg-remove').classList.toggle('hidden', !pendingChatPhoto && !savedChatPhoto(activeChat));
+}
 $('menu-chat-theme').addEventListener('click', () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
-  document.querySelectorAll('.chat-theme-opt').forEach((b) => {
-    b.classList.toggle('selected', b.dataset.chatTheme === (chatSettings ? chatSettings.chatTheme : ''));
-  });
+  pendingChatTheme = chatSettings ? chatSettings.chatTheme : '';
+  pendingChatPhoto = savedChatPhoto(activeChat);
+  updateThemePreview();
   $('chat-theme-dialog').classList.remove('hidden');
 });
 $('btn-chat-theme-cancel').addEventListener('click', () => $('chat-theme-dialog').classList.add('hidden'));
 document.querySelectorAll('.chat-theme-opt').forEach((b) => {
   b.addEventListener('click', () => {
     if (!activeChat) return;
-    try { localStorage.removeItem('s19_chat_bg_' + activeChat); } catch {}
-    $('chat-theme-dialog').classList.add('hidden');
-    saveChatSettings({ chatTheme: b.dataset.chatTheme }, 'চ্যাট থিম বদলে গেছে');
+    pendingChatTheme = b.dataset.chatTheme;
+    pendingChatPhoto = '';
+    updateThemePreview();
   });
 });
 $('btn-chat-bg-pick').addEventListener('click', () => $('chat-bg-input').click());
@@ -664,21 +688,176 @@ $('chat-bg-input').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file || !activeChat) return;
   try {
-    const url = await downscaleImageFile(file);
-    try { localStorage.setItem('s19_chat_bg_' + activeChat, url); }
+    pendingChatPhoto = await downscaleImageFile(file);
+    pendingChatTheme = '';
+    updateThemePreview();
+  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+});
+$('btn-chat-bg-remove').addEventListener('click', () => {
+  pendingChatPhoto = '';
+  updateThemePreview();
+});
+$('btn-chat-theme-apply').addEventListener('click', () => {
+  if (!activeChat) return;
+  if (pendingChatPhoto) {
+    try { localStorage.setItem(chatPhotoKey(activeChat), pendingChatPhoto); }
     catch { toast('ছবিটা বড় হয়ে গেছে — ছোট ছবি বেছে নাও'); return; }
     $('chat-theme-dialog').classList.add('hidden');
     applyChatTheme();
     saveChatSettings({ chatTheme: '' }, 'চ্যাটের ছবি বসানো হয়েছে');
-  } catch { toast('ছবিটা পড়া যায়নি — অন্য ছবি বেছে নাও'); }
+  } else {
+    try { localStorage.removeItem(chatPhotoKey(activeChat)); } catch {}
+    $('chat-theme-dialog').classList.add('hidden');
+    applyChatTheme();
+    saveChatSettings({ chatTheme: pendingChatTheme }, 'চ্যাট থিম বদলে গেছে');
+  }
 });
-$('btn-chat-bg-remove').addEventListener('click', () => {
+
+// ---- Contact profile (WhatsApp-style) ------------------------------------
+// Tap the name/avatar in a chat header to open it: big avatar, name,
+// number, join date, Voice / Video / Search buttons, every photo, video,
+// voice note and file shared in this chat, plus mute and disappearing
+// settings. "Last seen" is not tracked, so the join date is shown
+// instead — nothing is faked.
+let profilePeer = null;
+let profileMedia = [];
+async function loadMediaUrl(id) {
+  let url = mediaCache.get(id);
+  if (!url) {
+    const r = await api('/api/media/' + id);
+    url = dataUrl(r.mimeType, r.data);
+    mediaCache.set(id, url);
+  }
+  return url;
+}
+function updateProfileRows() {
+  $('profile-mute-state').textContent = chatSettings && chatSettings.muted ? 'বন্ধ' : 'চালু';
+  $('profile-disappearing-state').textContent = chatSettings && chatSettings.disappearing ? disappearLabel(chatSettings.disappearing) : 'বন্ধ';
+}
+async function openProfile() {
   if (!activeChat) return;
-  try { localStorage.removeItem('s19_chat_bg_' + activeChat); } catch {}
-  $('chat-theme-dialog').classList.add('hidden');
-  applyChatTheme();
-  toast('চ্যাটের ছবি সরানো হয়েছে');
+  profilePeer = activeChat;
+  const peer = conversations.find((c) => c.phone === activeChat) || {};
+  $('profile-avatar').textContent = avatarLetter(peer.name, activeChat);
+  $('profile-name').textContent = peer.name || displayId(activeChat);
+  $('profile-phone').textContent = displayId(activeChat);
+  $('profile-joined').textContent = '';
+  $('profile-media-count').textContent = '…';
+  $('profile-media-grid').classList.add('hidden');
+  $('profile-media-grid').innerHTML = '';
+  updateProfileRows();
+  $('profile-overlay').classList.remove('hidden');
+  try {
+    const r = await api('/api/chat-media?with=' + encodeURIComponent(activeChat));
+    profileMedia = r.media || [];
+    $('profile-media-count').textContent = bn(String(profileMedia.length));
+    if (r.peer && r.peer.created_at) {
+      $('profile-joined').textContent = 'যোগ দিয়েছে: ' + new Date(r.peer.created_at).toLocaleDateString('bn-BD');
+    }
+  } catch { $('profile-media-count').textContent = '০'; }
+}
+async function renderProfileMedia() {
+  const grid = $('profile-media-grid');
+  grid.innerHTML = '';
+  if (!profileMedia.length) {
+    grid.innerHTML = '<div class="empty-note">এই চ্যাটে এখনো কোনো ছবি, ভিডিও বা ফাইল নেই।</div>';
+    return;
+  }
+  for (const m of profileMedia) {
+    const tile = document.createElement('div');
+    tile.className = 'profile-media-tile';
+    if (m.media_kind === 'image') {
+      tile.innerHTML = '<div class="media-loading">…</div>';
+      loadMediaUrl(m.id).then((url) => { if (url) tile.innerHTML = '<img src="' + url + '" alt="">'; })
+        .catch(() => { tile.innerHTML = '<div class="media-loading">লোড হয়নি</div>'; });
+      tile.addEventListener('click', async () => {
+        const url = await loadMediaUrl(m.id);
+        if (url) openMediaViewer(url, 'image');
+      });
+    } else if (m.media_kind === 'video') {
+      tile.innerHTML = '<div class="profile-media-kind">🎥</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'ভিডিও') + '</div>';
+      tile.addEventListener('click', async () => {
+        const url = await loadMediaUrl(m.id);
+        if (url) openMediaViewer(url, 'video');
+      });
+    } else if (m.media_kind === 'voice') {
+      tile.innerHTML = '<div class="profile-media-kind">🎤</div><div class="profile-media-name">ভয়েস' + (m.media_duration ? ' • ' + fmtCallTime(m.media_duration) : '') + '</div>';
+      tile.addEventListener('click', async () => {
+        const url = await loadMediaUrl(m.id);
+        if (url) new Audio(url).play().catch(() => {});
+      });
+    } else {
+      tile.innerHTML = '<div class="profile-media-kind">📄</div><div class="profile-media-name">' + escapeHtml(m.media_name || 'ফাইল') + '</div>';
+      tile.addEventListener('click', async () => {
+        const url = await loadMediaUrl(m.id);
+        if (url) { const a = document.createElement('a'); a.href = url; a.download = m.media_name || 'file'; a.click(); }
+      });
+    }
+    grid.appendChild(tile);
+  }
+}
+$('chat-peer-box').addEventListener('click', openProfile);
+$('btn-close-profile').addEventListener('click', () => $('profile-overlay').classList.add('hidden'));
+$('btn-profile-voice').addEventListener('click', () => {
+  const peer = profilePeer, name = $('profile-name').textContent;
+  $('profile-overlay').classList.add('hidden');
+  if (peer) startCall(peer, name, false);
 });
+$('btn-profile-video').addEventListener('click', () => {
+  const peer = profilePeer, name = $('profile-name').textContent;
+  $('profile-overlay').classList.add('hidden');
+  if (peer) startCall(peer, name, true);
+});
+$('btn-profile-search').addEventListener('click', () => {
+  $('profile-overlay').classList.add('hidden');
+  openChatSearch();
+});
+$('profile-media-row').addEventListener('click', () => {
+  const grid = $('profile-media-grid');
+  if (grid.classList.contains('hidden')) {
+    renderProfileMedia();
+    grid.classList.remove('hidden');
+  } else {
+    grid.classList.add('hidden');
+  }
+});
+$('profile-mute-row').addEventListener('click', () => {
+  if (!activeChat) return;
+  const nowMuted = chatSettings && chatSettings.muted;
+  saveChatSettings({ muted: nowMuted ? 0 : 1 },
+    nowMuted ? 'নোটিফিকেশন চালু করা হয়েছে' : 'নোটিফিকেশন বন্ধ করা হয়েছে')
+    .then(updateProfileRows);
+});
+$('profile-disappearing-row').addEventListener('click', () => {
+  $('profile-overlay').classList.add('hidden');
+  $('menu-disappearing').click();
+});
+
+// ---- In-chat search (from the profile's Search button) --------------------
+// Filters the loaded messages as you type; clearing restores the chat.
+let chatSearchQuery = '';
+function openChatSearch() {
+  $('chat-search-bar').classList.remove('hidden');
+  $('chat-search-input').value = '';
+  $('chat-search-input').focus();
+  applyChatSearch('');
+}
+function closeChatSearch() {
+  $('chat-search-bar').classList.add('hidden');
+  applyChatSearch('');
+}
+function applyChatSearch(q) {
+  chatSearchQuery = (q || '').trim().toLowerCase();
+  let n = 0;
+  document.querySelectorAll('#chat-messages .msg').forEach((el) => {
+    const hit = !chatSearchQuery || (el.textContent || '').toLowerCase().includes(chatSearchQuery);
+    el.style.display = hit ? '' : 'none';
+    if (hit && chatSearchQuery) n++;
+  });
+  $('chat-search-count').textContent = chatSearchQuery ? bn(String(n)) + ' টি মিলেছে' : '';
+}
+$('chat-search-input').addEventListener('input', (e) => applyChatSearch(e.target.value));
+$('btn-close-search').addEventListener('click', closeChatSearch);
 $('menu-clear').addEventListener('click', async () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
@@ -723,6 +902,8 @@ async function fetchChatMessages() {
         el.querySelector('.msg-meta').innerHTML = fmtTime(Number(el.dataset.ts)) + ' ' + tickHtml(t);
       }
     });
+    // A search in progress must also hide newly polled messages.
+    if (chatSearchQuery) applyChatSearch(chatSearchQuery);
   } catch { /* offline — messages stay as they are */ }
 }
 // Tick marks: ✓ sent, ✓✓ delivered, blue ✓✓ seen (read).
@@ -819,19 +1000,34 @@ async function loadMediaInto(div, m) {
     wrap.querySelector('.media-retry').addEventListener('click', () => loadMediaInto(div, m));
   }
 }
-function openMediaViewer(url) {
-  $('media-viewer-img').src = url;
+function openMediaViewer(url, kind) {
+  const img = $('media-viewer-img');
+  const vid = $('media-viewer-video');
+  if (kind === 'video') {
+    img.classList.add('hidden');
+    img.src = '';
+    vid.src = url;
+    vid.classList.remove('hidden');
+  } else {
+    vid.pause();
+    vid.removeAttribute('src');
+    vid.classList.add('hidden');
+    img.src = url;
+    img.classList.remove('hidden');
+  }
   $('media-viewer').classList.remove('hidden');
 }
-$('btn-close-media').addEventListener('click', () => {
+function closeMediaViewer() {
+  const vid = $('media-viewer-video');
+  vid.pause();
+  vid.removeAttribute('src');
+  vid.classList.add('hidden');
   $('media-viewer').classList.add('hidden');
   $('media-viewer-img').src = '';
-});
+}
+$('btn-close-media').addEventListener('click', closeMediaViewer);
 $('media-viewer').addEventListener('click', (e) => {
-  if (e.target.id === 'media-viewer') {
-    $('media-viewer').classList.add('hidden');
-    $('media-viewer-img').src = '';
-  }
+  if (e.target.id === 'media-viewer') closeMediaViewer();
 });
 
 // Offline outbox: messages typed without network wait here and send
