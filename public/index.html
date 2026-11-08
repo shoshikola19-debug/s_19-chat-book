@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B141A">
 <meta name="mobile-web-app-capable" content="yes">
@@ -278,6 +278,7 @@
     <input id="file-camera" type="file" accept="image/*" capture="environment" class="hidden">
     <input id="file-video" type="file" accept="video/*" class="hidden">
     <input id="file-any" type="file" class="hidden">
+    <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
   </section>
 
   <!-- ===== Delete message dialog (long-press / right-click a bubble) ===== -->
@@ -436,33 +437,108 @@
     </div>
   </div>
 
-  <!-- ===== Per-chat theme dialog (preview first, apply after) ===== -->
-  <div id="chat-theme-dialog" class="dialog-backdrop hidden">
-    <div class="dialog">
-      <h3>Chat theme</h3>
-      <p class="hint">Take a look first, then tap Done. Only this chat's background will change.</p>
-      <div id="chat-theme-preview" class="chat-theme-preview">
+  <!-- ===== Chat theme (WhatsApp-style) ===== -->
+  <div id="theme-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-theme" class="back-btn">‹</button>
+      <span class="settings-title">Chat theme</span>
+    </div>
+    <div class="theme-tabs">
+      <button id="theme-tab-bubble" class="theme-tab-btn" type="button"><span class="theme-tab-ic" style="background:#D9FDD3"></span>Chat bubble</button>
+      <button id="theme-tab-wallpaper" class="theme-tab-btn" type="button"><span class="theme-tab-ic theme-tab-ic-wall"></span>Wallpaper</button>
+      <button id="theme-tab-ai" class="theme-tab-btn" type="button"><span class="theme-tab-ic">✨🖌️</span>Use AI</button>
+    </div>
+    <div id="theme-bubble-section" class="theme-section">
+      <div class="section-title">Bubble colour</div>
+      <div id="bubble-palette" class="bubble-palette"></div>
+      <div class="theme-mini-preview" id="bubble-mini-preview">
         <div class="msg theirs">Hi, how are you?</div>
         <div class="msg mine">I'm good! 😊</div>
       </div>
-      <div class="theme-row theme-swatches">
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="" type="button" style="background:#ECE5DD;color:#111">Default</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="green" type="button" style="background:#D9FDD3;color:#075E54">Green</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="blue" type="button" style="background:#D6EAF8;color:#0B4F8A">Blue</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="purple" type="button" style="background:#EADCF8;color:#4A148C">Purple</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="pink" type="button" style="background:#FCE4EC;color:#880E4F">Pink</button>
-        <button class="theme-swatch chat-theme-opt" data-chat-theme="dark" type="button" style="background:#0B141A;color:#E9EDEF">Dark</button>
+      <p class="hint">Tapping a colour sets this chat's outgoing bubbles right away.</p>
+    </div>
+    <div id="theme-ai-section" class="theme-section hidden">
+      <div class="section-title">AI wallpapers</div>
+      <p class="hint">Made with AI — pick one to preview it.</p>
+      <div id="theme-cards-ai" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Featured</div>
+      <div id="theme-cards-featured" class="theme-cards"></div>
+      <p class="hint">Only you can see this theme.</p>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Nature</div>
+      <div id="theme-cards-nature" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Live</div>
+      <div id="theme-cards-live" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <button id="btn-theme-default" class="method-btn" type="button">Default theme (no wallpaper, green bubbles)</button>
+    </div>
+  </div>
+
+  <!-- ===== Wallpaper picker (WhatsApp-style) ===== -->
+  <div id="wallpaper-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-wallpaper" class="back-btn">‹</button>
+      <span class="settings-title">Wallpaper</span>
+    </div>
+    <div class="theme-tabs">
+      <button id="wp-tab-gallery" class="theme-tab-btn" type="button"><span class="theme-tab-ic">🖼️</span>Gallery</button>
+      <button id="wp-tab-color" class="theme-tab-btn" type="button"><span class="theme-tab-ic">🖌️</span>Color</button>
+      <button id="wp-tab-ai" class="theme-tab-btn" type="button"><span class="theme-tab-ic">✨🖌️</span>Use AI</button>
+    </div>
+    <div id="wp-color-section" class="theme-section hidden">
+      <div class="section-title">Solid colour</div>
+      <div id="wp-color-palette" class="bubble-palette"></div>
+      <p class="hint">Tapping a colour opens the preview.</p>
+    </div>
+    <div id="wp-ai-section" class="theme-section hidden">
+      <div class="section-title">AI wallpapers</div>
+      <p class="hint">Made with AI — pick one to preview it.</p>
+      <div id="wp-cards-ai" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Featured</div>
+      <div id="wp-cards-featured" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Nature</div>
+      <div id="wp-cards-nature" class="theme-cards"></div>
+    </div>
+    <div class="theme-section">
+      <div class="section-title">Live</div>
+      <div id="wp-cards-live" class="theme-cards"></div>
+    </div>
+  </div>
+
+  <!-- ===== Wallpaper preview: pan / pinch-zoom / brightness ===== -->
+  <div id="wallpaper-preview" class="profile-overlay hidden">
+    <div class="profile-top preview-top">
+      <button id="btn-preview-back" class="back-btn">‹</button>
+      <span class="settings-title">Preview</span>
+      <button id="btn-preview-done" class="preview-done-btn" type="button" title="Done">✓</button>
+    </div>
+    <div id="preview-stage" class="preview-stage">
+      <div id="preview-wall" class="preview-wall"></div>
+      <div class="preview-mock">
+        <div class="preview-mock-head"><span class="preview-mock-back">‹</span><span id="preview-mock-name" class="preview-mock-name">Wallpaper</span><span class="preview-mock-today">Today</span></div>
+        <div class="msg theirs">👌 Pinch to zoom or 👉 drag to adjust your wallpaper.</div>
+        <div class="msg mine" id="preview-mock-mine">Only your chat will change. Only you see your chat themes.</div>
       </div>
-      <div class="theme-row" style="margin-top:12px">
-        <button id="btn-chat-bg-pick" class="method-btn" type="button">🖼️ Photo from gallery</button>
-        <button id="btn-chat-bg-remove" class="method-btn hidden" type="button">Remove photo</button>
+      <div id="preview-dim" class="dim-slider" title="Wallpaper brightness">
+        <div id="preview-dim-fill" class="dim-slider-fill"></div>
+        <div id="preview-dim-thumb" class="dim-slider-thumb">☀</div>
       </div>
-      <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
-      <div class="dialog-buttons">
-        <button id="btn-chat-theme-cancel" class="btn-link">Cancel</button>
-        <button id="btn-chat-theme-apply" class="btn-primary">Done</button>
+      <div class="preview-zoom">
+        <button id="btn-preview-zoom-out" type="button" title="Zoom out">−</button>
+        <button id="btn-preview-zoom-in" type="button" title="Zoom in">+</button>
       </div>
     </div>
+    <p class="hint preview-hint">Drag to move • Pinch or use + − to zoom • Slide the sun to dim the wallpaper</p>
   </div>
 
   <!-- ===== Settings (WhatsApp-style) ===== -->
