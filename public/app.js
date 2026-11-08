@@ -595,12 +595,12 @@ $('file-camera').addEventListener('change', (e) => {
   };
   for (const c of allContacts) addRow(peerName(c), displayId(c.phone), () => {
     openChat(c.phone, c.name);
-    if (pendingCameraFile) sendMediaFile('image', pendingCameraFile);
+    if (pendingCameraFile) openMediaPreview('image', pendingCameraFile);
     pendingCameraFile = null;
   });
   for (const g of myGroups) addRow(g.name, 'Group • ' + ((g.members || []).length) + ' members', () => {
     openGroup(g.id, g.name);
-    if (pendingCameraFile) sendMediaFile('image', pendingCameraFile);
+    if (pendingCameraFile) openMediaPreview('image', pendingCameraFile);
     pendingCameraFile = null;
   });
   if (!allContacts.length && !myGroups.length) {
@@ -3280,7 +3280,7 @@ function appendMessage(m) {
     // A media message the sender just uploaded carries its bytes locally
     // (localDataUrl), so it renders at once without a round trip.
     if (m.localDataUrl && m.id) mediaCache.set(m.id, m.localDataUrl);
-    div.innerHTML = senderLine + quoteHtml(m) + forwardedHtml(m) + mediaHtml(m) + meta + reactionsHtml(m);
+    div.innerHTML = senderLine + quoteHtml(m) + forwardedHtml(m) + mediaHtml(m) + captionHtml(m) + meta + reactionsHtml(m);
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
     if (!m.pending) loadMediaInto(div, m);
@@ -3291,6 +3291,18 @@ function appendMessage(m) {
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
   attachDeleteHandlers(div, m);
+}
+
+// Caption under a photo/video in the bubble (WhatsApp-style). The
+// server stores the caption as the message body; a media message with
+// no caption keeps the plain label (📷 Photo / 🎥 Video), which is
+// never shown as a caption. Deleted messages return before this branch,
+// so a deleted caption never leaks. Voice notes and files have no
+// caption (the preview screen is photo/video only).
+function captionHtml(m) {
+  if (!m.media_kind || (m.media_kind !== 'image' && m.media_kind !== 'video')) return '';
+  if (!m.body || m.body === mediaLabel(m.media_kind, m.media_name)) return '';
+  return '<div class="msg-caption">' + linkify(escapeHtml(m.body)) + '</div>';
 }
 
 // The inside of a media bubble. Pending bubbles (still uploading) show a
@@ -4019,8 +4031,8 @@ $('attach-view-once').addEventListener('click', () => {
   updateViewOnceToggle();
   toast(viewOnceNext ? 'View once ON — the next photo or video can be opened only once' : 'View once off');
 });
-$('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; if (!activeChat && !activeGroup) { toast('Open a chat first to send a photo'); return; } sendMediaFile('image', f); });
-$('file-video').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('video', f); });
+$('file-image').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; if (!activeChat && !activeGroup) { toast('Open a chat first to send a photo'); return; } openMediaPreview('image', f); });
+$('file-video').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; if (!activeChat && !activeGroup) { toast('Open a chat first to send a video'); return; } openMediaPreview('video', f); });
 $('file-any').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendMediaFile('file', f); });
 
 // Upload with progress (fetch has no upload progress, so XHR). The
@@ -4052,7 +4064,113 @@ function fileToBase64(file) {
     r.readAsDataURL(file);
   });
 }
-async function sendMediaFile(kind, file, durationSec) {
+// ---- media preview before sending (WhatsApp-style) -----------------------
+// Tapping a photo/video in the gallery or camera used to send it at
+// once — no chance to check it, add a caption, turn on view-once, or
+// pick HD. Now every photo/video opens this preview first and nothing
+// sends until the green Send button is tapped. Voice notes and files
+// are not affected (no preview for them).
+let mediaPreview = null; // { kind, file, fileName, mimeType, url, viewOnce, hd, replySnap }
+function openMediaPreview(kind, file) {
+  if (!activeChat && !activeGroup) { toast('Open a chat first'); return; }
+  // The caps are checked here, before Send is even offered, so the
+  // size limit is known up front instead of failing on upload.
+  const cap = MEDIA_CAPS[kind];
+  if (file.size > cap) {
+    toast("That file is too big — you can't send more than " + MEDIA_CAP_LABEL[kind] + ' (free storage limit)');
+    return;
+  }
+  // A second pick while a preview is open replaces it (cannot normally
+  // happen — the preview covers the screen — but never leak two URLs).
+  if (mediaPreview) closeMediaPreview();
+  // The reply (if any) belongs to this send: snapshot it now and close
+  // the reply bar behind the preview.
+  const replySnap = replyTarget ? {
+    id: replyTarget.id, body: replyTarget.body, sender: replyTarget.sender,
+    media_kind: replyTarget.media_kind || '',
+  } : null;
+  cancelReplyEdit();
+  const url = URL.createObjectURL(file);
+  mediaPreview = { kind, file, fileName: file.name, mimeType: file.type, url, viewOnce: viewOnceNext, hd: true, replySnap };
+  $('media-preview-img').classList.toggle('hidden', kind !== 'image');
+  $('media-preview-video').classList.toggle('hidden', kind !== 'video');
+  if (kind === 'image') {
+    $('media-preview-img').src = url;
+    const v = $('media-preview-video');
+    v.pause(); v.removeAttribute('src'); v.load();
+  } else {
+    $('media-preview-video').src = url;
+  }
+  $('media-preview-caption').value = '';
+  updateMediaPreviewToggles();
+  $('media-preview').classList.remove('hidden');
+  pushBackLayer('media-preview', closeMediaPreview);
+}
+function updateMediaPreviewToggles() {
+  if (!mediaPreview) return;
+  const vo = $('btn-media-preview-viewonce');
+  vo.classList.toggle('on', !!mediaPreview.viewOnce);
+  vo.setAttribute('aria-pressed', mediaPreview.viewOnce ? 'true' : 'false');
+  const hd = $('btn-media-preview-hd');
+  const isPhoto = mediaPreview.kind === 'image';
+  hd.classList.toggle('hidden', !isPhoto);
+  hd.classList.toggle('on', isPhoto && !!mediaPreview.hd);
+  // Videos always send original — the browser cannot re-encode video —
+  // so the video preview shows a plain note instead of an HD toggle.
+  $('media-preview-quality-note').classList.toggle('hidden', isPhoto);
+}
+$('btn-media-preview-viewonce').addEventListener('click', () => {
+  if (!mediaPreview) return;
+  mediaPreview.viewOnce = !mediaPreview.viewOnce;
+  // The preview and the attach-menu toggle write the same per-send
+  // flag, so the menu stays in sync with what the preview shows.
+  viewOnceNext = mediaPreview.viewOnce;
+  updateViewOnceToggle();
+  updateMediaPreviewToggles();
+  toast(mediaPreview.viewOnce ? 'View once ON — the next photo or video can be opened only once' : 'View once off');
+});
+$('btn-media-preview-hd').addEventListener('click', () => {
+  if (!mediaPreview || mediaPreview.kind !== 'image') return;
+  mediaPreview.hd = !mediaPreview.hd;
+  updateMediaPreviewToggles();
+  toast(mediaPreview.hd ? 'Full HD on — the photo sends at original quality' : 'Standard quality — the photo will be sent smaller');
+});
+function closeMediaPreview() {
+  if (mediaPreview) {
+    URL.revokeObjectURL(mediaPreview.url);
+    mediaPreview = null;
+  }
+  $('media-preview').classList.add('hidden');
+  dismissBackLayer('media-preview');
+}
+$('btn-media-preview-cancel').addEventListener('click', () => goBackLayer('media-preview'));
+$('btn-media-preview-send').addEventListener('click', () => sendMediaPreview());
+async function sendMediaPreview() {
+  const p = mediaPreview;
+  if (!p) return;
+  // HD off (photos only): shrink to at most 1280px first, with the
+  // same helper wallpapers use. HD on sends the original file, byte
+  // for byte — the toggle only makes the existing behaviour visible.
+  let finalFile = p.file;
+  if (p.kind === 'image' && !p.hd) {
+    try {
+      const dataUrl = await downscaleImageFile(p.file, 1280);
+      const blob = await (await fetch(dataUrl)).blob();
+      const base = (p.fileName || 'photo').replace(/\.[^.]*$/, '');
+      finalFile = new File([blob], (base || 'photo') + '.jpg', { type: 'image/jpeg' });
+    } catch {
+      toast("Couldn't read that photo — choose another one");
+      return; // stay on the preview so nothing is lost
+    }
+  }
+  const caption = $('media-preview-caption').value.trim().slice(0, 1000);
+  $('media-preview-caption').value = '';
+  hideLayer('media-preview');
+  mediaPreview = null;
+  URL.revokeObjectURL(p.url);
+  await sendMediaFile(p.kind, finalFile, 0, { caption, viewOnce: p.viewOnce, replySnap: p.replySnap });
+}
+async function sendMediaFile(kind, file, durationSec, opts = {}) {
   if (!activeChat && !activeGroup) return;
   const cap = MEDIA_CAPS[kind];
   if (file.size > cap) {
@@ -4060,18 +4178,26 @@ async function sendMediaFile(kind, file, durationSec) {
     return;
   }
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0, groupId: activeGroup || 0, replyTo: replyTarget ? replyTarget.id : null, viewOnce: viewOnceNext });
+  // The preview passes its own per-send options (caption, view-once,
+  // and the reply snapshot taken when the preview opened); voice notes
+  // and files come without opts and keep the old behaviour (live
+  // replyTarget, live viewOnceNext flag).
+  const caption = (opts.caption || '').trim().slice(0, 1000);
+  const vo = opts.viewOnce !== undefined ? opts.viewOnce : viewOnceNext;
+  const hasReplySnap = opts && ('replySnap' in opts);
+  const rt = hasReplySnap ? opts.replySnap : replyTarget;
+  pendingMedia.set(tempId, { kind, file, fileName: file.name, mimeType: file.type, duration: durationSec || 0, groupId: activeGroup || 0, replyTo: rt ? rt.id : null, viewOnce: vo, caption });
   const previewUrl = (kind === 'image' || kind === 'video') ? URL.createObjectURL(file) : '';
   appendMessage({
     tempId, sender: session.phone, created_at: Date.now(),
-    body: mediaLabel(kind, file.name), media_kind: kind, media_name: file.name,
+    body: caption || mediaLabel(kind, file.name), media_kind: kind, media_name: file.name,
     media_type: file.type, media_size: file.size, duration: durationSec || 0,
     localPreviewUrl: previewUrl, pending: true, progress: 0, group_id: activeGroup || undefined,
-    reply_to: replyTarget ? replyTarget.id : null,
-    reply_body: replyTarget ? replyLabel(replyTarget) : '',
-    reply_sender: replyTarget ? (replyTarget.sender === session.phone ? 'You' : peerNameOf(replyTarget)) : '',
-    reply_media_kind: replyTarget ? (replyTarget.media_kind || '') : '',
-    view_once: viewOnceNext ? 1 : 0,
+    reply_to: rt ? rt.id : null,
+    reply_body: rt ? replyLabel(rt) : '',
+    reply_sender: rt ? (rt.sender === session.phone ? 'You' : peerNameOf(rt)) : '',
+    reply_media_kind: rt ? (rt.media_kind || '') : '',
+    view_once: vo ? 1 : 0,
   });
   // The reply and the view-once flag belong to this one send only.
   cancelReplyEdit();
@@ -4106,6 +4232,7 @@ async function uploadPendingMedia(tempId) {
     };
     if (p.replyTo) uploadBody.replyTo = p.replyTo;
     if (p.viewOnce) uploadBody.viewOnce = true;
+    if (p.caption) uploadBody.caption = p.caption;
     if (p.groupId) uploadBody.groupId = p.groupId;
     else uploadBody.to = activeChat;
     const r = await uploadMediaXhr(uploadBody, (pct) => setProgress(pct, false));
