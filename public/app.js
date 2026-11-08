@@ -2756,7 +2756,8 @@ function renderNotifRows() {
   $('notif-msg-state').textContent = s.msgSound ? 'On' : 'Off';
   $('notif-group-state').textContent = s.groupSound ? 'On' : 'Off';
   $('notif-call-state').textContent = s.callSound ? 'On' : 'Off';
-  $('notif-ringtone-state').textContent = RING_NAMES[s.ringtone] || 'Classic';
+  $('notif-ringtone-state').textContent = ringtoneDisplayName(s.ringtone);
+  $('notif-msgtone-state').textContent = msgToneDisplayName(s.msgTone);
 }
 $('settings-notif-row').addEventListener('click', () => {
   renderNotifRows();
@@ -2776,22 +2777,135 @@ $('notif-call-row').addEventListener('click', () => {
   renderNotifRows();
   toast(loadNotifSettings().callSound ? 'Call ringtone on' : 'Call ringtone off — calls will ring silently');
 });
+// One row in a tone picker: name on the left, a delete × on custom
+// tones. Tap the row to hear the tone once and set it.
+function toneOptionButton(label, selected, onPick, onDelete) {
+  const b = document.createElement('button');
+  b.className = 'option-btn tone-btn' + (selected ? ' selected' : '');
+  b.type = 'button';
+  const name = document.createElement('span');
+  name.textContent = label;
+  b.appendChild(name);
+  if (onDelete) {
+    const del = document.createElement('span');
+    del.className = 'tone-del';
+    del.textContent = '×';
+    del.title = 'Delete this tone';
+    del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+    b.appendChild(del);
+  }
+  b.addEventListener('click', () => onPick());
+  return b;
+}
+function toneAddRow(onAdd) {
+  const add = document.createElement('button');
+  add.className = 'option-btn tone-btn tone-add';
+  add.type = 'button';
+  const name = document.createElement('span');
+  name.textContent = '+ Add your own';
+  add.appendChild(name);
+  add.addEventListener('click', onAdd);
+  return add;
+}
+// Renders the ringtone picker list: 15 built-ins, Silent, custom tones
+// (with a delete ×), and the "+ Add your own" row.
+function renderRingtoneList() {
+  const list = $('ringtone-list');
+  list.innerHTML = '';
+  const sel = loadNotifSettings().ringtone;
+  for (const key of Object.keys(RING_MELODIES)) {
+    list.appendChild(toneOptionButton(RING_NAMES[key], key === sel, () => {
+      saveNotifSettings({ ringtone: key });
+      renderNotifRows();
+      $('ringtone-dialog').classList.add('hidden');
+      previewRingtone(key);
+      toast('Ringtone: ' + RING_NAMES[key]);
+    }));
+  }
+  list.appendChild(toneOptionButton('Silent', sel === 'silent', () => {
+    saveNotifSettings({ ringtone: 'silent' });
+    renderNotifRows();
+    $('ringtone-dialog').classList.add('hidden');
+    toast('Ringtone: Silent — calls will not ring');
+  }));
+  for (const t of customToneRegistry) {
+    const key = 'custom:' + t.id;
+    list.appendChild(toneOptionButton(t.name, key === sel, () => {
+      saveNotifSettings({ ringtone: key });
+      renderNotifRows();
+      $('ringtone-dialog').classList.add('hidden');
+      previewRingtone(key);
+      toast('Ringtone: ' + t.name);
+    }, async () => {
+      await deleteCustomTone(t.id);
+      renderRingtoneList();
+      renderNotifRows();
+      toast('Custom tone deleted');
+    }));
+  }
+  list.appendChild(toneAddRow(() => { customToneTarget = 'ring'; $('custom-tone-input').click(); }));
+}
+// Same list for message tones: 6 built-ins, Silent, custom tones, add row.
+function renderMsgToneList() {
+  const list = $('msgtone-list');
+  list.innerHTML = '';
+  const sel = loadNotifSettings().msgTone;
+  for (const key of Object.keys(MSG_TONES)) {
+    list.appendChild(toneOptionButton(MSG_TONE_NAMES[key], key === sel, () => {
+      saveNotifSettings({ msgTone: key });
+      renderNotifRows();
+      $('msgtone-dialog').classList.add('hidden');
+      previewMsgTone(key);
+      toast('Message tone: ' + MSG_TONE_NAMES[key]);
+    }));
+  }
+  list.appendChild(toneOptionButton('Silent', sel === 'silent', () => {
+    saveNotifSettings({ msgTone: 'silent' });
+    renderNotifRows();
+    $('msgtone-dialog').classList.add('hidden');
+    toast('Message tone: Silent — no beep for new messages');
+  }));
+  for (const t of customToneRegistry) {
+    const key = 'custom:' + t.id;
+    list.appendChild(toneOptionButton(t.name, key === sel, () => {
+      saveNotifSettings({ msgTone: key });
+      renderNotifRows();
+      $('msgtone-dialog').classList.add('hidden');
+      previewMsgTone(key);
+      toast('Message tone: ' + t.name);
+    }, async () => {
+      await deleteCustomTone(t.id);
+      renderMsgToneList();
+      renderNotifRows();
+      toast('Custom tone deleted');
+    }));
+  }
+  list.appendChild(toneAddRow(() => { customToneTarget = 'msg'; $('custom-tone-input').click(); }));
+}
+// Which picker the "+ Add your own" row came from ('ring' or 'msg').
+let customToneTarget = 'ring';
+$('custom-tone-input').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const entry = await addCustomTone(f);
+    if (customToneTarget === 'msg') renderMsgToneList(); else renderRingtoneList();
+    toast('Added "' + entry.name + '" — tap it to use it');
+  } catch (err) {
+    toast(err && err.message ? err.message : 'Could not add that tone');
+  }
+});
 $('notif-ringtone-row').addEventListener('click', () => {
-  document.querySelectorAll('#ringtone-dialog .option-btn').forEach((b) => {
-    b.classList.toggle('selected', b.dataset.ringtone === loadNotifSettings().ringtone);
-  });
+  renderRingtoneList();
   $('ringtone-dialog').classList.remove('hidden');
 });
 $('btn-ringtone-cancel').addEventListener('click', () => $('ringtone-dialog').classList.add('hidden'));
-document.querySelectorAll('#ringtone-dialog .option-btn').forEach((b) => {
-  b.addEventListener('click', () => {
-    saveNotifSettings({ ringtone: b.dataset.ringtone });
-    renderNotifRows();
-    $('ringtone-dialog').classList.add('hidden');
-    previewRingtone(b.dataset.ringtone); // hear it once, then it is set
-    toast('Ringtone: ' + (RING_NAMES[b.dataset.ringtone] || 'Classic'));
-  });
+$('notif-msgtone-row').addEventListener('click', () => {
+  renderMsgToneList();
+  $('msgtone-dialog').classList.remove('hidden');
 });
+$('btn-msgtone-cancel').addEventListener('click', () => $('msgtone-dialog').classList.add('hidden'));
 $('settings-storage-row').addEventListener('click', () => {
   renderAutodlRows();
   renderMeter();
@@ -3414,8 +3528,75 @@ const RING_MELODIES = {
     [880.00, 0.18], [1046.50, 0.18], [1318.50, 0.18], [1046.50, 0.18],
     [880.00, 0.18], [1174.66, 0.42],
   ],
+  // Sunrise — a slow, warm rise, C–E–G–C.
+  sunrise: [
+    [523.25, 0.50], [659.25, 0.50], [783.99, 0.50], [1046.50, 0.80],
+  ],
+  // Chime — a bell alternating high C and G.
+  chime: [
+    [1046.50, 0.25], [783.99, 0.25], [1046.50, 0.25], [783.99, 0.40], [1046.50, 0.50],
+  ],
+  // Breeze — a light, quick pentatonic run.
+  breeze: [
+    [659.25, 0.16], [783.99, 0.16], [880.00, 0.16], [987.77, 0.22], [880.00, 0.16], [783.99, 0.28],
+  ],
+  // Echo — a motif, a pause, then the motif again.
+  echo: [
+    [880.00, 0.20], [1046.50, 0.20], [null, 0.25], [880.00, 0.20], [1046.50, 0.35],
+  ],
+  // Harmony — stepping up in thirds.
+  harmony: [
+    [523.25, 0.25], [659.25, 0.25], [587.33, 0.25], [698.46, 0.25], [659.25, 0.25], [783.99, 0.40],
+  ],
+  // Lullaby — a slow, gentle waltz, C–E–G–E–C.
+  lullaby: [
+    [523.25, 0.50], [659.25, 0.50], [783.99, 0.50], [659.25, 0.50], [523.25, 0.70],
+  ],
+  // Sparkle — fast, high, twinkling arpeggio.
+  sparkle: [
+    [1046.50, 0.14], [1318.51, 0.14], [1567.98, 0.14], [1318.51, 0.14], [1046.50, 0.30],
+  ],
+  // Meadow — a folk-like walk, G–A–B–A–G–E.
+  meadow: [
+    [392.00, 0.28], [440.00, 0.28], [493.88, 0.28], [440.00, 0.28], [392.00, 0.28], [329.63, 0.45],
+  ],
+  // Ocean — a slow wave, up and back down.
+  ocean: [
+    [440.00, 0.45], [523.25, 0.45], [659.25, 0.45], [523.25, 0.45], [440.00, 0.60],
+  ],
+  // Starlight — twinkles with gaps between them.
+  starlight: [
+    [1318.51, 0.12], [null, 0.12], [1046.50, 0.12], [null, 0.12], [1567.98, 0.18], [1318.51, 0.30],
+  ],
+  // Festival — an upbeat, cheerful major run.
+  festival: [
+    [523.25, 0.16], [659.25, 0.16], [783.99, 0.16], [1046.50, 0.30], [783.99, 0.16], [1046.50, 0.40],
+  ],
+  // Melody — a gentle, song-like line.
+  melody: [
+    [659.25, 0.30], [783.99, 0.30], [880.00, 0.30], [783.99, 0.30], [659.25, 0.30], [587.33, 0.45],
+  ],
 };
-const RING_NAMES = { classic: 'Classic', gentle: 'Gentle', bright: 'Bright' };
+const RING_NAMES = {
+  classic: 'Classic', gentle: 'Gentle', bright: 'Bright', sunrise: 'Sunrise',
+  chime: 'Chime', breeze: 'Breeze', echo: 'Echo', harmony: 'Harmony',
+  lullaby: 'Lullaby', sparkle: 'Sparkle', meadow: 'Meadow', ocean: 'Ocean',
+  starlight: 'Starlight', festival: 'Festival', melody: 'Melody',
+};
+// Short message tones (2–3 notes each). 'ding' is the original beep
+// (E–A, 880 + 1174.66) the app has always used.
+const MSG_TONES = {
+  ding: [[880.00, 0.12], [1174.66, 0.16]],
+  pop: [[523.25, 0.10], [783.99, 0.14]],
+  chirp: [[1046.50, 0.08], [1318.51, 0.08], [1046.50, 0.12]],
+  ping: [[1174.66, 0.10], [880.00, 0.18]],
+  bubble: [[392.00, 0.09], [523.25, 0.09], [659.25, 0.14]],
+  whistle: [[987.77, 0.12], [1318.51, 0.20]],
+};
+const MSG_TONE_NAMES = {
+  ding: 'Ding', pop: 'Pop', chirp: 'Chirp', ping: 'Ping', bubble: 'Bubble', whistle: 'Whistle',
+};
+// 'silent' is a valid choice for both pickers: no ring / no beep.
 const RING_PAUSE = 0.9; // silence between loops (seconds)
 const RING_VOL = { soft: 0.05, full: 0.22 }; // caller ringback / callee ringtone
 let ringCtx = null;
@@ -3463,23 +3644,65 @@ function ringPhrase(melody, peak) {
     const usePeak = peak !== undefined ? peak : (RING_VOL[ringMode] || RING_VOL.full);
     const tune = melody || chosenMelody();
     let t = ringCtx.currentTime + 0.05;
-    for (const [freq, dur] of tune) { ringNote(freq, t, dur, usePeak); t += dur; }
+    for (const [freq, dur] of tune) {
+      if (!freq) { t += dur; continue; } // a rest: silence, just move time on
+      ringNote(freq, t, dur, usePeak); t += dur;
+    }
   } catch { /* no sound, call still works */ }
 }
-function startRinging(mode) {
-  // mode 'soft' = quiet ringback for the caller, 'full' = loud ringtone
-  // for the callee. Anything else (or no argument) rings full.
-  const m = mode === 'soft' ? 'soft' : 'full';
-  if (ringTimerId && ringMode === m) return; // already ringing this way
-  ringMode = m;
+let ringCustomAudio = null; // { el, url } while a custom file is ringing
+function stopCustomRingAudio() {
+  try {
+    if (ringCustomAudio) {
+      ringCustomAudio.el.pause();
+      URL.revokeObjectURL(ringCustomAudio.url);
+      ringCustomAudio = null;
+    }
+  } catch { ringCustomAudio = null; }
+}
+// The built-in WebAudio loop (phrase, pause, phrase…).
+function startBuiltinRingLoop() {
   if (!ensureRingAudio()) return;
   if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
   ringPhrase();
   const loopMs = (chosenMelody().reduce((s, n) => s + n[1], 0) + RING_PAUSE) * 1000;
   ringTimerId = setInterval(() => ringPhrase(), loopMs);
 }
+// A custom file rings by looping an Audio element. If the file is gone
+// or will not play, fall back to the built-in loop so the call still rings.
+function startCustomRingAudio(id) {
+  getCustomToneBlob(id).then((blob) => {
+    if (!blob || ringMode !== 'full') { if (ringMode === 'full') startBuiltinRingLoop(); return; }
+    try {
+      stopCustomRingAudio();
+      const url = URL.createObjectURL(blob);
+      const a = new Audio(url);
+      a.loop = true; a.volume = 0.8;
+      ringCustomAudio = { el: a, url };
+      a.play().catch(() => { stopCustomRingAudio(); if (ringMode === 'full') startBuiltinRingLoop(); });
+    } catch { if (ringMode === 'full') startBuiltinRingLoop(); }
+  }).catch(() => { if (ringMode === 'full') startBuiltinRingLoop(); });
+}
+function startRinging(mode) {
+  // mode 'soft' = quiet ringback for the caller, 'full' = loud ringtone
+  // for the callee. Anything else (or no argument) rings full. The caller
+  // always hears the soft built-in ringback; the callee hears the chosen
+  // ringtone — a built-in melody, a custom file, or nothing (Silent).
+  const m = mode === 'soft' ? 'soft' : 'full';
+  if (ringMode === m && (ringTimerId || ringCustomAudio)) return; // already ringing this way
+  ringMode = m;
+  stopCustomRingAudio();
+  if (m === 'full') {
+    if (!loadNotifSettings().callSound) return;
+    const key = loadNotifSettings().ringtone;
+    if (key === 'silent') return; // chosen Silent: ring with no sound
+    if (key && key.startsWith('custom:')) { startCustomRingAudio(key.slice(7)); return; }
+  }
+  startBuiltinRingLoop();
+}
 function stopRinging() {
   if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
+  stopCustomRingAudio();
   ringMode = null;
   try { if (ringGain && ringCtx) ringGain.gain.setTargetAtTime(0, ringCtx.currentTime, 0.02); } catch {}
 }
@@ -3487,9 +3710,126 @@ function stopRinging() {
 // though it arrives from a background poll with no gesture of its own.
 window.addEventListener('pointerdown', () => { ensureRingAudio(); }, { once: true });
 
+// ---- Custom ringtones (per-device, IndexedDB) -------------------------------
+// A custom tone's audio bytes live in IndexedDB (too big for localStorage);
+// a small registry (id + file name) lives in localStorage so the
+// synchronous settings code can validate and name them. Cap: 5 tones,
+// 1 MB each. If IndexedDB is unavailable, adding is refused with a
+// clear message instead of failing silently.
+const CUSTOM_TONE_MAX = 5;
+const CUSTOM_TONE_MAX_BYTES = 1024 * 1024; // 1 MB per file
+const CUSTOM_TONE_DB = 's19-tones';
+const CUSTOM_TONE_TYPES = ['mp3', 'm4a', 'ogg', 'wav'];
+function loadCustomToneRegistry() {
+  try {
+    const list = JSON.parse(localStorage.getItem('s19_custom_tones') || '[]');
+    return Array.isArray(list) ? list.filter((t) => t && t.id && t.name) : [];
+  } catch { return []; }
+}
+let customToneRegistry = loadCustomToneRegistry();
+function saveCustomToneRegistry() {
+  try { localStorage.setItem('s19_custom_tones', JSON.stringify(customToneRegistry)); } catch { /* storage unavailable */ }
+}
+function customToneMeta(id) { return customToneRegistry.find((t) => t.id === id) || null; }
+function customToneDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) { reject(new Error('Custom tones are not supported in this browser.')); return; }
+    let req;
+    try { req = window.indexedDB.open(CUSTOM_TONE_DB, 1); } catch (e) { reject(e); return; }
+    req.onupgradeneeded = () => { try { req.result.createObjectStore('tones', { keyPath: 'id' }); } catch {} };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('Could not open the tone storage.'));
+  });
+}
+function idbPutTone(id, blob) {
+  return customToneDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction('tones', 'readwrite');
+    tx.objectStore('tones').put({ id, blob });
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(); };
+    tx.onerror = () => reject(tx.error || new Error('Could not save the tone.'));
+  }));
+}
+function idbDeleteTone(id) {
+  return customToneDb().then((db) => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; try { db.close(); } catch {} resolve(); } };
+    try {
+      const tx = db.transaction('tones', 'readwrite');
+      tx.objectStore('tones').delete(id);
+      tx.oncomplete = finish; tx.onerror = finish;
+    } catch { finish(); }
+  })).catch(() => {});
+}
+function getCustomToneBlob(id) {
+  return customToneDb().then((db) => new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; try { db.close(); } catch {} resolve(v); } };
+    try {
+      const tx = db.transaction('tones', 'readonly');
+      const req = tx.objectStore('tones').get(id);
+      req.onsuccess = () => finish(req.result ? req.result.blob : null);
+      req.onerror = () => finish(null);
+      tx.onerror = () => finish(null);
+    } catch { finish(null); }
+  })).catch(() => null);
+}
+// Adds a picked audio file as a custom tone. Throws an Error with a plain
+// message when the file is not audio, is over 1 MB, or the 5-tone cap is hit.
+async function addCustomTone(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const okType = (file.type && file.type.startsWith('audio/')) || CUSTOM_TONE_TYPES.includes(ext);
+  if (!okType) throw new Error('Please pick an audio file (mp3, m4a, ogg or wav).');
+  if (file.size > CUSTOM_TONE_MAX_BYTES) throw new Error('That file is over 1 MB — pick a shorter clip.');
+  if (customToneRegistry.length >= CUSTOM_TONE_MAX) throw new Error('You already have 5 custom tones — delete one first.');
+  const id = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  try { await idbPutTone(id, file); }
+  catch (e) { throw new Error(e && e.message ? e.message : 'Custom tones are not supported in this browser.'); }
+  const entry = { id, name: (file.name.replace(/\.[^.]+$/, '') || 'Custom tone').slice(0, 60) };
+  customToneRegistry.push(entry);
+  saveCustomToneRegistry();
+  return entry;
+}
+async function deleteCustomTone(id) {
+  customToneRegistry = customToneRegistry.filter((t) => t.id !== id);
+  saveCustomToneRegistry();
+  await idbDeleteTone(id);
+  // A deleted tone that was selected falls back to the built-in default.
+  const s = loadNotifSettings();
+  if (s.ringtone === 'custom:' + id) saveNotifSettings({ ringtone: 'classic' });
+  if (s.msgTone === 'custom:' + id) saveNotifSettings({ msgTone: 'ding' });
+}
+// One Audio element at a time for custom-tone previews (tap another tone
+// and the first one stops).
+let previewAudio = null; // { el, url }
+function stopPreviewAudio() {
+  try {
+    if (previewAudio) { previewAudio.el.pause(); URL.revokeObjectURL(previewAudio.url); previewAudio = null; }
+  } catch { previewAudio = null; }
+}
+function playCustomToneOnce(id) {
+  getCustomToneBlob(id).then((blob) => {
+    if (!blob) { toast('That custom tone is no longer on this phone'); return; }
+    try {
+      stopPreviewAudio();
+      const url = URL.createObjectURL(blob);
+      const a = new Audio(url);
+      previewAudio = { el: a, url };
+      a.onended = () => stopPreviewAudio();
+      a.play().catch(() => stopPreviewAudio());
+    } catch { stopPreviewAudio(); }
+  });
+}
+
 // ---- Notification settings (Settings → Notifications) -----------------------
 // Per-device, in localStorage: message sound, group sound, call ringtone
-// on/off, and which ringtone melody to play. All default to on / Classic.
+// on/off, which call ringtone (15 built-ins, Silent, or custom:<id>) and
+// which message tone (6 built-ins, Silent, or custom:<id>). Defaults:
+// Classic ringtone, Ding message tone.
+function validToneKey(key, table) {
+  if (key === 'silent') return true;
+  if (key && key.startsWith('custom:')) return !!customToneMeta(key.slice(7));
+  return !!table[key];
+}
 function loadNotifSettings() {
   try {
     const s = JSON.parse(localStorage.getItem('s19_notif') || '{}');
@@ -3497,10 +3837,11 @@ function loadNotifSettings() {
       msgSound: s.msgSound !== false,
       groupSound: s.groupSound !== false,
       callSound: s.callSound !== false,
-      ringtone: RING_MELODIES[s.ringtone] ? s.ringtone : 'classic',
+      ringtone: validToneKey(s.ringtone, RING_MELODIES) ? s.ringtone : 'classic',
+      msgTone: validToneKey(s.msgTone, MSG_TONES) ? s.msgTone : 'ding',
     };
   } catch {
-    return { msgSound: true, groupSound: true, callSound: true, ringtone: 'classic' };
+    return { msgSound: true, groupSound: true, callSound: true, ringtone: 'classic', msgTone: 'ding' };
   }
 }
 function saveNotifSettings(patch) {
@@ -3509,21 +3850,43 @@ function saveNotifSettings(patch) {
 function chosenMelody() {
   return RING_MELODIES[loadNotifSettings().ringtone] || RING_MELODIES.classic;
 }
+function ringtoneDisplayName(key) {
+  if (key === 'silent') return 'Silent';
+  if (key && key.startsWith('custom:')) { const m = customToneMeta(key.slice(7)); return m ? m.name : 'Custom tone'; }
+  return RING_NAMES[key] || 'Classic';
+}
+function msgToneDisplayName(key) {
+  if (key === 'silent') return 'Silent';
+  if (key && key.startsWith('custom:')) { const m = customToneMeta(key.slice(7)); return m ? m.name : 'Custom tone'; }
+  return MSG_TONE_NAMES[key] || 'Ding';
+}
 // Play one phrase of a ringtone once, so the user can hear it in the
 // ringtone picker. Uses the full volume, like an incoming call.
 function previewRingtone(key) {
+  if (key === 'silent') return; // nothing to hear
+  if (key && key.startsWith('custom:')) { playCustomToneOnce(key.slice(7)); return; }
   if (!RING_MELODIES[key]) return;
   if (!ensureRingAudio()) return;
   ringPhrase(RING_MELODIES[key], RING_VOL.full);
 }
-// Short message beep: two soft notes, quieter than a ringtone.
+// Play a message tone once, so the user can hear it in its picker.
+function previewMsgTone(key) {
+  if (key === 'silent') return;
+  if (key && key.startsWith('custom:')) { playCustomToneOnce(key.slice(7)); return; }
+  const tone = MSG_TONES[key];
+  if (!tone || !ensureRingAudio()) return;
+  let t = ringCtx.currentTime + 0.05;
+  for (const [freq, dur] of tone) { ringNote(freq, t, dur, 0.10); t += dur; }
+}
+// Short message beep: the chosen message tone, quieter than a ringtone.
 function playMsgBeep() {
-  try {
-    if (!ensureRingAudio()) return;
-    const t = ringCtx.currentTime + 0.05;
-    ringNote(880.00, t, 0.12, 0.10);
-    ringNote(1174.66, t + 0.14, 0.16, 0.10);
-  } catch { /* no sound, message still arrives */ }
+  const key = loadNotifSettings().msgTone;
+  if (key === 'silent') return;
+  if (key && key.startsWith('custom:')) { playCustomToneOnce(key.slice(7)); return; }
+  const tone = MSG_TONES[key] || MSG_TONES.ding;
+  if (!ensureRingAudio()) return;
+  let t = ringCtx.currentTime + 0.05;
+  for (const [freq, dur] of tone) { ringNote(freq, t, dur, 0.10); t += dur; }
 }
 
 function tuneSdp(sdp) {
