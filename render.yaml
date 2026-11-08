@@ -1,0 +1,43 @@
+# Render blueprint for S_19 CHAT BOOK (free tier)
+# Deploy: push this repo to GitHub, then in Render Dashboard ->
+# "New +" -> "Blueprint" -> pick the repo. Render reads this file.
+services:
+  - type: web
+    name: s19-chat-book
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # SMS variables are optional. Leave them empty for test-code mode.
+      # Set them in the Render Dashboard (Environment tab) when the
+      # Bangladeshi SMS gateway account is ready — never commit keys.
+      - key: SMS_PROVIDER
+        value: ""
+      - key: SMS_API_URL
+        value: ""
+      - key: SMS_API_KEY
+        sync: false
+      - key: SMS_SENDER_ID
+        value: ""
+      # Email (Gmail login) variables are optional too. Leave them empty
+      # for test-code mode; set them in the Dashboard when ready.
+      # Resend free tier: 100 emails/day, no card.
+      - key: EMAIL_PROVIDER
+        value: ""
+      - key: EMAIL_API_URL
+        value: ""
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: ""
+    # Free tier has an ephemeral disk: the SQLite file is lost when the
+    # service restarts or redeploys. That is fine for testing with friends.
+    # For permanent chat history, add a paid persistent disk (1 GB, $0.25/GB/mo)
+    # and set DB_PATH to /var/data/s19.db (see README.md).
+    # disks:
+    #   - name: s19-data
+    #     mountPath: /var/data
+    #     sizeGB: 1
