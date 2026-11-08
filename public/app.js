@@ -1741,6 +1741,13 @@ function openThemeOverlay() {
   if (!activeChat) return;
   renderThemeCards();
   renderBubblePalette();
+  // The palette is built once, but the selected colour can change
+  // (e.g. a theme card was applied) — re-mark it on every open.
+  const cur = currentBubbleColor() || '#D9FDD3';
+  document.querySelectorAll('.bubble-swatch').forEach((x) => x.classList.toggle('selected', x.dataset.bubble === cur));
+  const mini = $('bubble-mini-preview');
+  mini.style.setProperty('--bubble-mine', cur);
+  mini.style.setProperty('--bubble-mine-text', bubbleTextFor(cur));
   $('theme-bubble-section').classList.remove('hidden');
   $('theme-ai-section').classList.add('hidden');
   $('theme-overlay').classList.remove('hidden');
@@ -1848,8 +1855,9 @@ function openWallpaperPreview(src, bubble, from) {
 }
 function closeWallpaperPreview() {
   $('wallpaper-preview').classList.add('hidden');
+  const from = previewState ? previewState.from : 'wallpaper';
   previewState = null;
-  if (wallpaperReturnToTheme) $('theme-overlay').classList.remove('hidden');
+  if (from === 'theme') $('theme-overlay').classList.remove('hidden');
   else $('wallpaper-overlay').classList.remove('hidden');
 }
 $('btn-preview-back').addEventListener('click', closeWallpaperPreview);
