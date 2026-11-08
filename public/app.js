@@ -579,9 +579,68 @@ let callDir = 'out'; // 'out' = I called, 'in' = I answered
 let callStartAt = 0;
 let callTimerId = null;
 let callSeconds = 0;
+let callConnected = false; // true once media actually connects (ICE / answer)
 let iceRestarts = 0;
 let pendingOffer = null;
 const MAX_ICE_RESTARTS = 3;
+
+// ---- ringtone (WebAudio, no audio file) -------------------------------------
+// The caller hears nothing while the overlay says "ডাকছে…" unless we ring
+// ourselves — there is no ringtone in the app. Two sine tones (941 + 1209 Hz,
+// the classic phone-ring pair) play in a 1.2 s on / 0.8 s off cadence.
+// Browsers block audio without a user gesture: the caller taps the call
+// button (a gesture, fine), but an incoming call only arrives through a
+// poll, so the AudioContext is also created on the first tap anywhere in
+// the app — then it is already running when a call comes in. If playback
+// is still blocked, everything here fails silently and the call works
+// exactly as before, just without sound.
+let ringCtx = null;
+let ringGain = null;
+let ringTimerId = null;
+function ensureRingAudio() {
+  try {
+    if (!ringCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      ringCtx = new AC();
+      ringGain = ringCtx.createGain();
+      ringGain.gain.value = 0;
+      ringGain.connect(ringCtx.destination);
+      const o1 = ringCtx.createOscillator();
+      o1.type = 'sine';
+      o1.frequency.value = 941;
+      const o2 = ringCtx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = 1209;
+      o1.connect(ringGain);
+      o2.connect(ringGain);
+      o1.start();
+      o2.start();
+    }
+    if (ringCtx.state === 'suspended') ringCtx.resume().catch(() => {});
+    return true;
+  } catch { return false; }
+}
+function startRinging() {
+  if (ringTimerId) return;
+  if (!ensureRingAudio()) return;
+  const ringOnce = () => {
+    try {
+      if (!ringCtx || !ringGain) return;
+      ringGain.gain.setTargetAtTime(0.12, ringCtx.currentTime, 0.02);
+      setTimeout(() => { try { if (ringGain) ringGain.gain.setTargetAtTime(0, ringCtx.currentTime, 0.02); } catch {} }, 1200);
+    } catch { /* no sound, call still works */ }
+  };
+  ringOnce();
+  ringTimerId = setInterval(ringOnce, 2000);
+}
+function stopRinging() {
+  if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
+  try { if (ringGain && ringCtx) ringGain.gain.setTargetAtTime(0, ringCtx.currentTime, 0.02); } catch {}
+}
+// First tap anywhere unlocks audio, so a later incoming call can ring even
+// though it arrives from a background poll with no gesture of its own.
+window.addEventListener('pointerdown', () => { ensureRingAudio(); }, { once: true });
 
 function tuneSdp(sdp) {
   // Opus: maxaveragebitrate=16000, stereo=0, usedtx=1 (DTX: almost no data
@@ -633,6 +692,7 @@ function fmtCallTime(s) {
 }
 function startCallTimer() {
   if (callTimerId || !callStartAt) return;
+  callConnected = true;
   callTimerId = setInterval(() => {
     callSeconds = Math.floor((Date.now() - callStartAt) / 1000);
     $('call-timer').textContent = fmtCallTime(callSeconds);
@@ -659,6 +719,7 @@ function showCallOverlay(name, status, incoming) {
   $('call-overlay').classList.remove('hidden');
 }
 function hideCallOverlay() {
+  stopRinging();
   $('call-overlay').classList.add('hidden');
   if (callTimerId) { clearInterval(callTimerId); callTimerId = null; }
 }
@@ -667,9 +728,9 @@ function stopCallTracks() {
   if (pc) { pc.close(); pc = null; }
   $('remote-audio').srcObject = null;
 }
-function logCallHistory(peer, dir, seconds) {
+function logCallHistory(peer, dir, seconds, answered = true) {
   const h = JSON.parse(localStorage.getItem('s19_call_history') || '[]');
-  h.unshift({ peer, dir, seconds, at: Date.now() });
+  h.unshift({ peer, dir, seconds, answered: Boolean(answered), at: Date.now() });
   localStorage.setItem('s19_call_history', JSON.stringify(h.slice(0, 20)));
 }
 
@@ -689,6 +750,7 @@ async function startCall(peer, name) {
   iceRestarts = 0;
   callStartAt = 0;
   callSeconds = 0;
+  callConnected = false;
   pc = makePc();
   localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
   const offer = await pc.createOffer({ offerToReceiveAudio: true });
@@ -696,6 +758,7 @@ async function startCall(peer, name) {
   await pc.setLocalDescription(offer);
   await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type } }) });
   showCallOverlay(name || displayId(peer), 'ডাকছে…', false);
+  startRinging();
   callStartAt = Date.now();
 }
 async function answerCall() {
@@ -709,6 +772,7 @@ async function answerCall() {
   try {
     iceRestarts = 0;
     callDir = 'in';
+    callConnected = false;
     callStartAt = Date.now();
     pc = makePc();
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
@@ -722,6 +786,7 @@ async function answerCall() {
     await pc.setLocalDescription(answer);
     await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'answer', payload: { sdp: answer.sdp, type: answer.type } }) });
     pendingOffer = null;
+    stopRinging();
     showCallOverlay($('call-peer-name').textContent, 'কথা হচ্ছে…', false);
     startCallTimer();
   } catch (e) {
@@ -734,6 +799,7 @@ async function answerCall() {
     callPeer = null;
     callStartAt = 0;
     callSeconds = 0;
+    callConnected = false;
     toast('কল ধরা যায়নি — নেট দেখে আবার চেষ্টা করো');
   }
 }
@@ -741,9 +807,16 @@ async function endCall(sendSignal = true) {
   if (sendSignal && callPeer) {
     api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: callPeer, kind: 'end', payload: {} }) }).catch(() => {});
   }
-  if (callStartAt && callSeconds > 0) {
-    addCallSeconds(callSeconds);
-    logCallHistory(callPeer, callDir, callSeconds);
+  // Log EVERY ended call, including 0-second ones nobody answered — before
+  // this only calls longer than 0 s were logged, so a call Bijoy made that
+  // nobody picked up left no trace anywhere. `callPeer` is set only while
+  // a call is in progress, so a stray or double endCall cannot log twice.
+  // `answered` comes from the connection flag, not just the timer: a call
+  // answered and ended within a second still counts as answered.
+  if (callPeer) {
+    const answered = callConnected || callSeconds > 0;
+    if (callSeconds > 0) addCallSeconds(callSeconds);
+    logCallHistory(callPeer, callDir, callSeconds, answered);
   }
   stopCallTracks();
   hideCallOverlay();
@@ -751,6 +824,7 @@ async function endCall(sendSignal = true) {
   callPeer = null;
   callStartAt = 0;
   callSeconds = 0;
+  callConnected = false;
   if (!$('tab-calls').classList.contains('hidden')) loadCallsTab();
 }
 $('btn-end-call').addEventListener('click', () => endCall(true));
@@ -777,6 +851,7 @@ setInterval(async () => {
           pendingOffer = s.payload;
           const name = (conversations.find((c) => c.phone === s.from) || {}).name;
           showCallOverlay(name || displayId(s.from), 'কল আসছে…', true);
+          startRinging();
         }
         continue;
       }
@@ -784,6 +859,7 @@ setInterval(async () => {
         await pc.setRemoteDescription(new RTCSessionDescription(s.payload));
         callStartAt = callStartAt || Date.now();
         $('call-status').textContent = 'কথা হচ্ছে…';
+        stopRinging();
         startCallTimer();
       } else if (s.kind === 'ice') {
         try { await pc.addIceCandidate(new RTCIceCandidate(s.payload)); } catch { /* ignore */ }
@@ -820,9 +896,15 @@ async function loadCallsTab() {
   for (const item of h) {
     const row = document.createElement('div');
     row.className = 'chat-row';
+    // Old entries have no `answered` field — they were only logged when the
+    // call lasted > 0 s, so they were answered by definition.
+    const answered = item.answered !== undefined ? item.answered : item.seconds > 0;
+    const dirLabel = item.dir === 'out' ? 'বাইরে যাওয়া কল' : 'আসা কল';
+    const statusLabel = answered ? fmtCallTime(item.seconds)
+      : (item.dir === 'out' ? 'ধরা হয়নি' : 'মিসড কল');
     row.innerHTML = '<div class="avatar">📞</div><div class="chat-row-body">' +
       '<div class="chat-row-name">' + displayId(item.peer) + '</div>' +
-      '<div class="chat-row-msg">' + (item.dir === 'out' ? 'বাইরে যাওয়া কল' : 'আসা কল') + ' • ' + fmtCallTime(item.seconds) + '</div></div>' +
+      '<div class="chat-row-msg">' + dirLabel + ' • ' + statusLabel + '</div></div>' +
       '<span class="chat-row-time">' + fmtDate(item.at) + ' ' + fmtTime(item.at) + '</span>';
     hist.appendChild(row);
   }
