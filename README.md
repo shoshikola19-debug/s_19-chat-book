@@ -117,16 +117,37 @@ Gmail-এ কোড গেলে টাকা লাগে না — ইমে�
 ভেরিয়েবলগুলো সেট করলেই কোড আর পর্দায় দেখাবে না — আসল ইমেইল যাবে।
 Render ড্যাশবোর্ড → সার্ভিস → **Environment**-এ এগুলো বসাও:
 
+**সহজ পথ — Gmail SMTP (`smtp`)**: যেকোনো Gmail ঠিকানায় কোড যাবে,
+ডোমেইন লাগে না, কার্ড লাগে না, প্রতিটি মেইল ফ্রি। Resend-এর ফ্রি
+প্ল্যানে ডোমেইন ভেরিফাই না করলে শুধু নিজের মেইলেই যায়, তাই আসল
+Gmail লগইনের জন্য `smtp` ব্যবহার করো:
+
 | ভেরিয়েবল | মান |
 |---|---|
-| `EMAIL_PROVIDER` | `resend` বা `generic` |
-| `EMAIL_API_URL` | ইমেইল পাঠানোর ঠিকানা, যেমন `https://api.resend.com/emails` |
-| `EMAIL_API_KEY` | প্রোভাইডারের API চাবি (কখনো গিটে দেবে না) |
-| `EMAIL_FROM` | পাঠানোর ঠিকানা, যেমন `S_19 CHAT BOOK <login@s19chatbook.app>` |
+| `EMAIL_PROVIDER` | `smtp` |
+| `EMAIL_SMTP_USER` | যে Gmail থেকে কোড যাবে, যেমন `shoshikola19@gmail.com` |
+| `EMAIL_SMTP_PASS` | ওই Gmail-এর **App Password** (১৬ অক্ষর, নিচে দেখো) |
+| `EMAIL_FROM` | খালি রাখলেই হবে (`S_19 CHAT BOOK <ওই Gmail>` হয়ে যাবে) |
 
-Resend-এর ফ্রি প্ল্যানে রোজ ১০০টা ইমেইল ফ্রি, কার্ড লাগে না — ছোট
-অ্যাপের পরীক্ষার জন্য যথেষ্ট। `generic` দিলে যেকোনো JSON POST ইমেইল
-API চলবে (api_key + from + to + subject + message)।
+App Password বানানো (একবারই করতে হয়):
+১. ওই Gmail-এ লগইন → Google Account → **Security** → **2-Step
+   Verification** → ON করো।
+২. একই পাতায় **App passwords** → নাম দাও `S_19 CHAT BOOK` → Create।
+   Google একবারই ১৬ অক্ষরের পাসওয়ার্ড দেখাবে — সেটা কপি করো (স্পেস
+   ছাড়া বসাও)।
+৩. ওটা `EMAIL_SMTP_PASS`-এ বসাও — কখনো চ্যাটে বা গিটে দেবে না, শুধু
+   Render-এর Environment-এ। সাধারণ Gmail পাসওয়ার্ড দিয়ে হবে না —
+   App Password-ই লাগবে।
+৪. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
+   শুধু সেটিংস ঠিক আছে কিনা বলে)। সার্ভার চালু হলে লগে
+   `Email mode: REAL EMAIL (smtp)` দেখাবে।
+
+**অন্য পথ — Resend / generic HTTP API**: `EMAIL_PROVIDER` `resend`
+বা `generic` হলে `EMAIL_API_URL` + `EMAIL_API_KEY` + `EMAIL_FROM`
+লাগে। Resend-এর ফ্রি প্ল্যানে রোজ ১০০টা ইমেইল ফ্রি, কার্ড লাগে না —
+তবে ডোমেইন ভেরিফাই না থাকলে শুধু নিজের মেইলে যায়। `generic` দিলে
+যেকোনো JSON POST ইমেইল API চলবে (api_key + from + to + subject +
+message)।
 
 ## স্থায়ী ডেটাবেস (Neon Postgres, ফ্রি)
 
