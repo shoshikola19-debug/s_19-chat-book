@@ -617,8 +617,10 @@ function openChat(phone, name) {
   $('chat-peer-phone').textContent = displayId(phone);
   $('chat-menu').classList.add('hidden');
   $('attach-menu').classList.add('hidden');
+  $('emoji-panel').classList.add('hidden');
   updateBlockedNote();
   showScreen('screen-chat');
+  updateMicSend();
   fetchChatMessages();
   loadChatSettings();
   api('/api/messages/read', { method: 'POST', body: JSON.stringify({ with: phone }) }).catch(() => {});
@@ -673,6 +675,9 @@ function updateBlockedNote() {
   $('chat-input').disabled = disabled;
   $('btn-send-msg').disabled = disabled;
   $('btn-attach').disabled = disabled;
+  $('btn-mic').disabled = disabled;
+  $('btn-input-camera').disabled = disabled;
+  $('btn-emoji').disabled = disabled;
   $('btn-call-peer').disabled = disabled;
 }
 $('btn-back-chats').addEventListener('click', () => {
@@ -695,6 +700,9 @@ document.addEventListener('click', (e) => {
   }
   if (!$('app-menu').classList.contains('hidden') && !e.target.closest('#app-menu') && e.target.id !== 'btn-app-menu') {
     $('app-menu').classList.add('hidden');
+  }
+  if (!$('emoji-panel').classList.contains('hidden') && !e.target.closest('#emoji-panel') && e.target.id !== 'btn-emoji') {
+    $('emoji-panel').classList.add('hidden');
   }
 });
 async function saveChatSettings(patch, doneMsg) {
@@ -1137,6 +1145,7 @@ async function sendMessage() {
   const body = $('chat-input').value.trim();
   if (!body || !activeChat) return;
   $('chat-input').value = '';
+  updateMicSend();
   const tempId = Date.now() + '_' + Math.floor(Math.random() * 1000);
   appendMessage({ body, sender: session.phone, created_at: Date.now(), pending: true, tempId });
   try {
@@ -1161,6 +1170,37 @@ async function sendMessage() {
 }
 $('btn-send-msg').addEventListener('click', sendMessage);
 $('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+// WhatsApp-style input: the green round button is a mic while the field
+// is empty and becomes Send once there is text to send.
+const EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '😢', '😭', '😡', '😴', '🤔', '😅', '🙂', '😉', '😋', '🥰', '😇', '🤗', '👍', '👎', '🙏', '👏', '💪', '❤️', '💔', '🔥', '🎉', '🎂', '🌹', '⭐', '✨', '💯', '😜', '😝', '🙈', '👀', '💤', '🎶', '⚽', '🏏', '🌙', '☀️'];
+function updateMicSend() {
+  const hasText = $('chat-input').value.trim().length > 0;
+  $('btn-mic').classList.toggle('hidden', hasText);
+  $('btn-send-msg').classList.toggle('hidden', !hasText);
+}
+$('chat-input').addEventListener('input', updateMicSend);
+$('btn-emoji').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const panel = $('emoji-panel');
+  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
+  if (!panel.children.length) {
+    for (const em of EMOJIS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = em;
+      b.addEventListener('click', () => {
+        const input = $('chat-input');
+        input.setRangeText(em, input.selectionStart, input.selectionEnd, 'end');
+        input.focus();
+        updateMicSend();
+      });
+      panel.appendChild(b);
+    }
+  }
+  panel.classList.remove('hidden');
+});
+$('btn-input-camera').addEventListener('click', () => $('file-image').click());
 
 async function flushOutbox() {
   const outbox = loadOutbox();
@@ -1327,8 +1367,7 @@ let mediaRecorder = null;
 let recChunks = [];
 let recStartAt = 0;
 let recTimerId = null;
-$('attach-voice').addEventListener('click', async () => {
-  $('attach-menu').classList.add('hidden');
+async function startVoiceRec() {
   if (mediaRecorder && mediaRecorder.state === 'recording') return;
   let stream;
   try {
@@ -1365,7 +1404,9 @@ $('attach-voice').addEventListener('click', async () => {
   recTimerId = setInterval(() => {
     $('voice-rec-time').textContent = fmtCallTime(Math.floor((Date.now() - recStartAt) / 1000));
   }, 500);
-});
+}
+$('attach-voice').addEventListener('click', () => { $('attach-menu').classList.add('hidden'); startVoiceRec(); });
+$('btn-mic').addEventListener('click', startVoiceRec);
 function stopVoiceRec(send) {
   if (recTimerId) { clearInterval(recTimerId); recTimerId = null; }
   $('voice-rec-bar').classList.add('hidden');
