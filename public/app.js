@@ -643,6 +643,12 @@ function tickHtml(m) {
 }
 function appendMessage(m) {
   const box = $('chat-messages');
+  // A message already on screen is never rendered twice. The 3-second
+  // poll can return a message while its upload is still in flight, and
+  // the upload's own success handler appends it too — without this
+  // guard one photo showed up as two bubbles. Pending bubbles carry
+  // data-id="tmp-..." so they never collide with a real id.
+  if (m.id && box.querySelector('.msg[data-id="' + m.id + '"]')) return;
   const mine = m.sender === session.phone;
   const div = document.createElement('div');
   div.className = 'msg ' + (mine ? 'mine' : 'theirs') + (m.pending ? ' msg-pending' : '');
@@ -900,6 +906,10 @@ async function uploadPendingMedia(tempId) {
     const r = await uploadMediaXhr({
       to: activeChat, mediaKind: p.kind, fileName: p.fileName,
       mimeType: p.mimeType, size: p.file.size, data: b64, duration: p.duration,
+      // Idempotency key: if this upload is retried after a lost
+      // response, the server returns the row it already stored
+      // instead of inserting a second copy of the photo/video/file.
+      clientKey: tempId,
     }, (pct) => setProgress(pct, false));
     addMsgBytes(p.file.size);
     pendingMedia.delete(tempId);
@@ -950,11 +960,16 @@ $('attach-voice').addEventListener('click', async () => {
   } catch {
     mediaRecorder = new MediaRecorder(stream);
   }
+  // Capture the MIME type NOW, in a local: stopVoiceRec() clears the
+  // global mediaRecorder as soon as stop() is called, and onstop fires
+  // asynchronously afterwards — reading mediaRecorder.mimeType there
+  // threw (null) and the voice note was never sent at all.
+  const recMimeType = mediaRecorder.mimeType || 'audio/webm';
   recChunks = [];
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
   mediaRecorder.onstop = () => {
     stream.getTracks().forEach((t) => t.stop());
-    const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    const blob = new Blob(recChunks, { type: recMimeType });
     const secs = Math.max(1, Math.round((Date.now() - recStartAt) / 1000));
     if (blob.size > 0) {
       const file = new File([blob], 'voice-' + Date.now() + '.webm', { type: blob.type });
