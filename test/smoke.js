@@ -1313,6 +1313,15 @@ async function main() {
     && idxHtml2.includes('msg-action-dialog') && idxHtml2.includes('reply-bar')
     && idxHtml2.includes('forward-dialog') && idxHtml2.includes('starred-overlay')
     && idxHtml2.includes('menu-starred') && idxHtml2.includes('attach-view-once'), null);
+  // Static: the quick-reaction row is 7 emojis + a ➕ button (the 8th
+  // emoji was dropped so the + fits on a narrow phone screen); tapping
+  // + opens the full emoji panel in reaction mode, so any emoji can be
+  // used as a reaction (Bijoy 2026-11-08 23:16).
+  const quickBlock = (appJs.match(/const QUICK_REACTIONS = \[([^\]]*)\]/) || [])[1] || '';
+  const quickCount = (quickBlock.match(/'[^']+'/g) || []).length;
+  check('quick reactions are 7 emojis + a + button opening the full emoji panel',
+    quickCount === 7 && !quickBlock.includes('🎉')
+    && appJs.includes("more.textContent = '➕'") && appJs.includes('reactionMode = true'), { quickCount });
 
   // Static: the share button sits on the photo/video bubble itself
   // (bottom-right of the media), opening a sheet with "Share to chat"
