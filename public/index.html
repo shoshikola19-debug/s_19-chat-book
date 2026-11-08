@@ -472,7 +472,7 @@
       <div class="profile-avatar" id="settings-avatar">?</div>
       <span class="settings-avatar-camera">📷</span>
     </div>
-    <div class="settings-hint">Tap the photo to change it</div>
+    <div class="settings-hint">Tap the photo to view it • 📷 to change it</div>
     <button id="settings-name-row" class="settings-row" type="button">
       <span class="settings-row-label">Name</span><span id="settings-name" class="settings-row-value"></span>
     </button>
@@ -486,6 +486,10 @@
       <span class="settings-row-label">Auto-save photos &amp; videos</span><span id="settings-autosave" class="settings-row-value">On</span>
     </button>
     <div class="settings-hint">Photos and videos friends send are saved to your phone automatically. Voice notes and files are never auto-saved.</div>
+    <button id="settings-photoguard-row" class="settings-row" type="button">
+      <span class="settings-row-label">Profile photo guard</span><span id="settings-photoguard" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-hint">When on, a profile photo opens in a guarded viewer: no save button, and the photo hides when you switch away from the app. It does not stop screenshots.</div>
     <input type="file" id="settings-avatar-input" accept="image/*" class="hidden">
   </div>
 
@@ -629,6 +633,17 @@
         <button id="btn-report-submit" class="btn-primary">Report</button>
       </div>
     </div>
+  </div>
+
+  <!-- ===== Profile photo viewer (guarded) ===== -->
+  <div id="photo-viewer" class="photo-viewer hidden">
+    <div class="photo-viewer-top">
+      <button id="btn-close-photo-viewer" class="photo-viewer-close" type="button">✕</button>
+      <span id="photo-viewer-name"></span>
+      <span id="photo-viewer-guarded" class="photo-viewer-guarded">🔒 Guarded</span>
+    </div>
+    <img id="photo-viewer-img" alt="">
+    <a id="photo-viewer-download" class="photo-viewer-download hidden" download="profile-photo.jpg">⬇ Save photo</a>
   </div>
 
   <div id="toast" class="toast hidden"></div>
