@@ -105,6 +105,15 @@ function renderMeter() {
   $('meter-call').textContent = bn(Math.round(callBytes / 1024)) + ' KB (' + bn(Math.floor(u.callSec / 60)) + ' min)';
   $('meter-vcall').textContent = bn(Math.round(vcallBytes / 1024)) + ' KB (' + bn(Math.floor((u.videoSec || 0) / 60)) + ' min)';
   $('meter-fill').style.width = Math.min(100, (total / 10e6) * 100) + '%';
+  // The Storage and data sub-screen shows the same numbers.
+  const t2 = $('meter2-total');
+  if (t2) {
+    t2.textContent = $('meter-total').textContent;
+    $('meter2-msg').textContent = $('meter-msg').textContent;
+    $('meter2-call').textContent = $('meter-call').textContent;
+    $('meter2-vcall').textContent = $('meter-vcall').textContent;
+    $('meter2-fill').style.width = $('meter-fill').style.width;
+  }
 }
 
 // ---- theme (Tools tab picker) ------------------------------------------------
@@ -155,6 +164,20 @@ $('btn-theme-light').addEventListener('click', () => setTheme('light'));
 $('btn-theme-dark').addEventListener('click', () => setTheme('dark'));
 document.querySelectorAll('.theme-swatch[data-accent]').forEach((b) =>
   b.addEventListener('click', () => setTheme(null, b.dataset.accent)));
+
+// ---- Accessibility (Settings) ------------------------------------------------
+// Per-device, applied on load: Larger text bumps the text that matters,
+// Reduce motion turns off animations. Both are just classes on <html>.
+function loadA11y() {
+  try { return JSON.parse(localStorage.getItem('s19_a11y') || '{}'); }
+  catch { return {}; }
+}
+function applyA11y() {
+  const a = loadA11y();
+  document.documentElement.classList.toggle('large-text', !!a.largeText);
+  document.documentElement.classList.toggle('reduce-motion', !!a.reduceMotion);
+}
+applyA11y();
 
 // A gallery photo as a background: scaled down to at most 1280px on the
 // long side so it fits in the phone's local storage (a full phone photo
@@ -212,6 +235,13 @@ async function loadStorage() {
       : bn(Math.round(bytes / 1024)) + ' KB';
     $('storage-count').textContent = bn(r.mediaCount || 0) ;
     $('storage-fill').style.width = Math.min(100, (bytes / (r.limitBytes || 1073741824)) * 100) + '%';
+    // The Storage and data sub-screen shows the same numbers.
+    const u2 = $('storage2-used');
+    if (u2) {
+      u2.textContent = $('storage-used').textContent;
+      $('storage2-count').textContent = $('storage-count').textContent;
+      $('storage2-fill').style.width = $('storage-fill').style.width;
+    }
   } catch { /* offline — keep the last numbers */ }
 }
 
@@ -482,9 +512,49 @@ function openSettings() {
 // Inbox header gear: opens Settings directly (the old ⋮ menu only
 // ever held Settings, so nothing is lost by removing it).
 $('btn-header-settings').addEventListener('click', openSettings);
-// Header camera (WhatsApp-style): opens the photo picker, like the
-// camera button in the chat input bar.
-$('btn-header-camera').addEventListener('click', () => $('file-image').click());
+// Header camera (WhatsApp-style): opens the device camera. The photo
+// is then sent to a chat you pick — the inbox itself has no chat open,
+// so picking first and sending second is the only honest flow. The
+// photo sends at original quality, like every chat photo.
+$('btn-header-camera').addEventListener('click', () => $('file-camera').click());
+let pendingCameraFile = null;
+$('file-camera').addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  pendingCameraFile = f;
+  const list = $('send-photo-list');
+  list.innerHTML = '';
+  const addRow = (label, sub, onPick) => {
+    const b = document.createElement('button');
+    b.className = 'option-btn';
+    b.type = 'button';
+    b.innerHTML = '<b>' + escapeHtml(label) + '</b>' + (sub ? '<br><small>' + escapeHtml(sub) + '</small>' : '');
+    b.addEventListener('click', () => {
+      $('send-photo-dialog').classList.add('hidden');
+      onPick();
+    });
+    list.appendChild(b);
+  };
+  for (const c of allContacts) addRow(peerName(c), displayId(c.phone), () => {
+    openChat(c.phone, c.name);
+    if (pendingCameraFile) sendMediaFile('image', pendingCameraFile);
+    pendingCameraFile = null;
+  });
+  for (const g of myGroups) addRow(g.name, 'Group • ' + ((g.members || []).length) + ' members', () => {
+    openGroup(g.id, g.name);
+    if (pendingCameraFile) sendMediaFile('image', pendingCameraFile);
+    pendingCameraFile = null;
+  });
+  if (!allContacts.length && !myGroups.length) {
+    list.innerHTML = '<div class="empty-note">Add a friend first, then take a photo to send them.</div>';
+  }
+  $('send-photo-dialog').classList.remove('hidden');
+});
+$('btn-send-photo-cancel').addEventListener('click', () => {
+  $('send-photo-dialog').classList.add('hidden');
+  pendingCameraFile = null;
+});
 $('tools-profile-card').addEventListener('click', openSettings);
 $('btn-close-settings').addEventListener('click', () => $('settings-overlay').classList.add('hidden'));
 // Tapping your own photo opens the guarded viewer; tapping the 📷
@@ -587,6 +657,10 @@ let inboxLoaded = false;
 let inboxLoading = false;
 let inboxLoadFailed = false;
 let inboxLoadAttempts = 0;
+// Last-seen unread totals, for the new-message beep (null = not yet
+// known — the first load never beeps).
+let prevUnreadDM = null;
+let prevUnreadGroup = null;
 let inboxRetryTimer = null;
 const INBOX_MAX_RETRIES = 3;
 const INBOX_RETRY_DELAY_MS = 3000;
@@ -656,6 +730,12 @@ async function loadInbox() {
     try {
       const r = await api('/api/conversations', { timeoutMs: INBOX_FETCH_TIMEOUT_MS });
       conversations = r.conversations || [];
+      // New-message beep: unread in chats other than the one open on
+      // screen. The open chat beeps from its own poll instead, so one
+      // message never beeps twice. Muted chats never beep.
+      const dmUnread = conversations.reduce((s, c) => s + ((c.muted || c.phone === activeChat) ? 0 : (c.unread || 0)), 0);
+      if (prevUnreadDM !== null && dmUnread > prevUnreadDM && !document.hidden && loadNotifSettings().msgSound) playMsgBeep();
+      prevUnreadDM = dmUnread;
       inboxLoaded = true;
       inboxCached = false;
       inboxRefreshFailed = false;
@@ -693,6 +773,9 @@ async function loadInbox() {
     const g = await api('/api/groups');
     myGroups = g.groups || [];
     groupsLoaded = true;
+    const gUnread = myGroups.reduce((s, gr) => s + ((gr.id === activeGroup) ? 0 : (gr.unread || 0)), 0);
+    if (prevUnreadGroup !== null && gUnread > prevUnreadGroup && !document.hidden && loadNotifSettings().groupSound) playMsgBeep();
+    prevUnreadGroup = gUnread;
     saveInboxCache();
     renderInbox();
   } catch { /* offline — keep the last list on screen */ }
@@ -1019,11 +1102,15 @@ async function loadGroupInfo() {
 async function fetchGroupMessages() {
   if (!activeGroup) return;
   try {
+    const firstFetch = chatAfterId === 0; // opening the chat loads history — never beep for that
     const r = await api('/api/groups/' + activeGroup + '/messages?afterId=' + chatAfterId);
+    let gotIncoming = false;
     for (const m of r.messages || []) {
       appendMessage(m);
+      if (m.sender !== session.phone) gotIncoming = true;
       chatAfterId = Math.max(chatAfterId, m.id);
     }
+    if (!firstFetch && gotIncoming && !document.hidden && loadNotifSettings().groupSound) playMsgBeep();
     applyTicks(r.ticks);
     if (r.group && r.group.memberCount) {
       const n = r.group.memberCount;
@@ -1661,9 +1748,33 @@ function toggleProfileMediaGrid() {
   }
 }
 $('profile-media-row').addEventListener('click', toggleProfileMediaGrid);
-// Manage storage opens the same media grid — the total size is shown
-// on the row itself (computed from the chat-media metadata).
-$('profile-storage-row').addEventListener('click', toggleProfileMediaGrid);
+// Manage storage shows a breakdown of this chat's shared media by kind
+// (photos / videos / voice notes / files), with the total — the row
+// itself already shows the total size. Nothing is deleted from here:
+// to free space, delete messages from the chat.
+$('profile-storage-row').addEventListener('click', () => {
+  const kinds = { image: ['Photos', 0, 0], video: ['Videos', 0, 0], voice: ['Voice notes', 0, 0], file: ['Files', 0, 0] };
+  for (const m of profileMedia || []) {
+    const k = kinds[m.media_kind] || kinds.file;
+    k[1] += 1;
+    k[2] += m.media_size || 0;
+  }
+  const box = $('storage-breakdown');
+  box.innerHTML = '';
+  let total = 0;
+  for (const key of ['image', 'video', 'voice', 'file']) {
+    const [label, n, bytes] = kinds[key];
+    total += bytes;
+    const row = document.createElement('div');
+    row.innerHTML = label + ' <span>' + bn(n) + ' • ' + fmtBytes(bytes) + '</span>';
+    box.appendChild(row);
+  }
+  const tot = document.createElement('div');
+  tot.innerHTML = '<b>Total</b> <span><b>' + fmtBytes(total) + '</b></span>';
+  box.appendChild(tot);
+  $('manage-storage-dialog').classList.remove('hidden');
+});
+$('btn-manage-storage-close').addEventListener('click', () => $('manage-storage-dialog').classList.add('hidden'));
 $('profile-mute-row').addEventListener('click', () => {
   if (!activeChat) return;
   const nowMuted = chatSettings && chatSettings.muted;
@@ -1834,7 +1945,11 @@ $('btn-locked-chats-close').addEventListener('click', () => $('locked-chats-dial
 
 // ---- In-chat search (from the profile's Search button) --------------------
 // Filters the loaded messages as you type; clearing restores the chat.
+// Matches are collected so ↑ / ↓ can jump between them — the current
+// match is outlined and scrolled into view.
 let chatSearchQuery = '';
+let searchMatches = [];
+let searchMatchIdx = -1;
 function openChatSearch() {
   $('chat-search-bar').classList.remove('hidden');
   $('chat-search-input').value = '';
@@ -1843,20 +1958,44 @@ function openChatSearch() {
 }
 function closeChatSearch() {
   $('chat-search-bar').classList.add('hidden');
+  document.querySelectorAll('#chat-messages .msg.search-hit').forEach((el) => el.classList.remove('search-hit'));
   applyChatSearch('');
+}
+function highlightSearchMatch() {
+  document.querySelectorAll('#chat-messages .msg.search-hit').forEach((el) => el.classList.remove('search-hit'));
+  if (!searchMatches.length || searchMatchIdx < 0) return;
+  const el = searchMatches[searchMatchIdx];
+  if (!el) return;
+  el.classList.add('search-hit');
+  el.scrollIntoView({ block: 'center' });
+}
+function stepSearchMatch(dir) {
+  if (!searchMatches.length) return;
+  searchMatchIdx = (searchMatchIdx + dir + searchMatches.length) % searchMatches.length;
+  $('chat-search-count').textContent = bn(String(searchMatchIdx + 1)) + ' of ' + bn(String(searchMatches.length));
+  highlightSearchMatch();
 }
 function applyChatSearch(q) {
   chatSearchQuery = (q || '').trim().toLowerCase();
-  let n = 0;
+  searchMatches = [];
+  searchMatchIdx = -1;
   document.querySelectorAll('#chat-messages .msg').forEach((el) => {
     const hit = !chatSearchQuery || (el.textContent || '').toLowerCase().includes(chatSearchQuery);
     el.style.display = hit ? '' : 'none';
-    if (hit && chatSearchQuery) n++;
+    if (hit && chatSearchQuery) searchMatches.push(el);
   });
-  $('chat-search-count').textContent = chatSearchQuery ? bn(String(n)) + ' found' : '';
+  if (chatSearchQuery && searchMatches.length) {
+    searchMatchIdx = 0;
+    $('chat-search-count').textContent = '1 of ' + bn(String(searchMatches.length));
+    highlightSearchMatch();
+  } else {
+    $('chat-search-count').textContent = chatSearchQuery ? '0 found' : '';
+  }
 }
 $('chat-search-input').addEventListener('input', (e) => applyChatSearch(e.target.value));
 $('btn-close-search').addEventListener('click', closeChatSearch);
+$('btn-search-prev').addEventListener('click', () => stepSearchMatch(-1));
+$('btn-search-next').addEventListener('click', () => stepSearchMatch(1));
 $('menu-clear').addEventListener('click', async () => {
   if (!activeChat) return;
   $('chat-menu').classList.add('hidden');
@@ -1880,15 +2019,21 @@ $('menu-block').addEventListener('click', () => {
 async function fetchChatMessages() {
   if (!activeChat) return;
   try {
+    const firstFetch = chatAfterId === 0; // opening the chat loads history — never beep for that
     const r = await api('/api/messages?with=' + encodeURIComponent(activeChat) + '&afterId=' + chatAfterId);
+    let gotIncoming = false;
     for (const m of r.messages || []) {
       appendMessage(m);
+      if (m.sender === activeChat) gotIncoming = true;
       // Media bytes are counted when the media itself downloads (in
       // loadMediaInto); text bytes are counted here. The body of a media
       // message is only its preview label, so it is not counted.
       if (m.receiver === session.phone && !m.media_kind) addMsgBytes(bytesOf(m.body));
       chatAfterId = Math.max(chatAfterId, m.id);
     }
+    // A new message in the chat on screen beeps once — unless this chat
+    // is muted, the sound is off, or the tab is hidden (push covers it).
+    if (!firstFetch && gotIncoming && !document.hidden && loadNotifSettings().msgSound && !(chatSettings && chatSettings.muted)) playMsgBeep();
     // Re-render ticks for my messages from the ticks map — this works
     // even when this poll brought no new messages, which is how a ✓
     // becomes ✓✓ and then blue (seen) after the friend reads it.
@@ -2119,8 +2264,38 @@ function mediaHtml(m) {
 // in localStorage (last 500), so the "once" promise survives a restart
 // of the app. Note: Chrome may ask once to allow multiple downloads —
 // that is the browser's own permission, not a bug in the app.
+// Photos and videos are toggled separately (keys s19_autosave_photos /
+// s19_autosave_videos, both default ON). The old single key s19_autosave
+// is honoured once for migration: if it was turned off, both kinds
+// start off.
+function autosavePhotosOn() {
+  try {
+    const v = localStorage.getItem('s19_autosave_photos');
+    if (v !== null) return v !== 'off';
+    return localStorage.getItem('s19_autosave') !== 'off';
+  } catch { return true; }
+}
+function autosaveVideosOn() {
+  try {
+    const v = localStorage.getItem('s19_autosave_videos');
+    if (v !== null) return v !== 'off';
+    return localStorage.getItem('s19_autosave') !== 'off';
+  } catch { return true; }
+}
+function setAutosavePhotos(on) {
+  try { localStorage.setItem('s19_autosave_photos', on ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  renderAutosaveRow();
+  renderAutodlRows();
+}
+function setAutosaveVideos(on) {
+  try { localStorage.setItem('s19_autosave_videos', on ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  renderAutosaveRow();
+  renderAutodlRows();
+}
+// The old single toggle, kept for the main Settings row: it flips both
+// kinds together.
 function autosaveOn() {
-  try { return localStorage.getItem('s19_autosave') !== 'off'; } catch { return true; }
+  return autosavePhotosOn() || autosaveVideosOn();
 }
 function wasAutosaved(id) {
   try { return (JSON.parse(localStorage.getItem('s19_autosaved') || '[]')).includes(id); } catch { return false; }
@@ -2138,7 +2313,7 @@ function maybeAutosave(m, url) {
   // Per-chat override wins over the global toggle — but only for the
   // 1-to-1 chat on screen (chatSettings belongs to it). Group chats,
   // and anything rendered without settings, fall back to the global one.
-  let on = autosaveOn();
+  let on = m.media_kind === 'video' ? autosaveVideosOn() : autosavePhotosOn();
   if (!m.group_id && chatSettings && chatSettings.mediaVisibility !== null && chatSettings.mediaVisibility !== undefined) {
     on = chatSettings.mediaVisibility === 1;
   }
@@ -2153,12 +2328,24 @@ function maybeAutosave(m, url) {
   a.remove();
 }
 function renderAutosaveRow() {
-  $('settings-autosave').textContent = autosaveOn() ? 'On' : 'Off';
+  const p = autosavePhotosOn(), v = autosaveVideosOn();
+  $('settings-autosave').textContent = (p && v) ? 'On' : (!p && !v) ? 'Off' : (p ? 'Photos only' : 'Videos only');
+}
+function renderAutodlRows() {
+  const p = $('autodl-photos-state'), v = $('autodl-videos-state');
+  if (p) p.textContent = autosavePhotosOn() ? 'On' : 'Off';
+  if (v) v.textContent = autosaveVideosOn() ? 'On' : 'Off';
 }
 $('settings-autosave-row').addEventListener('click', () => {
-  try { localStorage.setItem('s19_autosave', autosaveOn() ? 'off' : 'on'); } catch { /* storage unavailable */ }
+  // The main row flips both kinds together.
+  const on = !(autosavePhotosOn() && autosaveVideosOn());
+  try {
+    localStorage.setItem('s19_autosave_photos', on ? 'on' : 'off');
+    localStorage.setItem('s19_autosave_videos', on ? 'on' : 'off');
+  } catch { /* storage unavailable */ }
   renderAutosaveRow();
-  toast(autosaveOn() ? 'Auto-save on — photos and videos from friends will be saved to your phone' : 'Auto-save off');
+  renderAutodlRows();
+  toast(on ? 'Auto-save on — photos and videos from friends will be saved to your phone' : 'Auto-save off');
 });
 
 // ---- Profile photo guard -------------------------------------------------
@@ -2178,6 +2365,128 @@ $('settings-photoguard-row').addEventListener('click', () => {
   try { localStorage.setItem('s19_photo_guard', photoGuardOn() ? 'off' : 'on'); } catch { /* storage unavailable */ }
   renderPhotoGuardRow();
   toast(photoGuardOn() ? 'Profile photo guard on — photos open guarded' : 'Profile photo guard off — photos can be saved from the viewer');
+});
+
+// ---- Settings sub-screens ----------------------------------------------------
+// Notifications / Storage and data / Accessibility / Help and feedback are
+// full-screen overlays on top of the Settings overlay; the back button
+// closes the sub-screen and returns to Settings.
+const SETTINGS_SUB_OVERLAYS = ['settings-notif-overlay', 'settings-storage-overlay', 'settings-access-overlay', 'settings-help-overlay'];
+function closeSettingsSubs() { SETTINGS_SUB_OVERLAYS.forEach((id) => $(id).classList.add('hidden')); }
+$('btn-close-settings').addEventListener('click', closeSettingsSubs);
+function renderNotifRows() {
+  const s = loadNotifSettings();
+  $('notif-msg-state').textContent = s.msgSound ? 'On' : 'Off';
+  $('notif-group-state').textContent = s.groupSound ? 'On' : 'Off';
+  $('notif-call-state').textContent = s.callSound ? 'On' : 'Off';
+  $('notif-ringtone-state').textContent = RING_NAMES[s.ringtone] || 'Classic';
+}
+$('settings-notif-row').addEventListener('click', () => {
+  renderNotifRows();
+  $('settings-notif-overlay').classList.remove('hidden');
+});
+$('btn-close-notif').addEventListener('click', () => $('settings-notif-overlay').classList.add('hidden'));
+$('notif-msg-row').addEventListener('click', () => {
+  saveNotifSettings({ msgSound: !loadNotifSettings().msgSound });
+  renderNotifRows();
+});
+$('notif-group-row').addEventListener('click', () => {
+  saveNotifSettings({ groupSound: !loadNotifSettings().groupSound });
+  renderNotifRows();
+});
+$('notif-call-row').addEventListener('click', () => {
+  saveNotifSettings({ callSound: !loadNotifSettings().callSound });
+  renderNotifRows();
+  toast(loadNotifSettings().callSound ? 'Call ringtone on' : 'Call ringtone off — calls will ring silently');
+});
+$('notif-ringtone-row').addEventListener('click', () => {
+  document.querySelectorAll('#ringtone-dialog .option-btn').forEach((b) => {
+    b.classList.toggle('selected', b.dataset.ringtone === loadNotifSettings().ringtone);
+  });
+  $('ringtone-dialog').classList.remove('hidden');
+});
+$('btn-ringtone-cancel').addEventListener('click', () => $('ringtone-dialog').classList.add('hidden'));
+document.querySelectorAll('#ringtone-dialog .option-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    saveNotifSettings({ ringtone: b.dataset.ringtone });
+    renderNotifRows();
+    $('ringtone-dialog').classList.add('hidden');
+    previewRingtone(b.dataset.ringtone); // hear it once, then it is set
+    toast('Ringtone: ' + (RING_NAMES[b.dataset.ringtone] || 'Classic'));
+  });
+});
+$('settings-storage-row').addEventListener('click', () => {
+  renderAutodlRows();
+  renderMeter();
+  loadStorage();
+  $('settings-storage-overlay').classList.remove('hidden');
+});
+$('btn-close-storage').addEventListener('click', () => $('settings-storage-overlay').classList.add('hidden'));
+$('autodl-photos-row').addEventListener('click', () => {
+  setAutosavePhotos(!autosavePhotosOn());
+  toast(autosavePhotosOn() ? 'Photos will be saved automatically' : 'Photos will not be saved automatically');
+});
+$('autodl-videos-row').addEventListener('click', () => {
+  setAutosaveVideos(!autosaveVideosOn());
+  toast(autosaveVideosOn() ? 'Videos will be saved automatically' : 'Videos will not be saved automatically');
+});
+function renderAccessRows() {
+  const a = loadA11y();
+  $('access-text-state').textContent = a.largeText ? 'On' : 'Off';
+  $('access-motion-state').textContent = a.reduceMotion ? 'On' : 'Off';
+}
+$('settings-access-row').addEventListener('click', () => {
+  renderAccessRows();
+  $('settings-access-overlay').classList.remove('hidden');
+});
+$('btn-close-access').addEventListener('click', () => $('settings-access-overlay').classList.add('hidden'));
+$('access-text-row').addEventListener('click', () => {
+  const a = loadA11y();
+  try { localStorage.setItem('s19_a11y', JSON.stringify({ ...a, largeText: !a.largeText })); } catch { /* storage unavailable */ }
+  applyA11y();
+  renderAccessRows();
+});
+$('access-motion-row').addEventListener('click', () => {
+  const a = loadA11y();
+  try { localStorage.setItem('s19_a11y', JSON.stringify({ ...a, reduceMotion: !a.reduceMotion })); } catch { /* storage unavailable */ }
+  applyA11y();
+  renderAccessRows();
+});
+$('settings-help-row').addEventListener('click', () => {
+  $('settings-help-overlay').classList.remove('hidden');
+});
+$('btn-close-help').addEventListener('click', () => $('settings-help-overlay').classList.add('hidden'));
+// Contact us: there is no support email yet, so the app link is copied
+// with a note to send it to the admin with the question. Nothing is
+// invented here — no fake email address, no dead chat.
+$('help-contact-row').addEventListener('click', async () => {
+  const link = 'https://s-19-chat-book.onrender.com';
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('App link copied — send it to the admin (Bijoy) with your question');
+  } catch {
+    toast('App link: ' + link + ' — send it to the admin with your question');
+  }
+});
+// Invite a friend: the system share sheet, with a clipboard fallback.
+$('settings-invite-row').addEventListener('click', async () => {
+  const link = 'https://s-19-chat-book.onrender.com';
+  const text = 'Join me on S_19 CHAT BOOK — free messages and voice calls with friends.';
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'S_19 CHAT BOOK', text, url: link });
+      return;
+    }
+    throw new Error('no share sheet');
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // user closed the share sheet
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('App link copied — send it to a friend');
+    } catch {
+      toast('App link: ' + link);
+    }
+  }
 });
 
 // ---- Full-screen profile photo viewer ------------------------------------
@@ -2713,10 +3022,23 @@ const MAX_ICE_RESTARTS = 3;
 // The melody — a gentle original arc (E–G–A–C–A–G–E–D, ~3.5 s a loop):
 // each note is a soft sine with a warm triangle overtone and a quick
 // fade-in/out envelope, so it sounds like a phone ring, not a beep.
-const RING_MELODY = [
-  [659.25, 0.30], [783.99, 0.30], [880.00, 0.30], [1046.50, 0.42],
-  [880.00, 0.30], [783.99, 0.30], [659.25, 0.30], [587.33, 0.42],
-];
+const RING_MELODIES = {
+  // Classic — the gentle original arc (E–G–A–C–A–G–E–D, ~3.5 s a loop).
+  classic: [
+    [659.25, 0.30], [783.99, 0.30], [880.00, 0.30], [1046.50, 0.42],
+    [880.00, 0.30], [783.99, 0.30], [659.25, 0.30], [587.33, 0.42],
+  ],
+  // Gentle — a slow, soft C–E–G rise and fall.
+  gentle: [
+    [523.25, 0.45], [659.25, 0.45], [783.99, 0.55], [659.25, 0.45], [523.25, 0.65],
+  ],
+  // Bright — a quick, cheerful up-and-down arpeggio.
+  bright: [
+    [880.00, 0.18], [1046.50, 0.18], [1318.50, 0.18], [1046.50, 0.18],
+    [880.00, 0.18], [1174.66, 0.42],
+  ],
+};
+const RING_NAMES = { classic: 'Classic', gentle: 'Gentle', bright: 'Bright' };
 const RING_PAUSE = 0.9; // silence between loops (seconds)
 const RING_VOL = { soft: 0.05, full: 0.22 }; // caller ringback / callee ringtone
 let ringCtx = null;
@@ -2757,13 +3079,14 @@ function ringNote(freq, startAt, dur, peak) {
     o1.stop(startAt + dur + 0.05); o2.stop(startAt + dur + 0.05);
   } catch { /* no sound, call still works */ }
 }
-function ringPhrase() {
+function ringPhrase(melody, peak) {
   try {
     if (!ringCtx || !ringGain) return;
     if (ringGain.gain.value === 0) ringGain.gain.setTargetAtTime(1, ringCtx.currentTime, 0.02);
-    const peak = RING_VOL[ringMode] || RING_VOL.full;
+    const usePeak = peak !== undefined ? peak : (RING_VOL[ringMode] || RING_VOL.full);
+    const tune = melody || chosenMelody();
     let t = ringCtx.currentTime + 0.05;
-    for (const [freq, dur] of RING_MELODY) { ringNote(freq, t, dur, peak); t += dur; }
+    for (const [freq, dur] of tune) { ringNote(freq, t, dur, usePeak); t += dur; }
   } catch { /* no sound, call still works */ }
 }
 function startRinging(mode) {
@@ -2775,8 +3098,8 @@ function startRinging(mode) {
   if (!ensureRingAudio()) return;
   if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
   ringPhrase();
-  const loopMs = (RING_MELODY.reduce((s, n) => s + n[1], 0) + RING_PAUSE) * 1000;
-  ringTimerId = setInterval(ringPhrase, loopMs);
+  const loopMs = (chosenMelody().reduce((s, n) => s + n[1], 0) + RING_PAUSE) * 1000;
+  ringTimerId = setInterval(() => ringPhrase(), loopMs);
 }
 function stopRinging() {
   if (ringTimerId) { clearInterval(ringTimerId); ringTimerId = null; }
@@ -2786,6 +3109,45 @@ function stopRinging() {
 // First tap anywhere unlocks audio, so a later incoming call can ring even
 // though it arrives from a background poll with no gesture of its own.
 window.addEventListener('pointerdown', () => { ensureRingAudio(); }, { once: true });
+
+// ---- Notification settings (Settings → Notifications) -----------------------
+// Per-device, in localStorage: message sound, group sound, call ringtone
+// on/off, and which ringtone melody to play. All default to on / Classic.
+function loadNotifSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem('s19_notif') || '{}');
+    return {
+      msgSound: s.msgSound !== false,
+      groupSound: s.groupSound !== false,
+      callSound: s.callSound !== false,
+      ringtone: RING_MELODIES[s.ringtone] ? s.ringtone : 'classic',
+    };
+  } catch {
+    return { msgSound: true, groupSound: true, callSound: true, ringtone: 'classic' };
+  }
+}
+function saveNotifSettings(patch) {
+  try { localStorage.setItem('s19_notif', JSON.stringify({ ...loadNotifSettings(), ...patch })); } catch { /* storage unavailable */ }
+}
+function chosenMelody() {
+  return RING_MELODIES[loadNotifSettings().ringtone] || RING_MELODIES.classic;
+}
+// Play one phrase of a ringtone once, so the user can hear it in the
+// ringtone picker. Uses the full volume, like an incoming call.
+function previewRingtone(key) {
+  if (!RING_MELODIES[key]) return;
+  if (!ensureRingAudio()) return;
+  ringPhrase(RING_MELODIES[key], RING_VOL.full);
+}
+// Short message beep: two soft notes, quieter than a ringtone.
+function playMsgBeep() {
+  try {
+    if (!ensureRingAudio()) return;
+    const t = ringCtx.currentTime + 0.05;
+    ringNote(880.00, t, 0.12, 0.10);
+    ringNote(1174.66, t + 0.14, 0.16, 0.10);
+  } catch { /* no sound, message still arrives */ }
+}
 
 function tuneSdp(sdp) {
   // Opus: maxaveragebitrate=16000, stereo=0, usedtx=1 (DTX: almost no data
@@ -3006,7 +3368,7 @@ async function startCall(peer, name, isVideo) {
   await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type, video: Boolean(isVideo) } }) });
   showCallOverlay(name || displayId(peer), 'Ringing…', false, isVideo);
   if (isVideo) $('local-video').srcObject = localStream; // my own preview, small in the corner
-  startRinging('soft'); // caller hears a quiet ringback while waiting
+  if (loadNotifSettings().callSound) startRinging('soft'); // caller hears a quiet ringback while waiting
   callStartAt = Date.now();
 }
 async function answerCall() {
@@ -3177,8 +3539,8 @@ setInterval(async () => {
           // call can be answered if the user sees it. If the settings
           // fetch fails, ring anyway: better a sound than a missed call.
           api('/api/chat-settings?with=' + encodeURIComponent(s.from)).then((st) => {
-            if (!st.muted) startRinging('full'); // callee hears the full ringtone
-          }).catch(() => startRinging('full'));
+            if (!st.muted && loadNotifSettings().callSound) startRinging('full'); // callee hears the full ringtone
+          }).catch(() => { if (loadNotifSettings().callSound) startRinging('full'); });
         }
         continue;
       }
@@ -3233,6 +3595,11 @@ async function loadCallsTab() {
       '<div class="chat-row-name">' + displayId(item.peer) + '</div>' +
       '<div class="chat-row-msg">' + dirLabel + ' • ' + statusLabel + '</div></div>' +
       '<span class="chat-row-time">' + fmtDate(item.at) + ' ' + fmtTime(item.at) + '</span>';
+    // Tapping a past call calls that person back (WhatsApp-style).
+    row.addEventListener('click', () => {
+      const name = (conversations.find((c) => c.phone === item.peer) || {}).name || displayId(item.peer);
+      startCall(item.peer, name);
+    });
     hist.appendChild(row);
   }
 }
