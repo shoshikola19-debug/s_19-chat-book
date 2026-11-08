@@ -841,6 +841,28 @@
     <video id="media-viewer-video" class="media-viewer-img hidden" controls playsinline></video>
   </div>
 
+  <!-- ===== Media preview before sending (WhatsApp-style) ===== -->
+  <!-- Every photo/video goes through here first — nothing sends on a
+       single tap of the gallery/camera any more. Top: cancel, view-once
+       "1" toggle and HD toggle (photos only). Bottom: caption + Send. -->
+  <div id="media-preview" class="media-preview hidden">
+    <div class="media-preview-top">
+      <button id="btn-media-preview-cancel" class="media-preview-x" type="button" title="Cancel">✕</button>
+      <span class="media-preview-spacer"></span>
+      <span id="media-preview-quality-note" class="media-preview-note hidden">Original quality</span>
+      <button id="btn-media-preview-hd" class="media-preview-toggle" type="button" title="Full HD — sends the photo at original quality">HD</button>
+      <button id="btn-media-preview-viewonce" class="media-preview-toggle media-preview-vo" type="button" title="View once — can be opened only once">1</button>
+    </div>
+    <div class="media-preview-stage">
+      <img id="media-preview-img" class="media-preview-media" alt="Photo preview">
+      <video id="media-preview-video" class="media-preview-media hidden" controls autoplay muted loop playsinline></video>
+    </div>
+    <div class="media-preview-bottom">
+      <input id="media-preview-caption" class="media-preview-caption" type="text" placeholder="Add a caption…" maxlength="1000" autocomplete="off">
+      <button id="btn-media-preview-send" class="media-preview-send" type="button" title="Send"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+    </div>
+  </div>
+
   <!-- ===== Media visibility (per-chat auto-save override) ===== -->
   <div id="media-visibility-dialog" class="dialog-backdrop hidden">
     <div class="dialog">
