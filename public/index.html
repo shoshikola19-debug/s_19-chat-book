@@ -227,6 +227,7 @@
           <button id="menu-view-contact" type="button">View contact</button>
           <button id="menu-search" type="button">Search</button>
           <button id="menu-media" type="button">Media, links, and docs</button>
+          <button id="menu-starred" type="button">Starred messages</button>
           <button id="menu-mute" type="button">Mute notifications</button>
           <button id="menu-disappearing" type="button">Disappearing messages</button>
           <button id="menu-chat-theme" type="button">Chat theme</button>
@@ -257,6 +258,7 @@
       <button id="attach-video" type="button">🎥 Video</button>
       <button id="attach-voice" type="button">🎤 Voice message</button>
       <button id="attach-file" type="button">📄 File</button>
+      <button id="attach-view-once" type="button">📷 View once <span id="view-once-state" class="view-once-state">Off</span></button>
     </div>
     <div id="voice-rec-bar" class="voice-rec-bar hidden">
       <span class="rec-dot">●</span><span>Recording… <b id="voice-rec-time">0:00</b></span>
@@ -264,6 +266,10 @@
       <button id="btn-voice-stop" class="btn-primary btn-small" type="button">Send</button>
     </div>
     <div id="emoji-panel" class="emoji-panel hidden"></div>
+    <div id="reply-bar" class="reply-bar hidden">
+      <div class="reply-bar-body"><div id="reply-bar-title" class="reply-bar-title"></div><div id="reply-bar-text" class="reply-bar-text"></div></div>
+      <button id="btn-reply-cancel" class="btn-link" type="button" title="Cancel">✕</button>
+    </div>
     <div class="chat-input-row">
       <button id="btn-emoji" class="input-icon-btn" type="button" title="Emoji"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
       <div class="chat-input-wrap">
@@ -280,6 +286,48 @@
     <input id="file-any" type="file" class="hidden">
     <input type="file" id="chat-bg-input" accept="image/*" class="hidden">
   </section>
+
+  <!-- ===== Message actions (long-press / right-click a bubble) ===== -->
+  <div id="msg-action-dialog" class="dialog-backdrop hidden">
+    <div class="dialog msg-action-dialog">
+      <div id="msg-action-reactions" class="msg-action-reactions"></div>
+      <div class="option-list">
+        <button class="option-btn" id="msg-action-reply" type="button">Reply</button>
+        <button class="option-btn" id="msg-action-forward" type="button">Forward</button>
+        <button class="option-btn" id="msg-action-star" type="button">Star</button>
+        <button class="option-btn" id="msg-action-edit" type="button">Edit</button>
+        <button class="option-btn" id="msg-action-delete-all" type="button">Delete for everyone</button>
+        <button class="option-btn" id="msg-action-delete-me" type="button">Delete for me</button>
+      </div>
+      <div class="dialog-buttons">
+        <button id="msg-action-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Who reacted ===== -->
+  <div id="reaction-who-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Reactions</h3>
+      <div id="reaction-who-list" class="option-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-reaction-who-close" class="btn-link">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Forward to… ===== -->
+  <div id="forward-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Forward to…</h3>
+      <p class="hint">Pick up to 5 chats. Forwarded media is shared from the original — it is not uploaded again.</p>
+      <div id="forward-list" class="forward-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-forward-cancel" class="btn-link">Cancel</button>
+        <button id="btn-forward-send" class="btn-primary btn-small">Forward</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== Delete message dialog (long-press / right-click a bubble) ===== -->
   <div id="delete-msg-dialog" class="dialog-backdrop hidden">
@@ -710,6 +758,9 @@
       <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></span><span class="profile-row-label">Media, links, and docs</span><span><b id="profile-media-count">0</b> ›</span>
     </button>
     <div id="profile-media-grid" class="profile-media-grid hidden"></div>
+    <button id="profile-starred-row" class="profile-row" type="button">
+      <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span><span class="profile-row-label">Starred messages</span><span>›</span>
+    </button>
     <button id="profile-storage-row" class="profile-row" type="button">
       <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="profile-row-label">Manage storage</span><span id="profile-storage-size">0 MB</span>
     </button>
@@ -735,6 +786,15 @@
     <button id="profile-add-to-groups-row" class="profile-row profile-row-green" type="button">
       <span class="profile-row-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg></span><span class="profile-row-label">Add to groups</span>
     </button>
+  </div>
+
+  <!-- ===== Starred messages (this chat) ===== -->
+  <div id="starred-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-starred" class="back-btn">‹</button>
+      <div class="profile-head-text"><div class="profile-name">Starred messages</div></div>
+    </div>
+    <div id="starred-list" class="starred-list"></div>
   </div>
 
   <!-- ===== Group info (tap the group name in a group chat) ===== -->
