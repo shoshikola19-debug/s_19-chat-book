@@ -173,6 +173,10 @@ CREATE TABLE IF NOT EXISTS settings (
 --                 and I cannot message/call them either)
 --   cleared_at    ms timestamp: messages at or before this are hidden
 --                 for me only (Clear chat) — the other side keeps them.
+--   media_visibility  per-chat auto-save override for this chat's
+--                 photos/videos: NULL = follow the global Settings
+--                 toggle, 1 = always auto-save, 0 = never auto-save.
+--   favorite      1 = this chat is in my Favorites (inbox filter chip).
 CREATE TABLE IF NOT EXISTS chat_settings (
   owner_phone TEXT NOT NULL,
   peer_phone TEXT NOT NULL,
@@ -181,7 +185,18 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   chat_theme TEXT NOT NULL DEFAULT '',
   blocked INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER NOT NULL DEFAULT 0,
+  media_visibility INTEGER,
+  favorite INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (owner_phone, peer_phone)
+);
+-- Reports: a user reporting a peer to the admins (reason may be empty).
+-- The admin panel lists them with a Block action for the reported user.
+CREATE TABLE IF NOT EXISTS reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reporter TEXT NOT NULL,
+  reported TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
 );
 `;
 
@@ -314,7 +329,16 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   chat_theme TEXT NOT NULL DEFAULT '',
   blocked BOOLEAN NOT NULL DEFAULT FALSE,
   cleared_at BIGINT NOT NULL DEFAULT 0,
+  media_visibility INTEGER,
+  favorite BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (owner_phone, peer_phone)
+);
+CREATE TABLE IF NOT EXISTS reports (
+  id SERIAL PRIMARY KEY,
+  reporter TEXT NOT NULL,
+  reported TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL
 );
 `;
 
@@ -384,6 +408,12 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS deleted_for TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS group_id BIGINT`);
+    // Migration for databases created before per-chat media visibility
+    // and Favorites: new chat_settings columns. Same pattern — safe on
+    // every boot, fresh DBs already have them from the schema.
+    await pool.query(`ALTER TABLE chat_settings
+      ADD COLUMN IF NOT EXISTS media_visibility INTEGER,
+      ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE`);
     // Idempotency key for media-upload retries (see db.js schema note).
     // NOTE: this index must ONLY be created here, AFTER the ALTER above
     // — never inside PG_SCHEMA. On an existing database the schema's
@@ -454,6 +484,16 @@ async function createDb({ dbPath }) {
   ];
   for (const [col, def] of msgAdds) {
     if (!msgCols.includes(col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${def}`);
+  }
+  // Migration for databases created before per-chat media visibility
+  // and Favorites: new chat_settings columns, same check-first way.
+  const csCols = db.prepare('PRAGMA table_info(chat_settings)').all().map((c) => c.name);
+  const csAdds = [
+    ['media_visibility', 'INTEGER'],
+    ['favorite', 'INTEGER NOT NULL DEFAULT 0'],
+  ];
+  for (const [col, def] of csAdds) {
+    if (!csCols.includes(col)) db.exec(`ALTER TABLE chat_settings ADD COLUMN ${col} ${def}`);
   }
   // Idempotency key for media-upload retries (see schema note above).
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
