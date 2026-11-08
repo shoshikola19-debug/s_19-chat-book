@@ -546,6 +546,13 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
   padding: 12px; font-size: 15px; font-family: inherit; cursor: pointer; text-align: left; color: var(--ink);
 }
 .option-btn.selected { background: var(--green-pale); border-color: var(--green-light); font-weight: 700; }
+/* Tone pickers: 15 ringtones + customs is a long list, so it scrolls
+   inside the dialog. Custom tones get a red delete × on the right. */
+#ringtone-dialog .option-list, #msgtone-dialog .option-list { max-height: 52vh; overflow-y: auto; }
+.option-btn.tone-btn { display: flex; align-items: center; gap: 8px; }
+.option-btn.tone-btn span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tone-del { color: var(--danger); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; flex-shrink: 0; }
+.tone-add { font-weight: 700; color: var(--green); }
 
 /* ---------- overlays / dialogs ---------- */
 .call-overlay {
