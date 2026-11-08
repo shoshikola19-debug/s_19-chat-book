@@ -1117,6 +1117,172 @@ async function main() {
   const gDelByStranger = await post('/api/messages/' + gDelId + '/delete', { scope: 'me' }, tokS);
   check('non-member cannot delete a group message', gDelByStranger.status === 403, gDelByStranger);
 
+  console.log('== WhatsApp essentials: reactions, reply, forward, star, view-once, edit ==');
+  // A fresh thread for these checks, so earlier messages cannot leak in.
+  const base = await post('/api/messages', { to: FRIEND, body: 'Essentials base message' }, tokA);
+  check('essentials base message sends', base.status === 200 && base.data.message.id, base);
+  const baseId = base.data.message.id;
+
+  // --- reactions ---
+  const react = await post('/api/messages/' + baseId + '/react', { emoji: '❤️' }, tokB);
+  check('react with ❤️', react.status === 200 && react.data.reacted === true && react.data.emoji === '❤️', react);
+  const fetchReact = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  const reactMsg = (fetchReact.data.messages || []).find((m) => m.id === baseId);
+  check('reaction rides on the message fetch with the reactor name',
+    reactMsg && (reactMsg.reactions || []).some((r) => r.emoji === '❤️' && r.phone === FRIEND && r.name === 'Friend Test'), reactMsg);
+  const reactAgain = await post('/api/messages/' + baseId + '/react', { emoji: '❤️' }, tokB);
+  check('same emoji again removes the reaction (toggle)',
+    reactAgain.status === 200 && reactAgain.data.reacted === false, reactAgain);
+  const reactSwap = await post('/api/messages/' + baseId + '/react', { emoji: '🔥' }, tokB);
+  const reactSwap2 = await post('/api/messages/' + baseId + '/react', { emoji: '👍' }, tokB);
+  check('a different emoji replaces the reaction',
+    reactSwap.status === 200 && reactSwap2.status === 200, { s1: reactSwap.status, s2: reactSwap2.status });
+  const fetchSwap = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  const swapMsg = (fetchSwap.data.messages || []).find((m) => m.id === baseId);
+  check('one reaction per user after a swap',
+    swapMsg && (swapMsg.reactions || []).filter((r) => r.phone === FRIEND).length === 1
+    && swapMsg.reactions[0].emoji === '👍', swapMsg);
+  const reactStranger = await post('/api/messages/' + baseId + '/react', { emoji: '❤️' }, tokS);
+  check('a stranger cannot react to a message they cannot see', reactStranger.status === 403, reactStranger);
+  const reactBad = await post('/api/messages/' + baseId + '/react', { emoji: '' }, tokB);
+  check('empty reaction rejected', reactBad.status === 400, reactBad);
+
+  // --- reply / quote ---
+  const reply = await post('/api/messages', { to: BIJOY, body: 'I agree with that', replyTo: baseId }, tokB);
+  check('reply sends with a quote snapshot',
+    reply.status === 200 && reply.data.message.reply_to === baseId
+    && reply.data.message.reply_body === 'Essentials base message'
+    && reply.data.message.reply_sender === 'Bijoy Test', reply.data && reply.data.message);
+  const replyId = reply.data.message.id;
+  const fetchReply = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  const replyMsg = (fetchReply.data.messages || []).find((m) => m.id === replyId);
+  check('the reply quote survives the fetch',
+    replyMsg && replyMsg.reply_to === baseId && replyMsg.reply_body === 'Essentials base message', replyMsg);
+  const replyBad = await post('/api/messages', { to: BIJOY, body: 'bad quote', replyTo: 999999 }, tokB);
+  check('reply to a missing message is rejected', replyBad.status === 400 && replyBad.data.error === 'bad_reply', replyBad);
+  // Reply to a message from another chat is rejected too.
+  const otherChat = await post('/api/messages', { to: GMAIL_USER, body: 'other chat message' }, tokA);
+  const otherId = otherChat.data.message.id;
+  const crossReply = await post('/api/messages', { to: BIJOY, body: 'cross chat quote', replyTo: otherId }, tokB);
+  check('reply cannot quote a message from another chat', crossReply.status === 400 && crossReply.data.error === 'bad_reply', crossReply);
+
+  // --- forward ---
+  const fwd = await post('/api/messages/' + baseId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokB);
+  check('forward sends a labelled copy',
+    fwd.status === 200 && fwd.data.messages.length === 1 && fwd.data.messages[0].forwarded === 1
+    && fwd.data.messages[0].body === 'Essentials base message', fwd.data && fwd.data.messages);
+  const fwdFetch = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokG);
+  check('the forwarded copy arrives in the target chat',
+    fwdFetch.status === 200 && (fwdFetch.data.messages || []).some((m) => m.forwarded === 1 && m.body === 'Essentials base message'), { n: (fwdFetch.data.messages || []).length });
+  const fwdMany = await post('/api/messages/' + baseId + '/forward', {
+    targets: [{ to: GMAIL_USER }, { to: GMAIL_USER }, { to: GMAIL_USER }, { to: GMAIL_USER }, { to: GMAIL_USER }, { to: GMAIL_USER }],
+  }, tokB);
+  check('forward to more than 5 chats is rejected', fwdMany.status === 400, fwdMany);
+  const fwdStranger = await post('/api/messages/' + baseId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokS);
+  check('a stranger cannot forward a message they cannot see', fwdStranger.status === 403, fwdStranger);
+  // Forward a photo: the copy reuses the original bytes (media_ref),
+  // no second copy is stored.
+  const fwdPhoto = await post('/api/messages/' + imgId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokB);
+  check('forward a photo reuses the original media row',
+    fwdPhoto.status === 200 && fwdPhoto.data.messages[0].media_kind === 'image'
+    && fwdPhoto.data.messages[0].forwarded === 1, fwdPhoto.data && fwdPhoto.data.messages);
+  const fwdPhotoId = fwdPhoto.data.messages[0].id;
+  const fwdPhotoData = await get('/api/media/' + fwdPhotoId, tokG);
+  check('the forwarded photo downloads from the original bytes',
+    fwdPhotoData.status === 200 && fwdPhotoData.data.data === PNG_1X1, fwdPhotoData);
+
+  // --- starred messages ---
+  const star = await post('/api/messages/' + baseId + '/star', { star: true }, tokB);
+  check('star a message', star.status === 200 && star.data.starred === 1, star);
+  const fetchStar = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const starMsg = (fetchStar.data.messages || []).find((m) => m.id === baseId);
+  check('the star flag rides on the fetch (mine only)',
+    starMsg && starMsg.starred === 1, starMsg);
+  const fetchStarOther = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  const starMsgOther = (fetchStarOther.data.messages || []).find((m) => m.id === baseId);
+  check('the other side does not see my star',
+    starMsgOther && starMsgOther.starred === 0, starMsgOther);
+  const starredList = await get('/api/messages/starred?with=' + BIJOY, tokB);
+  check('starred list returns the starred message',
+    starredList.status === 200 && (starredList.data.messages || []).some((m) => m.id === baseId), { n: (starredList.data.messages || []).length });
+  const unstar = await post('/api/messages/' + baseId + '/star', { star: false }, tokB);
+  const starredAfter = await get('/api/messages/starred?with=' + BIJOY, tokB);
+  check('unstar removes it from the list',
+    unstar.status === 200 && !(starredAfter.data.messages || []).some((m) => m.id === baseId), { n: (starredAfter.data.messages || []).length });
+  const starStranger = await post('/api/messages/' + baseId + '/star', { star: true }, tokS);
+  check('a stranger cannot star a message they cannot see', starStranger.status === 403, starStranger);
+
+  // --- edit message ---
+  const editable = await post('/api/messages', { to: FRIEND, body: 'typo heree' }, tokA);
+  const editableId = editable.data.message.id;
+  const edit = await post('/api/messages/' + editableId + '/edit', { body: 'typo fixed' }, tokA);
+  check('edit my own text message within 15 minutes',
+    edit.status === 200 && edit.data.message.body === 'typo fixed' && edit.data.message.edited_at > 0, edit.data && edit.data.message);
+  const editOther = await post('/api/messages/' + editableId + '/edit', { body: 'not mine' }, tokB);
+  check("cannot edit someone else's message", editOther.status === 403, editOther);
+  const editMedia = await post('/api/messages/' + imgId + '/edit', { body: 'not text' }, tokA);
+  check('cannot edit a media message', editMedia.status === 400 && editMedia.data.error === 'not_text', editMedia);
+  const editEmpty = await post('/api/messages/' + editableId + '/edit', { body: '   ' }, tokA);
+  check('cannot edit to an empty message', editEmpty.status === 400, editEmpty);
+  // Too old: backdate the message past the 15-minute window.
+  const oldMsg = await post('/api/messages', { to: FRIEND, body: 'old message' }, tokA);
+  const oldId = oldMsg.data.message.id;
+  await execSql('UPDATE messages SET created_at = created_at - 16 * 60 * 1000 WHERE id = ' + oldId);
+  const editOld = await post('/api/messages/' + oldId + '/edit', { body: 'too late' }, tokA);
+  check('cannot edit after 15 minutes', editOld.status === 403 && editOld.data.error === 'too_old', editOld);
+
+  // --- view-once media ---
+  const vo = await post('/api/messages/media', { to: FRIEND, mediaKind: 'image', fileName: 'secret.png', mimeType: 'image/png', size: Buffer.from(PNG_1X1, 'base64').length, data: PNG_1X1, duration: 0, clientKey: 'vo-' + Date.now(), viewOnce: true }, tokA);
+  check('send a view-once photo',
+    vo.status === 200 && vo.data.message.view_once === 1 && vo.data.message.media_kind === 'image', vo.data && vo.data.message);
+  const voId = vo.data.message.id;
+  const voFetch = await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  const voMsg = (voFetch.data.messages || []).find((m) => m.id === voId);
+  check('the receiver fetch shows the view-once flag',
+    voMsg && voMsg.view_once === 1 && voMsg.viewed === 0, voMsg);
+  const voFirst = await get('/api/media/' + voId, tokB);
+  check('the receiver opens the view-once photo once',
+    voFirst.status === 200 && voFirst.data.data === PNG_1X1, voFirst);
+  const voSecond = await get('/api/media/' + voId, tokB);
+  check('a second fetch finds nothing (410)',
+    voSecond.status === 410 && voSecond.data.error === 'view_once_gone', voSecond);
+  const voSender = await get('/api/media/' + voId, tokA);
+  check('the sender can never re-open their own view-once photo', voSender.status === 410, voSender);
+  const voFetchSender = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('the sender poll learns the view-once photo was opened',
+    voFetchSender.status === 200 && (voFetchSender.data.viewedOnce || []).includes(voId), voFetchSender.data && voFetchSender.data.viewedOnce);
+  const voForward = await post('/api/messages/' + voId + '/forward', { targets: [{ to: GMAIL_USER }] }, tokB);
+  check('view-once media cannot be forwarded', voForward.status === 400 && voForward.data.error === 'view_once', voForward);
+  const voChatMedia = await get('/api/chat-media?with=' + FRIEND, tokA);
+  check('view-once media never shows in the profile media grid',
+    voChatMedia.status === 200 && !(voChatMedia.data.media || []).some((m) => m.id === voId), { n: (voChatMedia.data.media || []).length });
+  const voNormal = await get('/api/media/' + imgId, tokB);
+  check('a normal photo still downloads more than once', voNormal.status === 200 && voNormal.data.data === PNG_1X1, voNormal);
+
+  // --- group reactions + reply ---
+  // (Friend left the group earlier in the suite, so the group checks
+  // use Bijoy, who is still a member.)
+  const gReact = await post('/api/messages/' + gMsgA.data.message.id + '/react', { emoji: '👍' }, tokA);
+  check('react to a group message', gReact.status === 200 && gReact.data.reacted === true, gReact);
+  const gFetchReact = await get('/api/groups/' + gid + '/messages?afterId=0', tokA);
+  const gReactMsg = (gFetchReact.data.messages || []).find((m) => m.id === gMsgA.data.message.id);
+  check('the group reaction rides on the group fetch',
+    gReactMsg && (gReactMsg.reactions || []).some((r) => r.emoji === '👍' && r.phone === BIJOY), gReactMsg);
+  const gReply = await post('/api/groups/' + gid + '/messages', { body: 'replying in the group', replyTo: gMsgA.data.message.id }, tokA);
+  check('reply in a group quotes the group message',
+    gReply.status === 200 && gReply.data.message.reply_to === gMsgA.data.message.id
+    && gReply.data.message.reply_body === 'Hello group', gReply.data && gReply.data.message);
+
+  // Static: the client wires every new feature (action sheet, reply bar,
+  // forward picker, starred list, pinned chats, view-once toggle).
+  check('client has the action sheet + reply bar + forward dialog + starred overlay + pin + view-once',
+    appJs.includes('openMsgActions') && appJs.includes('startReply') && appJs.includes('openForward')
+    && appJs.includes('openStarred') && appJs.includes('s19_pinned') && appJs.includes('viewOnceNext')
+    && appJs.includes('openViewOnce') && appJs.includes('startEdit')
+    && idxHtml2.includes('msg-action-dialog') && idxHtml2.includes('reply-bar')
+    && idxHtml2.includes('forward-dialog') && idxHtml2.includes('starred-overlay')
+    && idxHtml2.includes('menu-starred') && idxHtml2.includes('attach-view-once'), null);
+
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
   check('logout works', lo.status === 200, lo);
