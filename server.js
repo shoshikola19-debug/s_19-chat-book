@@ -610,6 +610,27 @@ app.post('/api/chat-settings/clear', ah(auth), ah(async (req, res) => {
   return res.json({ ok: true });
 }));
 
+// ---- contact profile: peer info + all shared media in this chat -----------
+// Powers the profile page (tap the name in a chat): the peer's name and
+// join date plus every photo / video / voice note / file shared in this
+// chat, newest first. Only metadata here — the bytes still come on
+// demand from GET /api/media/:id. Messages hidden by Clear chat
+// (cleared_at) or by disappearing-message expiry are excluded.
+app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
+  const withPhone = normalizePeerOrSystem(req.query.with || '');
+  if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
+  const t = now();
+  const mine = await getChatSettings(req.phone, withPhone);
+  const peer = await db.get('SELECT phone, name, created_at FROM users WHERE phone = ?', withPhone);
+  const rows = await db.all(
+    `SELECT id, sender, media_kind, media_name, media_type, media_size, media_duration, created_at FROM messages
+     WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+       AND media_kind IS NOT NULL AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+     ORDER BY id DESC LIMIT 200`,
+    req.phone, withPhone, withPhone, req.phone, t, mine.clearedAt);
+  return res.json({ ok: true, peer: peer || { phone: withPhone, name: '', created_at: 0 }, media: rows });
+}));
+
 // ---- media messages: photo / video / voice note / file ---------------------
 // Sent at 100% ORIGINAL quality — never resized, never re-encoded, never
 // compressed (Bijoy's rule: quality stays exactly as picked, however much
