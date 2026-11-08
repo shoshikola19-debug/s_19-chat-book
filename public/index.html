@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#075E54">
+<meta name="theme-color" content="#FFFFFF">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -89,18 +89,16 @@
   <!-- ===== Main app ===== -->
   <section id="screen-app" class="screen hidden">
     <header class="app-header">
-      <img src="logo.webp" class="logo-small" alt="S_19">
       <span class="app-title">S_19 CHAT BOOK</span>
-      <button id="btn-app-menu" class="call-btn" title="Menu">⋮</button>
-      <div id="app-menu" class="chat-menu hidden">
-        <button id="menu-settings" type="button">⚙️ Settings</button>
-      </div>
+      <button id="btn-header-camera" class="call-btn" title="Camera"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+      <button id="btn-header-settings" class="call-btn" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     </header>
 
     <!-- Chats -->
     <div id="tab-chats" class="tab-page">
-      <div class="search-row"><input id="chat-search" class="input search-input" type="search" placeholder="Search"></div>
+      <div class="search-row"><svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="chat-search" class="input search-input" type="search" placeholder="Search"></div>
       <div id="chat-list" class="chat-list"></div>
+      <div id="start-chatting" class="start-chatting hidden"></div>
       <button id="btn-add-contact" class="fab" title="Add a number">+</button>
     </div>
 
@@ -201,11 +199,11 @@
     </div>
 
     <nav class="bottom-nav">
-      <button data-tab="chats" class="nav-btn active">💬<span>Chats</span></button>
-      <button data-tab="calls" class="nav-btn">📞<span>Calls</span></button>
-      <button data-tab="updates" class="nav-btn">⭕<span>Updates</span></button>
-      <button data-tab="tools" class="nav-btn">🛠️<span>Tools</span></button>
-      <button data-tab="admin" id="nav-admin" class="nav-btn hidden">🛡️<span>Admin</span></button>
+      <button data-tab="chats" class="nav-btn active"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg><span>Chats</span><span id="nav-chats-badge" class="nav-badge hidden">0</span></button>
+      <button data-tab="updates" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 5 5"/></svg><span>Updates</span></button>
+      <button data-tab="calls" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span>Calls</span></button>
+      <button data-tab="tools" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span>Tools</span></button>
+      <button data-tab="admin" id="nav-admin" class="nav-btn hidden"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Admin</span></button>
     </nav>
   </section>
 
@@ -247,19 +245,33 @@
     </div>
     <div id="emoji-panel" class="emoji-panel hidden"></div>
     <div class="chat-input-row">
-      <button id="btn-emoji" class="input-icon-btn" type="button" title="Emoji">😊</button>
+      <button id="btn-emoji" class="input-icon-btn" type="button" title="Emoji"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
       <div class="chat-input-wrap">
         <input id="chat-input" class="input chat-input" type="text" placeholder="Message…" autocomplete="off">
-        <button id="btn-attach" class="input-icon-btn" type="button" title="Attach">📎</button>
-        <button id="btn-input-camera" class="input-icon-btn" type="button" title="Camera">📷</button>
+        <button id="btn-attach" class="input-icon-btn" type="button" title="Attach"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+        <button id="btn-input-camera" class="input-icon-btn" type="button" title="Camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
       </div>
-      <button id="btn-mic" class="mic-btn" type="button" title="Voice message">🎤</button>
-      <button id="btn-send-msg" class="mic-btn hidden" type="button" title="Send">➤</button>
+      <button id="btn-mic" class="mic-btn" type="button" title="Voice message"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
+      <button id="btn-send-msg" class="mic-btn hidden" type="button" title="Send"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
     </div>
     <input id="file-image" type="file" accept="image/*" class="hidden">
     <input id="file-video" type="file" accept="video/*" class="hidden">
     <input id="file-any" type="file" class="hidden">
   </section>
+
+  <!-- ===== Delete message dialog (long-press / right-click a bubble) ===== -->
+  <div id="delete-msg-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Delete message?</h3>
+      <div class="option-list">
+        <button class="option-btn" id="btn-delete-everyone" type="button">Delete for everyone</button>
+        <button class="option-btn" id="btn-delete-me" type="button">Delete for me</button>
+      </div>
+      <div class="dialog-buttons">
+        <button id="btn-delete-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== Channel view ===== -->
   <section id="screen-channel" class="screen hidden">
@@ -325,9 +337,37 @@
         <input id="add-email-input" class="input" type="email" inputmode="email" placeholder="bondhu@gmail.com">
       </div>
       <p id="add-contact-error" class="error hidden"></p>
+      <button id="btn-new-group" class="btn-link" type="button" style="width:100%; margin-bottom:10px">👥 New group</button>
       <div class="dialog-buttons">
         <button id="btn-cancel-add" class="btn-link">Cancel</button>
         <button id="btn-confirm-add" class="btn-primary btn-small">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== New group dialog ===== -->
+  <div id="new-group-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>New group</h3>
+      <input id="new-group-name" class="input" type="text" maxlength="80" placeholder="Group name">
+      <p class="hint" style="margin-top:10px">Choose members — you can add as many as you want:</p>
+      <div id="new-group-members" class="option-list"></div>
+      <p id="new-group-error" class="error hidden"></p>
+      <div class="dialog-buttons">
+        <button id="btn-cancel-group" class="btn-link">Cancel</button>
+        <button id="btn-confirm-group" class="btn-primary btn-small">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Add members to a group ===== -->
+  <div id="add-group-members-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Add members</h3>
+      <div id="add-group-members-list" class="option-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-cancel-add-members" class="btn-link">Cancel</button>
+        <button id="btn-confirm-add-members" class="btn-primary btn-small">Add</button>
       </div>
     </div>
   </div>
@@ -424,6 +464,10 @@
     <div class="settings-row settings-row-static">
       <span class="settings-row-label">Phone / Gmail</span><span id="settings-phone" class="settings-row-value"></span>
     </div>
+    <button id="settings-autosave-row" class="settings-row" type="button">
+      <span class="settings-row-label">Auto-save photos &amp; videos</span><span id="settings-autosave" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-hint">Photos and videos friends send are saved to your phone automatically. Voice notes and files are never auto-saved.</div>
     <input type="file" id="settings-avatar-input" accept="image/*" class="hidden">
   </div>
 
@@ -464,6 +508,22 @@
     <button id="profile-disappearing-row" class="profile-row" type="button">
       <span>⏳ Disappearing messages</span><span id="profile-disappearing-state"></span>
     </button>
+  </div>
+
+  <!-- ===== Group info (tap the group name in a group chat) ===== -->
+  <div id="group-info-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-group-info" class="back-btn">‹</button>
+    </div>
+    <div class="profile-avatar" id="group-info-avatar">👥</div>
+    <div class="profile-name" id="group-info-name"></div>
+    <div class="profile-phone" id="group-info-count"></div>
+    <div class="section-title">Members</div>
+    <div id="group-info-members" class="chat-list"></div>
+    <div class="group-info-actions">
+      <button id="btn-group-add-member" class="btn-primary" type="button">Add members</button>
+      <button id="btn-group-leave" class="btn-danger" type="button">Leave group</button>
+    </div>
   </div>
 
   <!-- ===== Full photo viewer ===== -->
