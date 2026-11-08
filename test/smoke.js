@@ -1292,6 +1292,30 @@ async function main() {
     && idxHtml2.includes('forward-dialog') && idxHtml2.includes('starred-overlay')
     && idxHtml2.includes('menu-starred') && idxHtml2.includes('attach-view-once'), null);
 
+  // Static: the share button sits on the photo/video bubble itself
+  // (bottom-right of the media), opening a sheet with "Share to chat"
+  // (the existing forward flow) and "Share outside" (system share sheet
+  // via navigator.share, download fallback when unsupported, silent on
+  // a user-cancelled share). View-once is excluded: loadMediaInto
+  // returns early for view-once before the button is ever added, the
+  // sheet refuses it, and the server's forward endpoint rejects it.
+  const loadMediaIdx = appJs.indexOf('function loadMediaInto');
+  const voReturnIdx = appJs.indexOf('if (m.view_once) return;', loadMediaIdx);
+  // The call site sits inside loadMediaInto, after the view-once early
+  // return (the definition of addMediaShareBtn lives earlier in the
+  // file, so search from the return, not from the start).
+  const shareBtnIdx = appJs.indexOf('addMediaShareBtn(wrap, m)', voReturnIdx);
+  check('video/photo bubbles carry a share button on the media itself, opening a share sheet (Share to chat / Share outside), view-once excluded',
+    appJs.includes('media-share-btn') && appJs.includes('addMediaShareBtn') && appJs.includes('openMediaShare')
+    && appJs.includes('shareOutside') && appJs.includes('navigator.share') && appJs.includes('canShare')
+    && appJs.includes('btn-share-to-chat') && appJs.includes('btn-share-outside')
+    && appJs.includes('downloadBlob') && appJs.includes('was downloaded instead')
+    && appJs.includes("if (kind === 'image' || kind === 'video') addMediaShareBtn(wrap, m)")
+    && loadMediaIdx > -1 && voReturnIdx > loadMediaIdx && shareBtnIdx > voReturnIdx
+    && idxHtml2.includes('media-share-dialog') && idxHtml2.includes('btn-share-to-chat') && idxHtml2.includes('btn-share-outside')
+    && styleCss.includes('.media-share-btn') && styleCss.includes('.msg-media { position: relative; }')
+    && serverJs.includes('/api/messages/:id/forward') && serverJs.includes("error: 'view_once'"), null);
+
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
   check('logout works', lo.status === 200, lo);
