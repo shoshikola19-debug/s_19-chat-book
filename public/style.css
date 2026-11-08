@@ -230,6 +230,11 @@ body {
 .chat-messages.chat-theme-purple { background: #EADCF8; }
 .chat-messages.chat-theme-pink { background: #FCE4EC; }
 .chat-messages.chat-theme-dark { background: #0B141A; }
+/* Gallery photo as a background (this phone only): the picture covers
+   the area; the message bubbles keep their own colours, so text stays
+   readable on any photo. */
+.chat-messages.has-photo { background-size: cover; background-position: center; }
+#app.has-photo { background-size: cover; background-position: center; background-attachment: fixed; }
 .chat-messages.chat-theme-dark .msg.theirs { background: #202C33; color: #E9EDEF; }
 .chat-messages.chat-theme-dark .msg.mine { background: #005C4B; color: #E9EDEF; }
 
@@ -327,6 +332,10 @@ body {
   touch-action: none; cursor: grab;
 }
 .call-overlay.video > *:not(.call-video-wrap) { position: relative; z-index: 1; }
+/* Video call layout (WhatsApp-style): the name sits at the top, the
+   buttons sit at the bottom. Audio calls stay centred as before. */
+.call-overlay.video { justify-content: space-between; padding: 44px 0 28px; }
+.call-overlay.video .call-top { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .call-overlay.video .logo-medium { display: none; }
 .call-overlay.video .call-name, .call-overlay.video .call-status, .call-overlay.video .call-timer {
   text-shadow: 0 1px 6px rgba(0,0,0,.85);
