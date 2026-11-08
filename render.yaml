@@ -42,6 +42,15 @@ services:
       # committed. The code strips channel_binding=require automatically.
       - key: DATABASE_URL
         sync: false
+      # Web Push notifications (calls/messages arrive even when the app
+      # is closed). Both keys come from the VAPID key pair: the public
+      # key is public, the private key is in .vapid-private-key.txt
+      # (gitignored). Paste both in the Dashboard (Environment tab) —
+      # never commit them. Empty = push disabled, app works as before.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
     # Free tier has an ephemeral disk: the SQLite file is lost when the
     # service restarts or redeploys. Use DATABASE_URL (Neon, free tier)
     # for permanent data instead (see README.md).
