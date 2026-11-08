@@ -717,6 +717,29 @@ async function main() {
   check('dark mode inbox title is white, light mode stays green',
     styleCss.includes(':root[data-theme="dark"] .app-header .app-title { color: #FFFFFF; }')
     && styleCss.includes('.app-header .app-title { flex: 1; color: #25D366;'));
+  // Static guards for the WhatsApp-style default avatar and the
+  // profile photo guard: no-photo contacts get a brown person icon
+  // (never an initial letter), and the guarded viewer exists with
+  // its protections — but nothing claims screenshots are impossible
+  // or that messages are end-to-end encrypted (they are not).
+  const idxHtml2 = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  check('contacts with no photo show a brown person icon, not a letter',
+    appJs.includes('avatar-default') && !appJs.includes('avatarLetter')
+    && styleCss.includes('.avatar-default') && styleCss.includes('#6B5B4C')
+    && styleCss.includes('#D8CFC4'));
+  check('profile photo guard toggle exists, default on, per-device',
+    appJs.includes('s19_photo_guard') && appJs.includes('function photoGuardOn')
+    && appJs.includes('settings-photoguard-row') && idxHtml2.includes('Profile photo guard'));
+  check('photo viewer opens on avatar tap and hides on focus loss when guarded',
+    appJs.includes('function openPhotoViewer') && appJs.includes('photo-viewer')
+    && appJs.includes('visibilitychange') && appJs.includes('photo-hidden')
+    && appJs.includes('contextmenu') && appJs.includes('stopPropagation'));
+  check('guarded viewer shows Guarded label, unguarded shows a save button',
+    appJs.includes('photo-viewer-guarded') && appJs.includes('photo-viewer-download')
+    && idxHtml2.includes('🔒 Guarded') && idxHtml2.includes('Save photo'));
+  check('no end-to-end encryption claim anywhere in the client',
+    !appJs.includes('end-to-end encrypted') && !idxHtml2.includes('end-to-end encrypted')
+    && !idxHtml2.includes('Encryption'));
 
   console.log('== delete message + last seen + missed call ==');
   // Last seen: every authenticated request touches it (throttled to
