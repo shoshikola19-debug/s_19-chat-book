@@ -316,6 +316,20 @@ body {
 }
 .call-round.muted { background: #F15C6D; }
 .call-end { background: #E53935; }
+/* Video call: the friend's video fills the overlay, my own preview sits
+   small in the corner (picture-in-picture). The name / status / timer /
+   buttons stay on top of the video; the logo hides in video mode. */
+.call-video-wrap { position: absolute; inset: 0; z-index: 0; background: #000; }
+.call-video-wrap video#remote-video { width: 100%; height: 100%; object-fit: cover; }
+.call-video-wrap video#local-video {
+  position: absolute; right: 16px; bottom: 118px; width: 110px; height: 148px;
+  object-fit: cover; border-radius: 12px; border: 2px solid #fff; background: #222;
+}
+.call-overlay.video > *:not(.call-video-wrap) { position: relative; z-index: 1; }
+.call-overlay.video .logo-medium { display: none; }
+.call-overlay.video .call-name, .call-overlay.video .call-status, .call-overlay.video .call-timer {
+  text-shadow: 0 1px 6px rgba(0,0,0,.85);
+}
 .status-viewer {
   position: fixed; inset: 0; background: #111B21; color: #fff; z-index: 60;
   display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center;
