@@ -3289,6 +3289,10 @@ function renderNotifRows() {
   $('notif-call-state').textContent = s.callSound ? 'On' : 'Off';
   $('notif-ringtone-state').textContent = ringtoneDisplayName(s.ringtone);
   $('notif-msgtone-state').textContent = msgToneDisplayName(s.msgTone);
+  const volSlider = $('notif-volume-slider');
+  if (volSlider) volSlider.value = String(s.ringtoneVolume);
+  const volState = $('notif-volume-state');
+  if (volState) volState.textContent = s.ringtoneVolume + '%';
 }
 $('settings-notif-row').addEventListener('click', () => {
   renderNotifRows();
@@ -3307,6 +3311,11 @@ $('notif-call-row').addEventListener('click', () => {
   saveNotifSettings({ callSound: !loadNotifSettings().callSound });
   renderNotifRows();
   toast(loadNotifSettings().callSound ? 'Call ringtone on' : 'Call ringtone off — calls will ring silently');
+});
+$('notif-volume-slider').addEventListener('input', (e) => {
+  const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0)));
+  saveNotifSettings({ ringtoneVolume: v });
+  $('notif-volume-state').textContent = v + '%';
 });
 // One row in a tone picker: name on the left, a delete × on custom
 // tones. Tap the row to hear the tone once and set it.
@@ -4180,12 +4189,44 @@ const RING_MELODIES = {
   melody: [
     [659.25, 0.30], [783.99, 0.30], [880.00, 0.30], [783.99, 0.30], [659.25, 0.30], [587.33, 0.45],
   ],
+  // 8-bit Bounce — a fast, playful staccato arpeggio (same names as the
+  // phone's tone list, but original note sequences — not the system files).
+  bitbounce: [
+    [1046.50, 0.10], [1318.51, 0.10], [1567.98, 0.10], [1318.51, 0.10],
+    [1046.50, 0.10], [1567.98, 0.10], [2093.00, 0.18],
+  ],
+  // Alien — an eerie, slow descending line in close steps.
+  alien: [
+    [880.00, 0.40], [830.61, 0.40], [783.99, 0.40], [739.99, 0.50], [698.46, 0.60],
+  ],
+  // Alpha — a simple, clean three-note chime.
+  alpha: [
+    [523.25, 0.35], [783.99, 0.35], [1046.50, 0.70],
+  ],
+  // Asteroid — low, deep booming notes.
+  asteroid: [
+    [196.00, 0.45], [164.81, 0.45], [146.83, 0.55], [130.81, 0.70],
+  ],
+  // Atomic Bell — bright, high bell-like tones.
+  atomicbell: [
+    [1567.98, 0.20], [2093.00, 0.20], [1567.98, 0.20], [2093.00, 0.35], [1760.00, 0.45],
+  ],
+  // Aurora — a soft, shimmering ascent.
+  aurora: [
+    [659.25, 0.30], [830.61, 0.30], [987.77, 0.30], [1174.66, 0.30], [1318.51, 0.55],
+  ],
+  // Beep Once — a single short beep.
+  beeponce: [
+    [880.00, 0.15],
+  ],
 };
 const RING_NAMES = {
   classic: 'Classic', gentle: 'Gentle', bright: 'Bright', sunrise: 'Sunrise',
   chime: 'Chime', breeze: 'Breeze', echo: 'Echo', harmony: 'Harmony',
   lullaby: 'Lullaby', sparkle: 'Sparkle', meadow: 'Meadow', ocean: 'Ocean',
   starlight: 'Starlight', festival: 'Festival', melody: 'Melody',
+  bitbounce: '8-bit Bounce', alien: 'Alien', alpha: 'Alpha', asteroid: 'Asteroid',
+  atomicbell: 'Atomic Bell', aurora: 'Aurora', beeponce: 'Beep Once',
 };
 // Short message tones (2–3 notes each). 'ding' is the original beep
 // (E–A, 880 + 1174.66) the app has always used.
@@ -4245,7 +4286,9 @@ function ringPhrase(melody, peak) {
   try {
     if (!ringCtx || !ringGain) return;
     if (ringGain.gain.value === 0) ringGain.gain.setTargetAtTime(1, ringCtx.currentTime, 0.02);
-    const usePeak = peak !== undefined ? peak : (RING_VOL[ringMode] || RING_VOL.full);
+    // No explicit peak: the incoming-call ringtone ('full') scales with
+    // the Ringtone volume slider; the caller ringback ('soft') stays as-is.
+    const usePeak = peak !== undefined ? peak : (ringMode === 'full' ? RING_VOL.full * ringtoneVolumeFactor() : (RING_VOL[ringMode] || RING_VOL.full));
     const tune = melody || chosenMelody();
     let t = ringCtx.currentTime + 0.05;
     for (const [freq, dur] of tune) {
@@ -4281,7 +4324,7 @@ function startCustomRingAudio(id) {
       stopCustomRingAudio();
       const url = URL.createObjectURL(blob);
       const a = new Audio(url);
-      a.loop = true; a.volume = 0.8;
+      a.loop = true; a.volume = 0.8 * ringtoneVolumeFactor();
       ringCustomAudio = { el: a, url };
       a.play().catch(() => { stopCustomRingAudio(); if (ringMode === 'full') startBuiltinRingLoop(); });
     } catch { if (ringMode === 'full') startBuiltinRingLoop(); }
@@ -4417,6 +4460,7 @@ function playCustomToneOnce(id) {
       stopPreviewAudio();
       const url = URL.createObjectURL(blob);
       const a = new Audio(url);
+      a.volume = ringtoneVolumeFactor();
       previewAudio = { el: a, url };
       a.onended = () => stopPreviewAudio();
       a.play().catch(() => stopPreviewAudio());
@@ -4426,9 +4470,10 @@ function playCustomToneOnce(id) {
 
 // ---- Notification settings (Settings → Notifications) -----------------------
 // Per-device, in localStorage: message sound, group sound, call ringtone
-// on/off, which call ringtone (15 built-ins, Silent, or custom:<id>) and
-// which message tone (6 built-ins, Silent, or custom:<id>). Defaults:
-// Classic ringtone, Ding message tone.
+// on/off, which call ringtone (22 built-ins, Silent, or custom:<id>),
+// which message tone (6 built-ins, Silent, or custom:<id>), and the
+// ringtone volume (0–100, default 100). Defaults: Classic ringtone,
+// Ding message tone.
 function validToneKey(key, table) {
   if (key === 'silent') return true;
   if (key && key.startsWith('custom:')) return !!customToneMeta(key.slice(7));
@@ -4437,16 +4482,25 @@ function validToneKey(key, table) {
 function loadNotifSettings() {
   try {
     const s = JSON.parse(localStorage.getItem('s19_notif') || '{}');
+    const vol = Number(s.ringtoneVolume);
     return {
       msgSound: s.msgSound !== false,
       groupSound: s.groupSound !== false,
       callSound: s.callSound !== false,
       ringtone: validToneKey(s.ringtone, RING_MELODIES) ? s.ringtone : 'classic',
       msgTone: validToneKey(s.msgTone, MSG_TONES) ? s.msgTone : 'ding',
+      ringtoneVolume: Number.isFinite(vol) ? Math.max(0, Math.min(100, Math.round(vol))) : 100,
     };
   } catch {
-    return { msgSound: true, groupSound: true, callSound: true, ringtone: 'classic', msgTone: 'ding' };
+    return { msgSound: true, groupSound: true, callSound: true, ringtone: 'classic', msgTone: 'ding', ringtoneVolume: 100 };
   }
+}
+// Ringtone volume as a 0–1 factor. Applies to built-in ringtone previews
+// and the incoming-call ringtone ('full'); the caller ringback ('soft')
+// and message tones are unaffected.
+function ringtoneVolumeFactor() {
+  const v = loadNotifSettings().ringtoneVolume;
+  return Math.max(0, Math.min(100, Number.isFinite(v) ? v : 100)) / 100;
 }
 function saveNotifSettings(patch) {
   try { localStorage.setItem('s19_notif', JSON.stringify({ ...loadNotifSettings(), ...patch })); } catch { /* storage unavailable */ }
@@ -4465,13 +4519,13 @@ function msgToneDisplayName(key) {
   return MSG_TONE_NAMES[key] || 'Ding';
 }
 // Play one phrase of a ringtone once, so the user can hear it in the
-// ringtone picker. Uses the full volume, like an incoming call.
+// ringtone picker. Uses the full volume, scaled by the Ringtone volume slider.
 function previewRingtone(key) {
   if (key === 'silent') return; // nothing to hear
   if (key && key.startsWith('custom:')) { playCustomToneOnce(key.slice(7)); return; }
   if (!RING_MELODIES[key]) return;
   if (!ensureRingAudio()) return;
-  ringPhrase(RING_MELODIES[key], RING_VOL.full);
+  ringPhrase(RING_MELODIES[key], RING_VOL.full * ringtoneVolumeFactor());
 }
 // Play a message tone once, so the user can hear it in its picker.
 function previewMsgTone(key) {
