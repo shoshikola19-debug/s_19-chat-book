@@ -152,6 +152,18 @@ body {
 .msg-pending { opacity: .6; }
 .chat-input-row { display: flex; gap: 8px; padding: 10px; background: #fff; border-top: 1px solid var(--line); }
 .chat-input-row .input { flex: 1; }
+/* WhatsApp-style input bar: emoji left, rounded field with attach +
+   camera inside, green round mic / send button on the right. */
+.call-btn svg { display: block; }
+.chat-input-row { align-items: flex-end; }
+.chat-input-wrap { flex: 1; display: flex; align-items: center; background: #fff; border: 1px solid var(--border); border-radius: 24px; padding: 2px 4px; }
+.chat-input-wrap .chat-input { flex: 1; border: 0; background: transparent; padding: 8px 6px; min-width: 0; }
+.chat-input-wrap .chat-input:focus { outline: none; border-color: transparent; }
+.input-icon-btn { background: none; border: 0; font-size: 22px; cursor: pointer; padding: 6px; color: #8696a0; flex-shrink: 0; }
+.mic-btn { width: 44px; height: 44px; border-radius: 50%; border: 0; background: #00a884; color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.mic-btn:disabled { opacity: .5; cursor: default; }
+.emoji-panel { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; padding: 8px; background: #fff; border-top: 1px solid var(--line); max-height: 180px; overflow-y: auto; }
+.emoji-panel button { background: none; border: 0; font-size: 26px; cursor: pointer; padding: 4px; line-height: 1.2; }
 
 /* ---------- updates ---------- */
 .section-title { padding: 16px 16px 6px; font-size: 15px; font-weight: 700; color: var(--green-dark); display: flex; justify-content: space-between; align-items: center; }
@@ -209,6 +221,9 @@ body {
 :root[data-theme="dark"] .bottom-nav { background: #111B21; border-top-color: #2A3942; }
 :root[data-theme="dark"] .dialog { background: #1F2C34; color: #E9EDEF; }
 :root[data-theme="dark"] .chat-input-row { background: #111B21; border-top-color: #2A3942; }
+:root[data-theme="dark"] .chat-input-wrap { background: #202C33; border-color: #2A3942; }
+:root[data-theme="dark"] .chat-input-wrap .chat-input { color: #E9EDEF; }
+:root[data-theme="dark"] .emoji-panel { background: #111B21; border-top-color: #2A3942; }
 :root[data-theme="dark"] .section-title { color: var(--green-light); }
 :root[data-theme="dark"] .meter-card { border-color: #2A3942; }
 :root[data-theme="dark"] .meter-bar { background: #2A3942; }
