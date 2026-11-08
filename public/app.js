@@ -2745,22 +2745,47 @@ function attachDeleteHandlers(div, m) {
   if (!m.id) return;
   let pressTimer = null;
   let swipeStart = null;
+  let swipeDone = false;
   div.addEventListener('pointerdown', (e) => {
     clearTimeout(pressTimer);
     swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
-    pressTimer = setTimeout(() => openMsgActions(m), 500);
+    swipeDone = false;
+    pressTimer = setTimeout(() => { pressTimer = null; openMsgActions(m); }, 500);
+  });
+  // Swipe right to reply: detect it DURING the move, not only at
+  // pointerup — on a real phone pointerleave fires when the finger
+  // slides off the bubble mid-swipe and pointercancel fires when the
+  // browser claims the touch for scrolling, so pointerup almost never
+  // sees a valid swipeStart. A vertical move (or a left swipe) is a
+  // scroll, not a reply: it only cancels the long-press timer.
+  div.addEventListener('pointermove', (e) => {
+    if (!swipeStart || swipeDone || pressTimer === null) return;
+    const dx = e.clientX - swipeStart.x;
+    const dy = e.clientY - swipeStart.y;
+    if (dx > 60 && Math.abs(dy) < 40) {
+      clearTimeout(pressTimer);
+      swipeDone = true;
+      swipeStart = null;
+      startReply(m);
+    } else if (Math.abs(dy) > 40 || dx < -20) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
   });
   div.addEventListener('pointerup', (e) => {
     clearTimeout(pressTimer);
-    if (swipeStart && Date.now() - swipeStart.t < 500) {
+    if (swipeStart && !swipeDone && Date.now() - swipeStart.t < 500) {
       const dx = e.clientX - swipeStart.x;
       const dy = e.clientY - swipeStart.y;
-      if (dx > 60 && Math.abs(dy) < 40) startReply(m);
+      if (dx > 60 && Math.abs(dy) < 40) { swipeDone = true; startReply(m); }
     }
     swipeStart = null;
   });
+  // Only the long-press timer is cleared here: nulling swipeStart would
+  // kill the pointerup fallback, and the move handler has already fired
+  // by the time leave/cancel arrives.
   for (const ev of ['pointerleave', 'pointercancel']) {
-    div.addEventListener(ev, () => { clearTimeout(pressTimer); swipeStart = null; });
+    div.addEventListener(ev, () => { clearTimeout(pressTimer); });
   }
   div.addEventListener('contextmenu', (e) => { e.preventDefault(); openMsgActions(m); });
 }
