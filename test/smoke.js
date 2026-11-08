@@ -8,9 +8,15 @@ const path = require('node:path');
 const PORT = 3456;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DB = '/tmp/s19-smoke-test.db';
-try { fs.unlinkSync(DB); } catch {}
-try { fs.unlinkSync(DB + '-wal'); } catch {}
-try { fs.unlinkSync(DB + '-shm'); } catch {}
+// When DATABASE_URL is set, the same suite runs against Postgres (Neon)
+// instead of the local SQLite file. The tables are dropped first so the
+// fixed test numbers start clean on every run.
+const PG_URL = process.env.DATABASE_URL || '';
+if (!PG_URL) {
+  try { fs.unlinkSync(DB); } catch {}
+  try { fs.unlinkSync(DB + '-wal'); } catch {}
+  try { fs.unlinkSync(DB + '-shm'); } catch {}
+}
 
 const BIJOY = '8801711000001'; // made-up test number
 const FRIEND = '8801811000002'; // made-up test number
@@ -62,6 +68,20 @@ async function loginEmail(email, name) {
 }
 
 async function main() {
+  if (PG_URL) {
+    console.log('== engine: Postgres (DATABASE_URL) ==');
+    const { Client } = require('pg');
+    const { cleanConnectionString } = require('../db');
+    const client = new Client({
+      connectionString: cleanConnectionString(PG_URL),
+      ssl: { rejectUnauthorized: false },
+    });
+    await client.connect();
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals CASCADE');
+    await client.end();
+  } else {
+    console.log('== engine: SQLite (local file) ==');
+  }
   const server = spawn('node', ['server.js'], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env, PORT: String(PORT), DB_PATH: DB },
@@ -70,8 +90,8 @@ async function main() {
   server.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
   server.stderr.on('data', (d) => process.stdout.write('[server:err] ' + d));
 
-  // Wait for the server to answer.
-  for (let i = 0; i < 30; i++) {
+  // Wait for the server to answer (Neon can take a few seconds to wake).
+  for (let i = 0; i < 60; i++) {
     try { const r = await fetch(BASE + '/'); if (r.ok) break; } catch {}
     await new Promise((r) => setTimeout(r, 300));
   }
