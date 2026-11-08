@@ -714,7 +714,7 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 .reply-bar-text { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Message action sheet: quick reaction row on top of the option list. */
 .msg-action-reactions { display: flex; justify-content: space-around; padding: 6px 2px 10px; }
-.msg-action-reactions button { background: none; border: 0; font-size: 30px; cursor: pointer; padding: 4px; line-height: 1.2; }
+.msg-action-reactions button { background: none; border: 0; font-size: 28px; cursor: pointer; padding: 4px 2px; line-height: 1.2; }
 .msg-action-reactions button:hover { transform: scale(1.15); }
 /* View-once toggle state inside the attach menu. */
 .view-once-state { float: right; font-weight: 700; color: var(--green-dark, #128C7E); }
