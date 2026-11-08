@@ -88,8 +88,45 @@ CREATE TABLE IF NOT EXISTS messages (
   -- may read it. (Index idx_messages_group is created AFTER the
   -- migration below, never inside this schema — see the boot-crash
   -- note in db.js.)
-  group_id INTEGER
+  group_id INTEGER,
+  -- Reply / quote: the quoted message's id + a snapshot (its text or
+  -- media label, its sender, its media kind). The snapshot is what
+  -- renders — the original may be deleted or expired by the time the
+  -- reply is read.
+  reply_to INTEGER,
+  reply_body TEXT NOT NULL DEFAULT '',
+  reply_sender TEXT NOT NULL DEFAULT '',
+  reply_media_kind TEXT NOT NULL DEFAULT '',
+  -- Forwarded messages carry a small "Forwarded" label.
+  forwarded INTEGER NOT NULL DEFAULT 0,
+  -- View-once media: media_ref points at the original message row so
+  -- a forward reuses the stored bytes instead of copying them.
+  media_ref INTEGER,
+  view_once INTEGER NOT NULL DEFAULT 0,
+  viewed INTEGER NOT NULL DEFAULT 0,
+  -- Edited text messages: edited_at is the edit time (0 = never
+  -- edited). Only the sender may edit, only text, only within 15 min.
+  edited_at INTEGER NOT NULL DEFAULT 0
 );
+-- Reactions: one row per (message, user) — tapping the same emoji
+-- again removes it, tapping another replaces it. Reactions die with
+-- the message (deleted / expired / cleared rows never surface them).
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id INTEGER NOT NULL,
+  phone TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions (message_id);
+-- Starred messages: per-user, so my stars never affect the other side.
+CREATE TABLE IF NOT EXISTS stars (
+  message_id INTEGER NOT NULL,
+  phone TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_stars_phone ON stars (phone, message_id);
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -256,8 +293,32 @@ CREATE TABLE IF NOT EXISTS messages (
   client_key TEXT,
   deleted_for_all BOOLEAN NOT NULL DEFAULT FALSE,
   deleted_for TEXT NOT NULL DEFAULT '',
-  group_id BIGINT
+  group_id BIGINT,
+  reply_to BIGINT,
+  reply_body TEXT NOT NULL DEFAULT '',
+  reply_sender TEXT NOT NULL DEFAULT '',
+  reply_media_kind TEXT NOT NULL DEFAULT '',
+  forwarded BOOLEAN NOT NULL DEFAULT FALSE,
+  media_ref BIGINT,
+  view_once BOOLEAN NOT NULL DEFAULT FALSE,
+  viewed BOOLEAN NOT NULL DEFAULT FALSE,
+  edited_at BIGINT NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id BIGINT NOT NULL,
+  phone TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (message_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions (message_id);
+CREATE TABLE IF NOT EXISTS stars (
+  message_id BIGINT NOT NULL,
+  phone TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (message_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_stars_phone ON stars (phone, message_id);
 CREATE TABLE IF NOT EXISTS groups (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -411,7 +472,16 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS client_key TEXT,
       ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS deleted_for TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS group_id BIGINT`);
+      ADD COLUMN IF NOT EXISTS group_id BIGINT,
+      ADD COLUMN IF NOT EXISTS reply_to BIGINT,
+      ADD COLUMN IF NOT EXISTS reply_body TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS reply_sender TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS reply_media_kind TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS forwarded BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS media_ref BIGINT,
+      ADD COLUMN IF NOT EXISTS view_once BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS viewed BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS edited_at BIGINT NOT NULL DEFAULT 0`);
     // Migration for databases created before per-chat media visibility
     // and Favorites: new chat_settings columns. Same pattern — safe on
     // every boot, fresh DBs already have them from the schema.
@@ -486,6 +556,15 @@ async function createDb({ dbPath }) {
     ['deleted_for_all', 'INTEGER NOT NULL DEFAULT 0'],
     ['deleted_for', "TEXT NOT NULL DEFAULT ''"],
     ['group_id', 'INTEGER'],
+    ['reply_to', 'INTEGER'],
+    ['reply_body', "TEXT NOT NULL DEFAULT ''"],
+    ['reply_sender', "TEXT NOT NULL DEFAULT ''"],
+    ['reply_media_kind', "TEXT NOT NULL DEFAULT ''"],
+    ['forwarded', 'INTEGER NOT NULL DEFAULT 0'],
+    ['media_ref', 'INTEGER'],
+    ['view_once', 'INTEGER NOT NULL DEFAULT 0'],
+    ['viewed', 'INTEGER NOT NULL DEFAULT 0'],
+    ['edited_at', 'INTEGER NOT NULL DEFAULT 0'],
   ];
   for (const [col, def] of msgAdds) {
     if (!msgCols.includes(col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${def}`);
