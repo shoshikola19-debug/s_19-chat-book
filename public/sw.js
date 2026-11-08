@@ -15,7 +15,7 @@ self.addEventListener('push', (event) => {
   }
   const isCall = data.type === 'call';
   const title = data.title || 'S_19 CHAT BOOK';
-  const body = data.body || (isCall ? 'কল আসছে…' : 'নতুন মেসেজ');
+  const body = data.body || (isCall ? 'Incoming call…' : 'New message');
   const options = {
     body,
     icon: '/logo.webp',
@@ -40,4 +40,11 @@ self.addEventListener('notificationclick', (event) => {
       return self.clients.openWindow('/');
     }),
   );
+});
+
+// A fetch handler is required for the app to be installable (Add to
+// Home screen) — this one is a plain network passthrough: it changes
+// nothing about how the app loads, it only lets Chrome offer install.
+self.addEventListener('fetch', (event) => {
+  event.respondWith(fetch(event.request));
 });
