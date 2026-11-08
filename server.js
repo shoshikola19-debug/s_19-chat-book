@@ -32,6 +32,7 @@ const express = require('express');
 const { createDb } = require('./db');
 const { sendOtp, isConfigured } = require('./sms');
 const emailSender = require('./email');
+const push = require('./push');
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 's19.db');
@@ -339,6 +340,17 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
     'INSERT INTO messages (sender, receiver, body, created_at) VALUES (?, ?, ?, ?) RETURNING id',
     req.phone, to, body, now());
   const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
+  // Notify the receiver even if their app is closed (Web Push). The
+  // notification never carries the message text — only the sender's name.
+  // Fire-and-forget: a push failure must never fail or delay this reply.
+  const sender = await publicUser(req.phone);
+  push.sendPushToUser(db, to, {
+    title: sender.name || req.phone,
+    body: 'নতুন মেসেজ',
+    tag: 'msg-' + req.phone,
+    type: 'message',
+    peer: req.phone,
+  }).catch(() => {});
   return res.json({ ok: true, message: row });
 }));
 
@@ -550,6 +562,19 @@ app.post('/api/calls/signal', ah(auth), ah(async (req, res) => {
   await db.run(
     'INSERT INTO call_signals (from_phone, to_phone, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)',
     req.phone, to, kind, JSON.stringify(payload), now());
+  // A call offer also pushes the callee's phone, so the call arrives even
+  // when their app is closed. Fire-and-forget, like messages.
+  if (kind === 'offer') {
+    const caller = await publicUser(req.phone);
+    push.sendPushToUser(db, to, {
+      title: caller.name || req.phone,
+      body: 'কল আসছে…',
+      tag: 'call-' + req.phone,
+      type: 'call',
+      peer: req.phone,
+      requireInteraction: true,
+    }).catch(() => {});
+  }
   return res.json({ ok: true });
 }));
 
@@ -567,6 +592,39 @@ app.get('/api/calls/signals', ah(auth), ah(async (req, res) => {
     ok: true,
     signals: rows.map((r) => ({ ...r, from: r.from_phone, payload: JSON.parse(r.payload || '{}') })),
   });
+}));
+
+// ---- web push notifications -------------------------------------------------
+// The public VAPID key is public by design — the frontend fetches it to
+// subscribe. When push is not configured (no keys), publicKey is null and
+// the frontend simply skips subscribing; the app keeps polling as before.
+app.get('/api/push/vapid-public-key', ah(async (_req, res) => {
+  return res.json({ ok: true, publicKey: push.getPublicKey() });
+}));
+
+// Save (or refresh) this device's push subscription. Upsert by endpoint,
+// so re-subscribing on every login is safe and idempotent.
+app.post('/api/push/subscribe', ah(auth), ah(async (req, res) => {
+  const sub = req.body && req.body.subscription;
+  const endpoint = sub && typeof sub.endpoint === 'string' ? sub.endpoint : '';
+  const keys = sub && sub.keys && typeof sub.keys === 'object' ? sub.keys : null;
+  if (!endpoint || !keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') {
+    return res.status(400).json({ ok: false, error: 'bad_subscription' });
+  }
+  await db.run(
+    `INSERT INTO push_subscriptions (endpoint, user_phone, keys, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET user_phone = excluded.user_phone,
+       keys = excluded.keys, created_at = excluded.created_at`,
+    endpoint, req.phone, JSON.stringify({ p256dh: keys.p256dh, auth: keys.auth }), now());
+  return res.json({ ok: true });
+}));
+
+// Remove this device's push subscription (e.g. on logout from this device).
+app.delete('/api/push/subscribe', ah(auth), ah(async (req, res) => {
+  const endpoint = req.body && typeof req.body.endpoint === 'string' ? req.body.endpoint : '';
+  if (!endpoint) return res.status(400).json({ ok: false, error: 'bad_endpoint' });
+  await db.run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_phone = ?', endpoint, req.phone);
+  return res.json({ ok: true });
 }));
 
 // ---- static frontend + start -------------------------------------------------
@@ -596,11 +654,13 @@ setInterval(async () => {
 
 async function start() {
   db = await createDb({ dbPath: DB_PATH });
+  const pushOn = push.initPush();
   app.listen(PORT, () => {
     console.log(`S_19 CHAT BOOK running on http://localhost:${PORT}`);
     console.log(`SMS mode: ${isConfigured() ? 'REAL SMS (' + process.env.SMS_PROVIDER + ')' : 'TEST CODE on screen'}`);
     console.log(`Email mode: ${emailSender.isConfigured() ? 'REAL EMAIL (' + process.env.EMAIL_PROVIDER + ')' : 'TEST CODE on screen'}`);
     console.log(`DB: ${db.label}`);
+    console.log(`Push notifications: ${pushOn ? 'ENABLED (VAPID)' : 'disabled (no VAPID keys set)'}`);
   });
 }
 
