@@ -24,9 +24,11 @@ services:
         value: ""
       # Email (Gmail login) variables are optional too. Leave them empty
       # for test-code mode; set them in the Dashboard when ready.
-      # Recommended: EMAIL_PROVIDER=smtp with a Gmail App Password —
-      # free for ANY Gmail address (Resend free tier without a verified
-      # domain only sends to its own account email).
+      # Recommended: EMAIL_PROVIDER=brevo with a Brevo API key (HTTPS,
+      # works on Render free tier). Gmail SMTP does NOT work on Render
+      # free tier — it blocks SMTP ports 25/465/587 (connection timeout,
+      # not a wrong password); smtp is local-dev only. Resend free tier
+      # without a verified domain only sends to its own account email.
       - key: EMAIL_PROVIDER
         value: ""
       - key: EMAIL_API_URL
