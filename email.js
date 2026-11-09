@@ -1,4 +1,4 @@
-// S_19 CHAT BOOK — email sender (Resend / generic HTTP API / Gmail SMTP)
+// S_19 CHAT BOOK — email sender (Brevo / Resend / generic HTTP API / Gmail SMTP)
 // ---------------------------------------------------------------------------
 // This file sends a real 6-digit login code by email when the environment
 // variables are set. When they are NOT set, it reports "not_configured"
@@ -7,28 +7,40 @@
 // is why Gmail login costs nothing while phone login needs an SMS pack.
 //
 // Supported providers:
+//   - "brevo"   (brevo.com) — RECOMMENDED on Render's free tier: sends
+//     over HTTPS (port 443), so it works where SMTP is blocked. Free
+//     tier: 300 emails/day, no card. NO domain needed — verify ONE
+//     sender email address in Brevo (they email you a confirmation
+//     link) and use that address as EMAIL_FROM. Sends to any Gmail.
 //   - "resend"  (resend.com) — free tier: 100 emails/day, no card.
 //     BUT: without a verified domain Resend only sends to the Resend
 //     account's own email address, so it CANNOT send codes to just any
-//     Gmail. Use "smtp" for that.
+//     Gmail. Use "brevo" for that.
 //   - "generic" — any JSON POST email API (api_key + from + to + subject
 //                 + message fields)
-//   - "smtp"    — Gmail SMTP with an App Password. This is the free path
-//                 that sends to ANY Gmail address: turn on 2-Step
-//                 Verification on the Google account, create an App
-//                 Password (Google Account → Security → App passwords),
-//                 and use that 16-character password as EMAIL_SMTP_PASS.
-//                 No domain verification, no card, no per-email cost.
+//   - "smtp"    — Gmail SMTP with an App Password. LOCAL-DEV ONLY:
+//                 Render's free tier blocks ALL outbound SMTP ports
+//                 (25, 465, 587), so from Render the connection always
+//                 times out — it is NOT a wrong password. SMTP still
+//                 works when the server runs on your own computer.
+//                 Setup: turn on 2-Step Verification on the Google
+//                 account, create an App Password (Google Account →
+//                 Security → App passwords), and use that 16-character
+//                 password as EMAIL_SMTP_PASS.
 //
 // Required env vars (see .env.example):
-//   EMAIL_PROVIDER  "resend" | "generic" | "smtp"
+//   EMAIL_PROVIDER  "brevo" | "resend" | "generic" | "smtp"
 //   EMAIL_API_URL   send-email endpoint URL, e.g. https://api.resend.com/emails
-//                   (resend / generic only — not used by smtp)
+//                   (resend / generic only — smtp does not use it, and
+//                   brevo defaults to https://api.brevo.com/v3/smtp/email
+//                   when it is empty)
 //   EMAIL_API_KEY   API key from the provider dashboard
-//                   (resend / generic only — not used by smtp)
+//                   (resend / generic / brevo — not used by smtp)
 //   EMAIL_FROM      sender address shown in the inbox,
 //                   e.g. "S_19 CHAT BOOK <login@s19chatbook.app>"
-//                   (smtp: defaults to "S_19 CHAT BOOK <EMAIL_SMTP_USER>")
+//                   (brevo: MUST be the sender address verified in
+//                   Brevo, e.g. s19chatbook@gmail.com; smtp: defaults
+//                   to "S_19 CHAT BOOK <EMAIL_SMTP_USER>")
 //   EMAIL_SMTP_HOST  SMTP host, default smtp.gmail.com (smtp only)
 //   EMAIL_SMTP_PORT  SMTP port, default 587 (smtp only; use 465 with
 //                    EMAIL_SMTP_SECURE=true)
@@ -49,11 +61,24 @@ function isConfigured() {
     // SMTP needs only the Gmail account + its App Password.
     return Boolean(process.env.EMAIL_SMTP_USER && process.env.EMAIL_SMTP_PASS);
   }
+  if (provider() === 'brevo') {
+    // Brevo's endpoint URL has a built-in default, so only the API key
+    // is required. (EMAIL_FROM must also be set to the sender address
+    // verified in Brevo — the send itself rejects it otherwise.)
+    return Boolean(process.env.EMAIL_API_KEY);
+  }
   return Boolean(
     process.env.EMAIL_PROVIDER &&
     process.env.EMAIL_API_URL &&
     process.env.EMAIL_API_KEY,
   );
+}
+
+// Brevo wants a plain address in sender.email, but EMAIL_FROM is often
+// written as "Name <address>". Pull the address out of the brackets.
+function plainEmail(from) {
+  const m = String(from || '').match(/<([^<>]+)>/);
+  return (m ? m[1] : String(from || '')).trim();
 }
 
 function smtpConfig() {
@@ -87,6 +112,10 @@ async function sendOtp(email, code) {
 
   if (prov === 'smtp') {
     return sendViaSmtp(email, subject, message);
+  }
+
+  if (prov === 'brevo') {
+    return sendViaBrevo(email, subject, message);
   }
 
   const url = process.env.EMAIL_API_URL;
@@ -128,6 +157,44 @@ async function sendOtp(email, code) {
     return { sent: true, provider: prov };
   } catch (err) {
     console.error('[email] send failed:', err && err.message ? err.message : err);
+    return { sent: false, reason: 'network_error' };
+  }
+}
+
+// Brevo transactional email over HTTPS (port 443) — the production path
+// on Render's free tier, where outbound SMTP ports are blocked. Plain
+// fetch, no new dependency. Brevo replies 201 { messageId } on success
+// and 4xx {"message": "...", "code": "..."} on failure.
+async function sendViaBrevo(email, subject, message) {
+  const url = process.env.EMAIL_API_URL || 'https://api.brevo.com/v3/smtp/email';
+  const apiKey = process.env.EMAIL_API_KEY;
+  const from = plainEmail(process.env.EMAIL_FROM || 'S_19 CHAT BOOK <login@s19chatbook.app>');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: 'S_19 CHAT BOOK', email: from },
+        to: [{ email }],
+        subject,
+        textContent: message,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      // Brevo's error body never contains the API key (it travels in a
+      // header), so logging the status + body is safe.
+      console.error('[email] Brevo HTTP', res.status, text.slice(0, 300));
+      return { sent: false, reason: 'email_http_' + res.status };
+    }
+    return { sent: true, provider: 'brevo' };
+  } catch (err) {
+    console.error('[email] Brevo send failed:', err && err.message ? err.message : err);
     return { sent: false, reason: 'network_error' };
   }
 }
