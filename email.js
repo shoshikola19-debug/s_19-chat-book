@@ -1,4 +1,4 @@
-// S_19 CHAT BOOK — email sender (Brevo / Resend / generic HTTP API / Gmail SMTP)
+// S_19 CHAT BOOK — email sender (Mailjet / Brevo / Resend / generic HTTP API / Gmail SMTP)
 // ---------------------------------------------------------------------------
 // This file sends a real 6-digit login code by email when the environment
 // variables are set. When they are NOT set, it reports "not_configured"
@@ -7,15 +7,27 @@
 // is why Gmail login costs nothing while phone login needs an SMS pack.
 //
 // Supported providers:
-//   - "brevo"   (brevo.com) — RECOMMENDED on Render's free tier: sends
+//   - "mailjet" (mailjet.com) — RECOMMENDED on Render's free tier: sends
 //     over HTTPS (port 443), so it works where SMTP is blocked. Free
-//     tier: 300 emails/day, no card. NO domain needed — verify ONE
-//     sender email address in Brevo (they email you a confirmation
-//     link) and use that address as EMAIL_FROM. Sends to any Gmail.
+//     tier: 6,000 emails/month, 200/day, no card. NO domain needed —
+//     validate ONE sender email address in Mailjet (they email you a
+//     confirmation link) and use that address as EMAIL_FROM. Sends to
+//     any Gmail. API keys need NO phone verification (unlike Brevo).
+//     Auth is HTTP Basic: API Key as the username, Secret Key as the
+//     password. The Secret Key is shown ONCE when created — copy it
+//     at once.
+//   - "brevo"   (brevo.com) — BLOCKED for us: creating a Brevo API key
+//     needs phone verification and the SMS code never arrives on
+//     Bijoy's phone (waited, resent, number re-checked — still
+//     nothing), so no Brevo key can be made. Kept in code as a
+//     fallback; it sends over HTTPS (port 443). Free tier: 300
+//     emails/day, no card. NO domain needed — verify ONE sender
+//     email address in Brevo (they email you a confirmation link)
+//     and use that address as EMAIL_FROM. Sends to any Gmail.
 //   - "resend"  (resend.com) — free tier: 100 emails/day, no card.
 //     BUT: without a verified domain Resend only sends to the Resend
 //     account's own email address, so it CANNOT send codes to just any
-//     Gmail. Use "brevo" for that.
+//     Gmail. Use "mailjet" for that.
 //   - "generic" — any JSON POST email API (api_key + from + to + subject
 //                 + message fields)
 //   - "smtp"    — Gmail SMTP with an App Password. LOCAL-DEV ONLY:
@@ -29,17 +41,21 @@
 //                 password as EMAIL_SMTP_PASS.
 //
 // Required env vars (see .env.example):
-//   EMAIL_PROVIDER  "brevo" | "resend" | "generic" | "smtp"
+//   EMAIL_PROVIDER  "mailjet" | "brevo" | "resend" | "generic" | "smtp"
 //   EMAIL_API_URL   send-email endpoint URL, e.g. https://api.resend.com/emails
 //                   (resend / generic only — smtp does not use it, and
 //                   brevo defaults to https://api.brevo.com/v3/smtp/email
+//                   and mailjet defaults to https://api.mailjet.com/v3.1/send
 //                   when it is empty)
 //   EMAIL_API_KEY   API key from the provider dashboard
-//                   (resend / generic / brevo — not used by smtp)
+//                   (resend / generic / brevo / mailjet — not used by smtp)
+//   EMAIL_API_SECRET  Mailjet Secret Key (mailjet only — Basic auth
+//                   password. Shown once when created; copy it at once.)
 //   EMAIL_FROM      sender address shown in the inbox,
 //                   e.g. "S_19 CHAT BOOK <login@s19chatbook.app>"
-//                   (brevo: MUST be the sender address verified in
-//                   Brevo, e.g. s19chatbook@gmail.com; smtp: defaults
+//                   (mailjet / brevo: MUST be the sender address
+//                   validated/verified in Mailjet/Brevo, e.g.
+//                   s19chatbook@gmail.com; smtp: defaults
 //                   to "S_19 CHAT BOOK <EMAIL_SMTP_USER>")
 //   EMAIL_SMTP_HOST  SMTP host, default smtp.gmail.com (smtp only)
 //   EMAIL_SMTP_PORT  SMTP port, default 587 (smtp only; use 465 with
@@ -66,6 +82,13 @@ function isConfigured() {
     // is required. (EMAIL_FROM must also be set to the sender address
     // verified in Brevo — the send itself rejects it otherwise.)
     return Boolean(process.env.EMAIL_API_KEY);
+  }
+  if (provider() === 'mailjet') {
+    // Mailjet's endpoint URL has a built-in default; Basic auth needs
+    // BOTH the API Key (username) and the Secret Key (password).
+    // (EMAIL_FROM must also be set to the sender address validated in
+    // Mailjet — the send itself rejects it otherwise.)
+    return Boolean(process.env.EMAIL_API_KEY && process.env.EMAIL_API_SECRET);
   }
   return Boolean(
     process.env.EMAIL_PROVIDER &&
@@ -116,6 +139,10 @@ async function sendOtp(email, code) {
 
   if (prov === 'brevo') {
     return sendViaBrevo(email, subject, message);
+  }
+
+  if (prov === 'mailjet') {
+    return sendViaMailjet(email, subject, message);
   }
 
   const url = process.env.EMAIL_API_URL;
@@ -195,6 +222,52 @@ async function sendViaBrevo(email, subject, message) {
     return { sent: true, provider: 'brevo' };
   } catch (err) {
     console.error('[email] Brevo send failed:', err && err.message ? err.message : err);
+    return { sent: false, reason: 'network_error' };
+  }
+}
+
+// Mailjet transactional email (Send API v3.1) over HTTPS (port 443) —
+// the production path on Render's free tier, where outbound SMTP ports
+// are blocked. Plain fetch, no new dependency. Auth is HTTP Basic with
+// the API Key as username and the Secret Key as password. Mailjet
+// replies 200 { Messages: [{ Status: "success", ... }] } on success
+// and 4xx { ErrorMessage: "..." } on failure. Note the CAPITALIZED
+// JSON keys (Messages / From / To / TextPart) — that is Mailjet's API.
+async function sendViaMailjet(email, subject, message) {
+  const url = process.env.EMAIL_API_URL || 'https://api.mailjet.com/v3.1/send';
+  const apiKey = process.env.EMAIL_API_KEY;
+  const apiSecret = process.env.EMAIL_API_SECRET;
+  const from = plainEmail(process.env.EMAIL_FROM || 'S_19 CHAT BOOK <login@s19chatbook.app>');
+  // Basic auth: base64("API_KEY:SECRET_KEY"). The key and secret travel
+  // only in the Authorization header and are never logged.
+  const basic = Buffer.from(apiKey + ':' + apiSecret).toString('base64');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + basic,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        Messages: [{
+          From: { Email: from, Name: 'S_19 CHAT BOOK' },
+          To: [{ Email: email }],
+          Subject: subject,
+          TextPart: message,
+        }],
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      // Mailjet's error body never contains the API key or secret (they
+      // travel in a header), so logging the status + body is safe.
+      console.error('[email] Mailjet HTTP', res.status, text.slice(0, 300));
+      return { sent: false, reason: 'email_http_' + res.status };
+    }
+    return { sent: true, provider: 'mailjet' };
+  } catch (err) {
+    console.error('[email] Mailjet send failed:', err && err.message ? err.message : err);
     return { sent: false, reason: 'network_error' };
   }
 }
