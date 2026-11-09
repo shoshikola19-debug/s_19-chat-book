@@ -117,33 +117,41 @@ Gmail-এ কোড গেলে টাকা লাগে না — ইমে�
 ভেরিয়েবলগুলো সেট করলেই কোড আর পর্দায় দেখাবে না — আসল ইমেইল যাবে।
 Render ড্যাশবোর্ড → সার্ভিস → **Environment**-এ এগুলো বসাও:
 
-**সহজ পথ — Brevo (`brevo`, আসল পথ)**: HTTPS দিয়ে মেইল পাঠায়, তাই
-Render-এর ফ্রি টিয়ারেও চলে। রোজ ৩০০টা ইমেইল ফ্রি, কার্ড লাগে না,
-ডোমেইন লাগে না — Brevo-তে একটা পাঠানোর ঠিকানা ভেরিফাই করলেই যেকোনো
-Gmail-এ কোড যাবে:
+**সহজ পথ — Mailjet (`mailjet`, আসল পথ)**: HTTPS দিয়ে মেইল পাঠায়, তাই
+Render-এর ফ্রি টিয়ারেও চলে। মাসে ৬,০০০টা ইমেইল ফ্রি (রোজ ২০০টা),
+কার্ড লাগে না, ডোমেইন লাগে না, ফোন ভেরিফিকেশনও লাগে না — Mailjet-এ
+একটা পাঠানোর ঠিকানা ভ্যালিডেট করলেই যেকোনো Gmail-এ কোড যাবে:
 
 | ভেরিয়েবল | মান |
 |---|---|
-| `EMAIL_PROVIDER` | `brevo` |
-| `EMAIL_API_KEY` | Brevo-র API চাবি (নিচে দেখো — কখনো গিটে দেবে না) |
-| `EMAIL_FROM` | Brevo-তে ভেরিফাই করা পাঠানোর Gmail, যেমন `s19chatbook@gmail.com` |
+| `EMAIL_PROVIDER` | `mailjet` |
+| `EMAIL_API_KEY` | Mailjet-এর API চাবি (নিচে দেখো — কখনো গিটে দেবে না) |
+| `EMAIL_API_SECRET` | Mailjet-এর Secret চাবি (একবারই দেখায় — সাথে সাথে কপি করো) |
+| `EMAIL_FROM` | Mailjet-এ ভ্যালিডেট করা পাঠানোর Gmail, যেমন `s19chatbook@gmail.com` |
 
-Brevo অ্যাকাউন্ট বানানো (একবারই করতে হয়):
-১. [brevo.com](https://www.brevo.com) → Sign Up (ফ্রি) → লগইন করো।
-২. Settings → Senders & IP → Add a sender → পাঠানোর Gmail-টা দাও
-   (যেমন `s19chatbook@gmail.com`) → Brevo ওই ইনবক্সে একটা মেইল
-   পাঠাবে → সেটা খুলে Confirm চাপো। (Brevo-র মেনুর নাম বদলাতে
-   পারে — Settings-এর নিচে "Senders" খুঁজো।)
-৩. Settings → SMTP & API → API Keys → Generate a new API key → কপি
-   করো।
-৪. ওই চাবি `EMAIL_API_KEY`-এ আর ভেরিফাই করা Gmail `EMAIL_FROM`-এ
-   বসাও — শুধু Render-এর Environment-এ, কখনো চ্যাটে বা গিটে না।
+Mailjet অ্যাকাউন্ট বানানো (একবারই করতে হয়):
+১. [app.mailjet.com](https://app.mailjet.com) → Sign Up (ফ্রি) → লগইন করো।
+২. Account Settings → Sender domains and addresses → পাঠানোর Gmail-টা
+   দাও (যেমন `s19chatbook@gmail.com`) → Mailjet ওই ইনবক্সে একটা মেইল
+   পাঠাবে → সেটা খুলে Confirm চাপো। (Mailjet-এর মেনুর নাম বদলাতে
+   পারে — Account Settings-এর নিচে "Sender domains and addresses" খুঁজো।)
+৩. Account Settings → REST API → API Key Management → API Key আর
+   Secret Key কপি করো। Secret Key একবারই দেখায় — সাথে সাথে কপি করো,
+   পেজ বন্ধ করলে আর দেখাবে না।
+৪. ওই চাবি দুটো `EMAIL_API_KEY` আর `EMAIL_API_SECRET`-এ, আর ভ্যালিডেট
+   করা Gmail `EMAIL_FROM`-এ বসাও — শুধু Render-এর Environment-এ,
+   কখনো চ্যাটে বা গিটে না।
 ৫. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
    শুধু সেটিংস ঠিক আছে কিনা বলে)। সার্ভার চালু হলে লগে
-   `Email mode: REAL EMAIL (brevo)` দেখাবে।
+   `Email mode: REAL EMAIL (mailjet)` দেখাবে।
 
 একটা কথা: Gmail ঠিকানা দিয়ে পাঠানো মেইল মাঝে মাঝে প্রাপকের Spam
 ফোল্ডারে যেতে পারে — কোড ইনবক্সে না পেলে Spam-ও দেখো।
+
+**Brevo (`brevo`) — আমাদের জন্য বন্ধ**: Brevo-তেও HTTPS-এ মেইল যায়
+([brevo.com](https://www.brevo.com), রোজ ৩০০টা ফ্রি), কিন্তু API চাবি
+বানাতে ফোন ভেরিফিকেশন লাগে আর SMS কোড ফোনে আসেই না — তাই Brevo
+ব্যবহার করা যায়নি। কোডে `brevo` পথটা রাখা আছে, শুধু ব্যাকআপ হিসেবে।
 
 **Gmail SMTP (`smtp`) — শুধু নিজের কম্পিউটারে টেস্টের জন্য**:
 Render-এর ফ্রি টিয়ার SMTP পোর্ট (২৫, ৪৬৫, ৫৮৭) বন্ধ রাখে, তাই
