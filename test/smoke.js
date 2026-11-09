@@ -298,6 +298,53 @@ async function main() {
   if (savedKey === undefined) delete process.env.EMAIL_API_KEY; else process.env.EMAIL_API_KEY = savedKey;
   if (savedFrom === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = savedFrom;
 
+  // Static + unit checks for the Mailjet provider (email.js) — the
+  // production email path on Render free tier (HTTPS, port 443). Brevo
+  // is blocked for us (its API key needs phone verification and the SMS
+  // never arrives), and Gmail SMTP always times out on Render, so
+  // Mailjet (Basic auth, no phone verification) is the live path. No
+  // real email is ever sent here; only config + failure paths.
+  console.log('== email mailjet provider ==');
+  check('email.js has the mailjet provider (Mailjet Send API v3.1 over HTTPS, Basic auth, capitalized keys)',
+    emailSrc.includes("'mailjet'") && emailSrc.includes('api.mailjet.com/v3.1/send')
+    && emailSrc.includes('Basic') && emailSrc.includes('Messages')
+    && emailSrc.includes('TextPart') && emailSrc.includes('sendViaMailjet')
+    && emailSrc.includes('EMAIL_API_SECRET'), null);
+  check('.env.example + README document Mailjet setup (free, no domain, no phone verification, sender validated)',
+    envExample.includes('mailjet') && envExample.includes('Mailjet')
+    && envExample.includes('https://api.mailjet.com/v3.1/send')
+    && envExample.includes('EMAIL_API_SECRET')
+    && readme.includes('Mailjet') && readme.includes('mailjet.com'), null);
+  const savedProv3 = process.env.EMAIL_PROVIDER;
+  const savedUrl3 = process.env.EMAIL_API_URL;
+  const savedKey3 = process.env.EMAIL_API_KEY;
+  const savedSecret = process.env.EMAIL_API_SECRET;
+  const savedFrom3 = process.env.EMAIL_FROM;
+  process.env.EMAIL_PROVIDER = 'mailjet';
+  process.env.EMAIL_API_KEY = 'fake-mailjet-key-xxxx';
+  process.env.EMAIL_API_SECRET = 'fake-mailjet-secret-xxxx';
+  delete process.env.EMAIL_API_URL;
+  check('mailjet isConfigured() is true with API key + secret set (URL has a default)',
+    emailMod.isConfigured() === true);
+  delete process.env.EMAIL_API_SECRET;
+  check('mailjet isConfigured() is false without the secret key', emailMod.isConfigured() === false);
+  process.env.EMAIL_API_SECRET = 'fake-mailjet-secret-xxxx';
+  delete process.env.EMAIL_API_KEY;
+  check('mailjet isConfigured() is false without the API key', emailMod.isConfigured() === false);
+  process.env.EMAIL_API_KEY = 'fake-mailjet-key-xxxx';
+  process.env.EMAIL_API_URL = 'http://127.0.0.1:1/v3.1/send';
+  const t2 = Date.now();
+  const mailjetSend = await emailMod.sendOtp('mailjet.test@gmail.com', '123456');
+  check('sendOtp via Mailjet to an unreachable host fails cleanly with { sent:false } (no throw, no hang)',
+    mailjetSend && mailjetSend.sent === false && typeof mailjetSend.reason === 'string'
+    && Date.now() - t2 < 10000, { ...mailjetSend, ms: Date.now() - t2 });
+  // Restore the env the rest of the suite expects.
+  process.env.EMAIL_PROVIDER = savedProv3;
+  if (savedUrl3 === undefined) delete process.env.EMAIL_API_URL; else process.env.EMAIL_API_URL = savedUrl3;
+  if (savedKey3 === undefined) delete process.env.EMAIL_API_KEY; else process.env.EMAIL_API_KEY = savedKey3;
+  if (savedSecret === undefined) delete process.env.EMAIL_API_SECRET; else process.env.EMAIL_API_SECRET = savedSecret;
+  if (savedFrom3 === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = savedFrom3;
+
   console.log('== contacts + direct messages ==');
   const add = await post('/api/contacts', { phone: FRIEND }, tokA);
   check('add contact by number', add.status === 200 && add.data.contact.phone === FRIEND, add);
