@@ -117,30 +117,42 @@ Gmail-এ কোড গেলে টাকা লাগে না — ইমে�
 ভেরিয়েবলগুলো সেট করলেই কোড আর পর্দায় দেখাবে না — আসল ইমেইল যাবে।
 Render ড্যাশবোর্ড → সার্ভিস → **Environment**-এ এগুলো বসাও:
 
-**সহজ পথ — Gmail SMTP (`smtp`)**: যেকোনো Gmail ঠিকানায় কোড যাবে,
-ডোমেইন লাগে না, কার্ড লাগে না, প্রতিটি মেইল ফ্রি। Resend-এর ফ্রি
-প্ল্যানে ডোমেইন ভেরিফাই না করলে শুধু নিজের মেইলেই যায়, তাই আসল
-Gmail লগইনের জন্য `smtp` ব্যবহার করো:
+**সহজ পথ — Brevo (`brevo`, আসল পথ)**: HTTPS দিয়ে মেইল পাঠায়, তাই
+Render-এর ফ্রি টিয়ারেও চলে। রোজ ৩০০টা ইমেইল ফ্রি, কার্ড লাগে না,
+ডোমেইন লাগে না — Brevo-তে একটা পাঠানোর ঠিকানা ভেরিফাই করলেই যেকোনো
+Gmail-এ কোড যাবে:
 
 | ভেরিয়েবল | মান |
 |---|---|
-| `EMAIL_PROVIDER` | `smtp` |
-| `EMAIL_SMTP_USER` | যে Gmail থেকে কোড যাবে, যেমন `shoshikola19@gmail.com` |
-| `EMAIL_SMTP_PASS` | ওই Gmail-এর **App Password** (১৬ অক্ষর, নিচে দেখো) |
-| `EMAIL_FROM` | খালি রাখলেই হবে (`S_19 CHAT BOOK <ওই Gmail>` হয়ে যাবে) |
+| `EMAIL_PROVIDER` | `brevo` |
+| `EMAIL_API_KEY` | Brevo-র API চাবি (নিচে দেখো — কখনো গিটে দেবে না) |
+| `EMAIL_FROM` | Brevo-তে ভেরিফাই করা পাঠানোর Gmail, যেমন `s19chatbook@gmail.com` |
 
-App Password বানানো (একবারই করতে হয়):
-১. ওই Gmail-এ লগইন → Google Account → **Security** → **2-Step
-   Verification** → ON করো।
-২. একই পাতায় **App passwords** → নাম দাও `S_19 CHAT BOOK` → Create।
-   Google একবারই ১৬ অক্ষরের পাসওয়ার্ড দেখাবে — সেটা কপি করো (স্পেস
-   ছাড়া বসাও)।
-৩. ওটা `EMAIL_SMTP_PASS`-এ বসাও — কখনো চ্যাটে বা গিটে দেবে না, শুধু
-   Render-এর Environment-এ। সাধারণ Gmail পাসওয়ার্ড দিয়ে হবে না —
-   App Password-ই লাগবে।
-৪. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
+Brevo অ্যাকাউন্ট বানানো (একবারই করতে হয়):
+১. [brevo.com](https://www.brevo.com) → Sign Up (ফ্রি) → লগইন করো।
+২. Settings → Senders & IP → Add a sender → পাঠানোর Gmail-টা দাও
+   (যেমন `s19chatbook@gmail.com`) → Brevo ওই ইনবক্সে একটা মেইল
+   পাঠাবে → সেটা খুলে Confirm চাপো। (Brevo-র মেনুর নাম বদলাতে
+   পারে — Settings-এর নিচে "Senders" খুঁজো।)
+৩. Settings → SMTP & API → API Keys → Generate a new API key → কপি
+   করো।
+৪. ওই চাবি `EMAIL_API_KEY`-এ আর ভেরিফাই করা Gmail `EMAIL_FROM`-এ
+   বসাও — শুধু Render-এর Environment-এ, কখনো চ্যাটে বা গিটে না।
+৫. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
    শুধু সেটিংস ঠিক আছে কিনা বলে)। সার্ভার চালু হলে লগে
-   `Email mode: REAL EMAIL (smtp)` দেখাবে।
+   `Email mode: REAL EMAIL (brevo)` দেখাবে।
+
+একটা কথা: Gmail ঠিকানা দিয়ে পাঠানো মেইল মাঝে মাঝে প্রাপকের Spam
+ফোল্ডারে যেতে পারে — কোড ইনবক্সে না পেলে Spam-ও দেখো।
+
+**Gmail SMTP (`smtp`) — শুধু নিজের কম্পিউটারে টেস্টের জন্য**:
+Render-এর ফ্রি টিয়ার SMTP পোর্ট (২৫, ৪৬৫, ৫৮৭) বন্ধ রাখে, তাই
+Render থেকে Gmail SMTP-তে কানেকশন হয় না — "Connection timeout"
+আসে। এটা পাসওয়ার্ড ভুল বলে না। নিজের কম্পিউটারে সার্ভার চালালে
+`smtp` চলে: 2-Step Verification ON → App Password বানাও (Google
+Account → Security → App passwords) → `S_19 CHAT BOOK` নামে ১৬
+অক্ষরের পাসওয়ার্ড → `EMAIL_PROVIDER=smtp`,
+`EMAIL_SMTP_USER`=ওই Gmail, `EMAIL_SMTP_PASS`=ওই পাসওয়ার্ড।
 
 **অন্য পথ — Resend / generic HTTP API**: `EMAIL_PROVIDER` `resend`
 বা `generic` হলে `EMAIL_API_URL` + `EMAIL_API_KEY` + `EMAIL_FROM`
