@@ -117,33 +117,55 @@ Gmail-এ কোড গেলে টাকা লাগে না — ইমে�
 ভেরিয়েবলগুলো সেট করলেই কোড আর পর্দায় দেখাবে না — আসল ইমেইল যাবে।
 Render ড্যাশবোর্ড → সার্ভিস → **Environment**-এ এগুলো বসাও:
 
-**সহজ পথ — Mailjet (`mailjet`, আসল পথ)**: HTTPS দিয়ে মেইল পাঠায়, তাই
-Render-এর ফ্রি টিয়ারেও চলে। মাসে ৬,০০০টা ইমেইল ফ্রি (রোজ ২০০টা),
-কার্ড লাগে না, ডোমেইন লাগে না, ফোন ভেরিফিকেশনও লাগে না — Mailjet-এ
-একটা পাঠানোর ঠিকানা ভ্যালিডেট করলেই যেকোনো Gmail-এ কোড যাবে:
+**সহজ পথ — Gmail API (`gmail_oauth`, আসল পথ)**: নিজের Gmail
+(`s19chatbook@gmail.com`) দিয়ে HTTPS-এ মেইল পাঠায়, তাই Render-এর
+ফ্রি টিয়ারেও চলে। কোনো তৃতীয় পক্ষ নেই, ফোন ভেরিফিকেশন লাগে না,
+ট্রায়াল শেষ হয় না, ডোমেইন লাগে না — একবার refresh token বানালেই
+প্রতিবার পাঠানোর সময় সার্ভার নিজেই নতুন access token নিয়ে নেয়:
 
 | ভেরিয়েবল | মান |
 |---|---|
-| `EMAIL_PROVIDER` | `mailjet` |
-| `EMAIL_API_KEY` | Mailjet-এর API চাবি (নিচে দেখো — কখনো গিটে দেবে না) |
-| `EMAIL_API_SECRET` | Mailjet-এর Secret চাবি (একবারই দেখায় — সাথে সাথে কপি করো) |
-| `EMAIL_FROM` | Mailjet-এ ভ্যালিডেট করা পাঠানোর Gmail, যেমন `s19chatbook@gmail.com` |
+| `EMAIL_PROVIDER` | `gmail_oauth` |
+| `GMAIL_OAUTH_CLIENT_ID` | Google Cloud-এর OAuth client ID (কখনো গিটে দেবে না) |
+| `GMAIL_OAUTH_CLIENT_SECRET` | OAuth client secret (একবারই দেখায় — সাথে সাথে কপি করো) |
+| `GMAIL_OAUTH_REFRESH_TOKEN` | refresh token (একবারই দেখায় — সাথে সাথে কপি করো) |
+| `EMAIL_FROM` | পাঠানোর Gmail, যেমন `s19chatbook@gmail.com` |
 
-Mailjet অ্যাকাউন্ট বানানো (একবারই করতে হয়):
-১. [app.mailjet.com](https://app.mailjet.com) → Sign Up (ফ্রি) → লগইন করো।
-২. Account Settings → Sender domains and addresses → পাঠানোর Gmail-টা
-   দাও (যেমন `s19chatbook@gmail.com`) → Mailjet ওই ইনবক্সে একটা মেইল
-   পাঠাবে → সেটা খুলে Confirm চাপো। (Mailjet-এর মেনুর নাম বদলাতে
-   পারে — Account Settings-এর নিচে "Sender domains and addresses" খুঁজো।)
-৩. Account Settings → REST API → API Key Management → API Key আর
-   Secret Key কপি করো। Secret Key একবারই দেখায় — সাথে সাথে কপি করো,
-   পেজ বন্ধ করলে আর দেখাবে না।
-৪. ওই চাবি দুটো `EMAIL_API_KEY` আর `EMAIL_API_SECRET`-এ, আর ভ্যালিডেট
-   করা Gmail `EMAIL_FROM`-এ বসাও — শুধু Render-এর Environment-এ,
+সেটআপ (একবারই করতে হয়):
+১. [console.cloud.google.com](https://console.cloud.google.com) → নতুন
+   প্রজেক্ট বানাও, যেমন "S19 CHAT BOOK"।
+২. APIs & Services → Library → "Gmail API" খুঁজে Enable চাপো।
+৩. APIs & Services → OAuth consent screen → External → অ্যাপের নাম
+   "S_19 CHAT BOOK", support ইমেইল `s19chatbook@gmail.com` →
+   **সবচেয়ে জরুরি: Publishing status "In production" করো (Testing
+   না)** — Testing থাকলে refresh token ৭ দিন পর মরে যায়।
+   "Unverified app" সতর্কবার্তা আসলে Advanced → Go to S_19 CHAT
+   BOOK (unsafe) চাপো — নিজের প্রজেক্ট, ভয়ের কিছু নেই।
+৪. APIs & Services → Credentials → Create Credentials → OAuth
+   client ID → Web application → redirect URI `http://localhost` →
+   client ID আর client secret কপি করো।
+৫. `s19chatbook@gmail.com` দিয়ে লগইন করে
+   `https://www.googleapis.com/auth/gmail.send` scope-এ অনুমতি দাও
+   (access_type=offline) → একবারের কোডটা দিয়ে refresh token বানাও —
+   refresh token একবারই দেখায়, সাথে সাথে কপি করো।
+৬. ওই তিনটা মান আর `EMAIL_FROM` Render-এর Environment-এ বসাও —
    কখনো চ্যাটে বা গিটে না।
-৫. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
+৭. ঠিক আছে কিনা দেখতে `npm run check-email` চালাও (কিছু পাঠায় না,
    শুধু সেটিংস ঠিক আছে কিনা বলে)। সার্ভার চালু হলে লগে
-   `Email mode: REAL EMAIL (mailjet)` দেখাবে।
+   `Email mode: REAL EMAIL (gmail_oauth)` দেখাবে।
+
+কেন Gmail API: Mailjet-এর Compliance টিম অ্যাকাউন্ট চালু করতে
+অস্বীকার করে অ্যাকাউন্ট বন্ধ করে দিয়েছে; Brevo-তে API চাবি বানাতে
+ফোন ভেরিফিকেশন লাগে আর SMS কোড ফোনে আসে না; Gmail SMTP Render-এ
+বন্ধ (পোর্ট ২৫/৪৬৫/৫৮৭)। SendGrid-ও বাদ — সাইনআপে ফোন
+ভেরিফিকেশন লাগে আর ফ্রি প্ল্যান শুধু ৬০ দিনের ট্রায়াল, তারপর
+~$২০/মাস।
+
+**Mailjet (`mailjet`) — আমাদের জন্য বন্ধ**: Mailjet-এর Compliance
+টিম অ্যাক্টিভেশন বাতিল করে অ্যাকাউন্ট বন্ধ করে দিয়েছে (সিদ্ধান্ত
+চূড়ান্ত)। কোডে `mailjet` পথটা রাখা আছে, শুধু ব্যাকআপ হিসেবে। (আগে
+ফ্রি ছিল — মাসে ৬,০০০টা, রোজ ২০০টা, ডোমেইন/ফোন ভেরিফিকেশন ছাড়াই
+একটা sender Gmail ভ্যালিডেট করলেই যেকোনো Gmail-এ কোড যেত।)
 
 একটা কথা: Gmail ঠিকানা দিয়ে পাঠানো মেইল মাঝে মাঝে প্রাপকের Spam
 ফোল্ডারে যেতে পারে — কোড ইনবক্সে না পেলে Spam-ও দেখো।
