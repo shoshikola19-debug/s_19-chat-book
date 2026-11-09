@@ -259,6 +259,45 @@ async function main() {
     smtpSend && smtpSend.sent === false && typeof smtpSend.reason === 'string'
     && Date.now() - t0 < 10000, { ...smtpSend, ms: Date.now() - t0 });
 
+  // Static + unit checks for the Brevo provider (email.js) — the
+  // production email path on Render free tier (HTTPS, port 443), since
+  // Render blocks outbound SMTP ports and Gmail SMTP always times out
+  // there. No real email is ever sent here; only config + failure paths.
+  console.log('== email brevo provider ==');
+  check('email.js has the brevo provider (Brevo API over HTTPS, api-key header)',
+    emailSrc.includes("'brevo'") && emailSrc.includes('api.brevo.com/v3/smtp/email')
+    && emailSrc.includes('api-key') && emailSrc.includes('textContent')
+    && emailSrc.includes('sendViaBrevo'), null);
+  check('.env.example + README document Brevo setup (free, no domain, sender verified)',
+    envExample.includes('brevo') && envExample.includes('Brevo')
+    && envExample.includes('https://api.brevo.com/v3/smtp/email')
+    && readme.includes('Brevo') && readme.includes('brevo.com'), null);
+  const savedProv2 = process.env.EMAIL_PROVIDER;
+  const savedUrl = process.env.EMAIL_API_URL;
+  const savedKey = process.env.EMAIL_API_KEY;
+  const savedFrom = process.env.EMAIL_FROM;
+  process.env.EMAIL_PROVIDER = 'brevo';
+  process.env.EMAIL_API_KEY = 'fake-brevo-key-xxxx';
+  delete process.env.EMAIL_API_URL;
+  check('brevo isConfigured() is true with only the API key set (URL has a default)',
+    emailMod.isConfigured() === true);
+  delete process.env.EMAIL_API_KEY;
+  check('brevo isConfigured() is false without the API key', emailMod.isConfigured() === false);
+  process.env.EMAIL_API_KEY = 'fake-brevo-key-xxxx';
+  process.env.EMAIL_API_URL = 'http://127.0.0.1:1/v3/smtp/email';
+  const t1 = Date.now();
+  const brevoSend = await emailMod.sendOtp('brevo.test@gmail.com', '123456');
+  check('sendOtp via Brevo to an unreachable host fails cleanly with { sent:false } (no throw, no hang)',
+    brevoSend && brevoSend.sent === false && typeof brevoSend.reason === 'string'
+    && Date.now() - t1 < 10000, { ...brevoSend, ms: Date.now() - t1 });
+  // Restore the env the rest of the suite expects (the fake SMTP config
+  // is set before the server boots; the API-key/url values were already
+  // deleted by the resend check above, so undefined means "delete").
+  process.env.EMAIL_PROVIDER = savedProv2;
+  if (savedUrl === undefined) delete process.env.EMAIL_API_URL; else process.env.EMAIL_API_URL = savedUrl;
+  if (savedKey === undefined) delete process.env.EMAIL_API_KEY; else process.env.EMAIL_API_KEY = savedKey;
+  if (savedFrom === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = savedFrom;
+
   console.log('== contacts + direct messages ==');
   const add = await post('/api/contacts', { phone: FRIEND }, tokA);
   check('add contact by number', add.status === 200 && add.data.contact.phone === FRIEND, add);
