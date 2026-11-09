@@ -5,13 +5,20 @@
 //   selected provider is missing something. It never sends an email, never
 //   prints a password or an API key, and never prints a login code.
 //   (On Render, set the vars in Dashboard -> Environment, then check the
-//   boot log line "Email mode: REAL EMAIL (mailjet)" after a deploy.)
+//   boot log line "Email mode: REAL EMAIL (gmail_oauth)" after a deploy.)
 
 const { isConfigured, smtpConfig } = require('../email');
 
 const provider = String(process.env.EMAIL_PROVIDER || '').toLowerCase();
 console.log('provider:', provider || '(none — test-code mode)');
-if (provider === 'smtp') {
+if (provider === 'gmail_oauth') {
+  console.log('gmail oauth token url:', process.env.GMAIL_OAUTH_TOKEN_URL || 'https://oauth2.googleapis.com/token (default)');
+  console.log('gmail api url:', process.env.GMAIL_API_URL || 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send (default)');
+  console.log('gmail oauth client id:', process.env.GMAIL_OAUTH_CLIENT_ID ? '(set, hidden)' : '(missing)');
+  console.log('gmail oauth client secret:', process.env.GMAIL_OAUTH_CLIENT_SECRET ? '(set, hidden)' : '(missing)');
+  console.log('gmail oauth refresh token:', process.env.GMAIL_OAUTH_REFRESH_TOKEN ? '(set, hidden)' : '(missing)');
+  console.log('from (must be the Gmail account the refresh token belongs to):', process.env.EMAIL_FROM || '(missing)');
+} else if (provider === 'smtp') {
   const cfg = smtpConfig();
   console.log('smtp host:', cfg.host);
   console.log('smtp port:', cfg.port, cfg.secure ? '(implicit TLS)' : '(STARTTLS)');
@@ -38,6 +45,8 @@ if (provider && !isConfigured()) {
     console.error('Brevo needs EMAIL_API_KEY (from the Brevo dashboard) and EMAIL_FROM set to the sender address you verified in Brevo.');
   } else if (provider === 'mailjet') {
     console.error('Mailjet needs EMAIL_API_KEY + EMAIL_API_SECRET (the API key pair from the Mailjet dashboard) and EMAIL_FROM set to the sender address you validated in Mailjet.');
+  } else if (provider === 'gmail_oauth') {
+    console.error('Gmail OAuth needs GMAIL_OAUTH_CLIENT_ID + GMAIL_OAUTH_CLIENT_SECRET + GMAIL_OAUTH_REFRESH_TOKEN (from the Google Cloud OAuth client and the one-time authorization) and EMAIL_FROM set to the Gmail account the refresh token belongs to.');
   } else if (provider === 'smtp') {
     console.error('SMTP needs EMAIL_SMTP_USER and EMAIL_SMTP_PASS (the Gmail App Password).');
   } else {
