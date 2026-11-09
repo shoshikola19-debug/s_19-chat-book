@@ -24,9 +24,12 @@ services:
         value: ""
       # Email (Gmail login) variables are optional too. Leave them empty
       # for test-code mode; set them in the Dashboard when ready.
-      # Recommended: EMAIL_PROVIDER=mailjet with a Mailjet API key pair
-      # (HTTPS, works on Render free tier). Brevo is blocked for us —
-      # its API key needs phone verification and the SMS never arrives.
+      # Recommended: EMAIL_PROVIDER=gmail_oauth with a Google Cloud
+      # OAuth client + refresh token for s19chatbook@gmail.com (HTTPS,
+      # works on Render free tier, no third-party gatekeeper).
+      # Mailjet is DEAD for us — Compliance declined activation and
+      # closed the account. Brevo is blocked for us — its API key
+      # needs phone verification and the SMS never arrives.
       # Gmail SMTP does NOT work on Render free tier — it blocks SMTP
       # ports 25/465/587 (connection timeout, not a wrong password);
       # smtp is local-dev only. Resend free tier without a verified
@@ -38,6 +41,12 @@ services:
       - key: EMAIL_API_KEY
         sync: false
       - key: EMAIL_API_SECRET
+        sync: false
+      - key: GMAIL_OAUTH_CLIENT_ID
+        sync: false
+      - key: GMAIL_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_OAUTH_REFRESH_TOKEN
         sync: false
       - key: EMAIL_FROM
         value: ""
