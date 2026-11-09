@@ -310,11 +310,11 @@ async function main() {
     && emailSrc.includes('Basic') && emailSrc.includes('Messages')
     && emailSrc.includes('TextPart') && emailSrc.includes('sendViaMailjet')
     && emailSrc.includes('EMAIL_API_SECRET'), null);
-  check('.env.example + README document Mailjet setup (free, no domain, no phone verification, sender validated)',
+  check('.env.example + README record Mailjet as dead (Compliance declined activation, account closed) and keep the fallback documented',
     envExample.includes('mailjet') && envExample.includes('Mailjet')
     && envExample.includes('https://api.mailjet.com/v3.1/send')
     && envExample.includes('EMAIL_API_SECRET')
-    && readme.includes('Mailjet') && readme.includes('mailjet.com'), null);
+    && readme.includes('Mailjet') && readme.includes('বন্ধ'), null);
   const savedProv3 = process.env.EMAIL_PROVIDER;
   const savedUrl3 = process.env.EMAIL_API_URL;
   const savedKey3 = process.env.EMAIL_API_KEY;
@@ -344,6 +344,66 @@ async function main() {
   if (savedKey3 === undefined) delete process.env.EMAIL_API_KEY; else process.env.EMAIL_API_KEY = savedKey3;
   if (savedSecret === undefined) delete process.env.EMAIL_API_SECRET; else process.env.EMAIL_API_SECRET = savedSecret;
   if (savedFrom3 === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = savedFrom3;
+
+  // Static + unit checks for the Gmail OAuth2 provider (email.js) —
+  // the production email path on Render free tier (HTTPS, port 443).
+  // Mailjet is DEAD (Compliance declined activation and closed the
+  // account), Brevo is blocked (its API key needs phone verification
+  // and the SMS never arrives) and Gmail SMTP always times out on
+  // Render, so the Gmail API with OAuth2 — Bijoy's own Gmail, refresh
+  // token -> access token -> send — is the live path. No real email
+  // is ever sent here; only config + failure paths.
+  console.log('== email gmail_oauth provider ==');
+  check('email.js has the gmail_oauth provider (Gmail API over HTTPS, refresh_token -> access token, base64url RFC822, RFC2047 subject)',
+    emailSrc.includes("'gmail_oauth'") && emailSrc.includes('gmail.googleapis.com')
+    && emailSrc.includes('oauth2.googleapis.com/token')
+    && emailSrc.includes('refresh_token') && emailSrc.includes('sendViaGmailOAuth')
+    && emailSrc.includes('GMAIL_OAUTH_REFRESH_TOKEN')
+    && emailSrc.includes('UTF-8?B?') && emailSrc.includes('base64url'), null);
+  check('.env.example + README document Gmail OAuth setup (Google Cloud, Gmail API, consent screen Production, refresh token)',
+    envExample.includes('gmail_oauth') && envExample.includes('GMAIL_OAUTH_REFRESH_TOKEN')
+    && envExample.includes('oauth2.googleapis.com/token')
+    && envExample.includes('console.cloud.google.com')
+    && readme.includes('gmail_oauth') && readme.includes('Gmail API'), null);
+  const savedProv4 = process.env.EMAIL_PROVIDER;
+  const savedTokenUrl = process.env.GMAIL_OAUTH_TOKEN_URL;
+  const savedGmailUrl = process.env.GMAIL_API_URL;
+  const savedClientId = process.env.GMAIL_OAUTH_CLIENT_ID;
+  const savedClientSecret = process.env.GMAIL_OAUTH_CLIENT_SECRET;
+  const savedRefresh = process.env.GMAIL_OAUTH_REFRESH_TOKEN;
+  const savedFrom4 = process.env.EMAIL_FROM;
+  process.env.EMAIL_PROVIDER = 'gmail_oauth';
+  process.env.GMAIL_OAUTH_CLIENT_ID = 'fake-gmail-client-id-xxxx';
+  process.env.GMAIL_OAUTH_CLIENT_SECRET = 'fake-gmail-client-secret-xxxx';
+  process.env.GMAIL_OAUTH_REFRESH_TOKEN = 'fake-gmail-refresh-token-xxxx';
+  delete process.env.GMAIL_OAUTH_TOKEN_URL;
+  delete process.env.GMAIL_API_URL;
+  check('gmail_oauth isConfigured() is true with client id + secret + refresh token set (URLs have defaults)',
+    emailMod.isConfigured() === true);
+  delete process.env.GMAIL_OAUTH_REFRESH_TOKEN;
+  check('gmail_oauth isConfigured() is false without the refresh token', emailMod.isConfigured() === false);
+  process.env.GMAIL_OAUTH_REFRESH_TOKEN = 'fake-gmail-refresh-token-xxxx';
+  delete process.env.GMAIL_OAUTH_CLIENT_SECRET;
+  check('gmail_oauth isConfigured() is false without the client secret', emailMod.isConfigured() === false);
+  process.env.GMAIL_OAUTH_CLIENT_SECRET = 'fake-gmail-client-secret-xxxx';
+  delete process.env.GMAIL_OAUTH_CLIENT_ID;
+  check('gmail_oauth isConfigured() is false without the client id', emailMod.isConfigured() === false);
+  process.env.GMAIL_OAUTH_CLIENT_ID = 'fake-gmail-client-id-xxxx';
+  process.env.GMAIL_OAUTH_TOKEN_URL = 'http://127.0.0.1:1/token';
+  process.env.GMAIL_API_URL = 'http://127.0.0.1:1/gmail/v1/users/me/messages/send';
+  const t3 = Date.now();
+  const gmailSend = await emailMod.sendOtp('gmail.test@gmail.com', '123456');
+  check('sendOtp via Gmail OAuth to unreachable endpoints fails cleanly with { sent:false } (no throw, no hang)',
+    gmailSend && gmailSend.sent === false && typeof gmailSend.reason === 'string'
+    && Date.now() - t3 < 10000, { ...gmailSend, ms: Date.now() - t3 });
+  // Restore the env the rest of the suite expects.
+  process.env.EMAIL_PROVIDER = savedProv4;
+  if (savedTokenUrl === undefined) delete process.env.GMAIL_OAUTH_TOKEN_URL; else process.env.GMAIL_OAUTH_TOKEN_URL = savedTokenUrl;
+  if (savedGmailUrl === undefined) delete process.env.GMAIL_API_URL; else process.env.GMAIL_API_URL = savedGmailUrl;
+  if (savedClientId === undefined) delete process.env.GMAIL_OAUTH_CLIENT_ID; else process.env.GMAIL_OAUTH_CLIENT_ID = savedClientId;
+  if (savedClientSecret === undefined) delete process.env.GMAIL_OAUTH_CLIENT_SECRET; else process.env.GMAIL_OAUTH_CLIENT_SECRET = savedClientSecret;
+  if (savedRefresh === undefined) delete process.env.GMAIL_OAUTH_REFRESH_TOKEN; else process.env.GMAIL_OAUTH_REFRESH_TOKEN = savedRefresh;
+  if (savedFrom4 === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = savedFrom4;
 
   console.log('== contacts + direct messages ==');
   const add = await post('/api/contacts', { phone: FRIEND }, tokA);
