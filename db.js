@@ -28,7 +28,19 @@ CREATE TABLE IF NOT EXISTS users (
   -- Last time this user made an authenticated request (ms). The chat
   -- header shows "online" / "last seen …" from it. Updated at most
   -- once a minute per user (server.js auth throttle).
-  last_seen INTEGER NOT NULL DEFAULT 0
+  last_seen INTEGER NOT NULL DEFAULT 0,
+  -- Settings > Privacy: who may see my last seen / photo / about
+  -- ('everyone' | 'contacts' | 'nobody'), whether my read receipts
+  -- go out (1 = blue ticks sent, 0 = never), who may add me to
+  -- groups ('everyone' | 'contacts'), and my default disappearing-
+  -- message timer in seconds (0 = off). See server.js publicUser()
+  -- and getPrivacy().
+  last_seen_privacy TEXT NOT NULL DEFAULT 'everyone',
+  photo_privacy TEXT NOT NULL DEFAULT 'everyone',
+  about_privacy TEXT NOT NULL DEFAULT 'everyone',
+  read_receipts INTEGER NOT NULL DEFAULT 1,
+  group_add_privacy TEXT NOT NULL DEFAULT 'everyone',
+  default_timer INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -55,6 +67,12 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL,
   delivered INTEGER NOT NULL DEFAULT 0,
   read INTEGER NOT NULL DEFAULT 0,
+  -- Receiver-side seen marker for unread counts, independent of the
+  -- sender-visible read tick: POST /api/messages/read always sets
+  -- read_local, but sets read only when the reader's read receipts
+  -- are ON — so unread badges still clear with receipts off, while
+  -- the sender never sees a blue tick from that reader.
+  read_local INTEGER NOT NULL DEFAULT 0,
   -- Disappearing messages: ms timestamp when this message expires
   -- (0 = never). Expired rows are hidden from every read and deleted
   -- by the hourly cleanup.
@@ -144,6 +162,11 @@ CREATE TABLE IF NOT EXISTS group_members (
   role TEXT NOT NULL DEFAULT 'member',
   joined_at INTEGER NOT NULL,
   last_read_id INTEGER NOT NULL DEFAULT 0,
+  -- Receipt marker for group seen ticks: advances only when the
+  -- reader has read receipts ON (see server.js groupRead). The
+  -- plain last_read_id still advances on every fetch — it is the
+  -- local unread / fetch-position marker.
+  last_read_receipt INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (group_id, phone)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
@@ -229,6 +252,16 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   bubble_color TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (owner_phone, peer_phone)
 );
+-- Archived chats: one row per (owner, chat-or-group). kind is 'chat'
+-- (peer_phone set, group_id 0) or 'group' (group_id set, peer_phone '').
+CREATE TABLE IF NOT EXISTS archived_chats (
+  owner_phone TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  peer_phone TEXT NOT NULL DEFAULT '',
+  group_id INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (owner_phone, kind, peer_phone, group_id)
+);
 -- Reports: a user reporting a peer to the admins (reason may be empty).
 -- The admin panel lists them with a Block action for the reported user.
 CREATE TABLE IF NOT EXISTS reports (
@@ -256,7 +289,13 @@ CREATE TABLE IF NOT EXISTS users (
   about TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL,
   blocked BOOLEAN NOT NULL DEFAULT FALSE,
-  last_seen BIGINT NOT NULL DEFAULT 0
+  last_seen BIGINT NOT NULL DEFAULT 0,
+  last_seen_privacy TEXT NOT NULL DEFAULT 'everyone',
+  photo_privacy TEXT NOT NULL DEFAULT 'everyone',
+  about_privacy TEXT NOT NULL DEFAULT 'everyone',
+  read_receipts BOOLEAN NOT NULL DEFAULT TRUE,
+  group_add_privacy TEXT NOT NULL DEFAULT 'everyone',
+  default_timer BIGINT NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -283,6 +322,7 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at BIGINT NOT NULL,
   delivered BOOLEAN NOT NULL DEFAULT FALSE,
   read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_local BOOLEAN NOT NULL DEFAULT FALSE,
   expires_at BIGINT NOT NULL DEFAULT 0,
   media_kind TEXT,
   media_name TEXT NOT NULL DEFAULT '',
@@ -331,6 +371,7 @@ CREATE TABLE IF NOT EXISTS group_members (
   role TEXT NOT NULL DEFAULT 'member',
   joined_at BIGINT NOT NULL,
   last_read_id BIGINT NOT NULL DEFAULT 0,
+  last_read_receipt BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (group_id, phone)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender, receiver, id);
@@ -398,6 +439,14 @@ CREATE TABLE IF NOT EXISTS chat_settings (
   bubble_color TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (owner_phone, peer_phone)
 );
+CREATE TABLE IF NOT EXISTS archived_chats (
+  owner_phone TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  peer_phone TEXT NOT NULL DEFAULT '',
+  group_id INTEGER NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (owner_phone, kind, peer_phone, group_id)
+);
 CREATE TABLE IF NOT EXISTS reports (
   id SERIAL PRIMARY KEY,
   reporter TEXT NOT NULL,
@@ -457,7 +506,28 @@ async function createDb({ dbPath }) {
       ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS about TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS last_seen BIGINT NOT NULL DEFAULT 0`);
+      ADD COLUMN IF NOT EXISTS last_seen BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS last_seen_privacy TEXT NOT NULL DEFAULT 'everyone',
+      ADD COLUMN IF NOT EXISTS photo_privacy TEXT NOT NULL DEFAULT 'everyone',
+      ADD COLUMN IF NOT EXISTS about_privacy TEXT NOT NULL DEFAULT 'everyone',
+      ADD COLUMN IF NOT EXISTS read_receipts BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS group_add_privacy TEXT NOT NULL DEFAULT 'everyone',
+      ADD COLUMN IF NOT EXISTS default_timer BIGINT NOT NULL DEFAULT 0`);
+    // Migration for Settings > Privacy: the receiver-side seen marker
+    // (read_local) and the group receipt marker (last_read_receipt),
+    // plus the archived_chats table (new table, safe on every boot).
+    await pool.query(`ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS read_local BOOLEAN NOT NULL DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE group_members
+      ADD COLUMN IF NOT EXISTS last_read_receipt BIGINT NOT NULL DEFAULT 0`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS archived_chats (
+      owner_phone TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      peer_phone TEXT NOT NULL DEFAULT '',
+      group_id INTEGER NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      PRIMARY KEY (owner_phone, kind, peer_phone, group_id)
+    )`);
     // Migration for databases created before chat settings / media /
     // disappearing messages: new messages columns. Same pattern — safe
     // on every boot, fresh DBs already have them from the schema.
@@ -541,11 +611,34 @@ async function createDb({ dbPath }) {
   if (!userCols.some((c) => c.name === 'last_seen')) {
     db.exec('ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0');
   }
+  // Migration for Settings > Privacy: who may see last seen / photo /
+  // about, read receipts, who may add me to groups, default timer.
+  const userAdds = [
+    ['last_seen_privacy', "TEXT NOT NULL DEFAULT 'everyone'"],
+    ['photo_privacy', "TEXT NOT NULL DEFAULT 'everyone'"],
+    ['about_privacy', "TEXT NOT NULL DEFAULT 'everyone'"],
+    ['read_receipts', 'INTEGER NOT NULL DEFAULT 1'],
+    ['group_add_privacy', "TEXT NOT NULL DEFAULT 'everyone'"],
+    ['default_timer', 'INTEGER NOT NULL DEFAULT 0'],
+  ];
+  for (const [col, def] of userAdds) {
+    if (!userCols.some((c) => c.name === col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+  }
+  // Archived chats table (new table, safe on every boot).
+  db.exec(`CREATE TABLE IF NOT EXISTS archived_chats (
+    owner_phone TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    peer_phone TEXT NOT NULL DEFAULT '',
+    group_id INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (owner_phone, kind, peer_phone, group_id)
+  )`);
   // Migration for databases created before chat settings / media /
   // disappearing messages: new messages columns, same check-first way.
   const msgCols = db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name);
   const msgAdds = [
     ['expires_at', 'INTEGER NOT NULL DEFAULT 0'],
+    ['read_local', 'INTEGER NOT NULL DEFAULT 0'],
     ['media_kind', 'TEXT'],
     ['media_name', "TEXT NOT NULL DEFAULT ''"],
     ['media_type', "TEXT NOT NULL DEFAULT ''"],
@@ -579,6 +672,12 @@ async function createDb({ dbPath }) {
   ];
   for (const [col, def] of csAdds) {
     if (!csCols.includes(col)) db.exec(`ALTER TABLE chat_settings ADD COLUMN ${col} ${def}`);
+  }
+  // Migration for Settings > Privacy: the group receipt marker
+  // (last_read_receipt) — advances only with read receipts ON.
+  const gmCols = db.prepare('PRAGMA table_info(group_members)').all().map((c) => c.name);
+  if (!gmCols.includes('last_read_receipt')) {
+    db.exec('ALTER TABLE group_members ADD COLUMN last_read_receipt INTEGER NOT NULL DEFAULT 0');
   }
   // Idempotency key for media-upload retries (see schema note above).
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_key ON messages (sender, client_key)');
