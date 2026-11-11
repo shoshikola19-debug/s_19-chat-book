@@ -185,11 +185,67 @@ function codeRateLimited(phone) {
   return false;
 }
 
-async function publicUser(phone) {
+async function isContact(owner, contact) {
+  const r = await db.get('SELECT 1 FROM contacts WHERE owner_phone = ? AND contact_phone = ?', owner, contact);
+  return !!r;
+}
+
+// Settings > Privacy for one user. Short names, matching GET
+// /api/privacy: lastSeen / photo / about ('everyone' | 'contacts' |
+// 'nobody'), readReceipts 0/1, groupAdd ('everyone' | 'contacts'),
+// defaultTimer in seconds (0 = off). A missing user row reads as
+// all defaults.
+async function getPrivacy(phone) {
+  const row = await db.get(
+    'SELECT last_seen_privacy, photo_privacy, about_privacy, read_receipts, group_add_privacy, default_timer FROM users WHERE phone = ?',
+    phone);
+  if (!row) {
+    return { lastSeen: 'everyone', photo: 'everyone', about: 'everyone', readReceipts: 1, groupAdd: 'everyone', defaultTimer: 0 };
+  }
+  return {
+    lastSeen: row.last_seen_privacy || 'everyone',
+    photo: row.photo_privacy || 'everyone',
+    about: row.about_privacy || 'everyone',
+    readReceipts: row.read_receipts ? 1 : 0,
+    groupAdd: row.group_add_privacy || 'everyone',
+    defaultTimer: row.default_timer || 0,
+  };
+}
+
+// Viewer-aware public profile. viewer undefined = the old full
+// behaviour (internal callers, e.g. sender names in reactions);
+// viewer === phone = self, always full. Otherwise the target's
+// privacy settings hide lastSeen / avatar / about:
+//   'nobody'   -> hidden from everyone
+//   'contacts' -> visible only when the viewer is in the target's
+//                 contacts (contacts table owner=target, contact=viewer)
+//   'everyone' -> visible
+// PLUS reciprocity (the real WhatsApp rule, last seen only): when
+// the VIEWER's own last_seen_privacy is 'nobody', they see 0 for
+// everyone else too. The name is always visible.
+async function publicUser(phone, viewer) {
   if (phone === SYSTEM_SENDER) return { phone, name: 'S_19 CHAT BOOK', lastSeen: 0 };
-  const u = await db.get('SELECT phone, name, avatar, about, last_seen FROM users WHERE phone = ?', phone);
-  return u ? { phone: u.phone, name: u.name, avatar: u.avatar || '', about: u.about || '', lastSeen: u.last_seen || 0 }
-    : { phone, name: '', avatar: '', about: '', lastSeen: 0 };
+  const u = await db.get(
+    'SELECT phone, name, avatar, about, last_seen, last_seen_privacy, photo_privacy, about_privacy FROM users WHERE phone = ?',
+    phone);
+  if (!u) return { phone, name: '', avatar: '', about: '', lastSeen: 0 };
+  let lastSeen = u.last_seen || 0;
+  let avatar = u.avatar || '';
+  let about = u.about || '';
+  if (viewer !== undefined && viewer !== phone) {
+    const viewerPrivacy = await getPrivacy(viewer);
+    const lastSeenPrivacy = u.last_seen_privacy || 'everyone';
+    const photoPrivacy = u.photo_privacy || 'everyone';
+    const aboutPrivacy = u.about_privacy || 'everyone';
+    if (viewerPrivacy.lastSeen === 'nobody') lastSeen = 0;
+    else if (lastSeenPrivacy === 'nobody') lastSeen = 0;
+    else if (lastSeenPrivacy === 'contacts' && !(await isContact(phone, viewer))) lastSeen = 0;
+    if (photoPrivacy === 'nobody') avatar = '';
+    else if (photoPrivacy === 'contacts' && !(await isContact(phone, viewer))) avatar = '';
+    if (aboutPrivacy === 'nobody') about = '';
+    else if (aboutPrivacy === 'contacts' && !(await isContact(phone, viewer))) about = '';
+  }
+  return { phone: u.phone, name: u.name, avatar, about, lastSeen };
 }
 
 // Identity display: phone numbers show with a +, Gmail addresses as-is.
@@ -328,11 +384,19 @@ async function blockState(me, peer) {
   return { byMe: mine.blocked === 1, byPeer: theirs.blocked === 1 };
 }
 // When a message is sent it expires after the SHORTER of the two sides'
-// disappearing settings (0 on a side = that side set nothing). 0 = never.
+// effective disappearing settings (0 on a side = that side set
+// nothing). 0 = never. The effective value of a side is its per-chat
+// setting, falling back to that side's default message timer
+// (Settings > Privacy > default_timer).
+// NOTE: a per-chat 0 and a never-set per-chat value are
+// indistinguishable in chat_settings (both read back as 0), so an
+// explicit per-chat Off still falls back to the default timer.
 async function disappearingExpiresAt(sender, receiver, createdAt) {
-  const s = (await getChatSettings(sender, receiver)).disappearing;
-  const r = (await getChatSettings(receiver, sender)).disappearing;
-  const secs = [s, r].filter((v) => v > 0);
+  const sChat = (await getChatSettings(sender, receiver)).disappearing;
+  const rChat = (await getChatSettings(receiver, sender)).disappearing;
+  const sEff = sChat || (await getPrivacy(sender)).defaultTimer;
+  const rEff = rChat || (await getPrivacy(receiver)).defaultTimer;
+  const secs = [sEff, rEff].filter((v) => v > 0);
   if (!secs.length) return 0;
   return createdAt + Math.min(...secs) * 1000;
 }
@@ -500,13 +564,26 @@ app.post('/api/profile', ah(auth), ah(async (req, res) => {
   }
   const sets = Object.keys(updates).map((k) => k + ' = ?').join(', ');
   await db.run(`UPDATE users SET ${sets} WHERE phone = ?`, ...Object.values(updates), req.phone);
-  return res.json({ ok: true, ...(await publicUser(req.phone)) });
+  return res.json({ ok: true, ...(await publicUser(req.phone, req.phone)) });
 }));
 
 app.get('/api/me', ah(auth), ah(async (req, res) => {
   // isAdmin tells the client whether to show the Admin tab. The server
   // still enforces admin on every /api/admin/* route — the tab is only UI.
-  return res.json({ ok: true, ...(await publicUser(req.phone)), isAdmin: isAdmin(req.phone) });
+  // The privacy fields ride along (long names) so the Settings client
+  // needs no extra call to show them.
+  const priv = await getPrivacy(req.phone);
+  return res.json({
+    ok: true,
+    ...(await publicUser(req.phone, req.phone)),
+    isAdmin: isAdmin(req.phone),
+    lastSeenPrivacy: priv.lastSeen,
+    photoPrivacy: priv.photo,
+    aboutPrivacy: priv.about,
+    readReceipts: priv.readReceipts,
+    groupAddPrivacy: priv.groupAdd,
+    defaultTimer: priv.defaultTimer,
+  });
 }));
 
 app.post('/api/logout', ah(auth), ah(async (req, res) => {
@@ -538,7 +615,7 @@ app.get('/api/contacts', ah(auth), ah(async (req, res) => {
     'SELECT contact_phone FROM contacts WHERE owner_phone = ? ORDER BY created_at',
     req.phone);
   const contacts = [];
-  for (const r of rows) contacts.push(await publicUser(r.contact_phone));
+  for (const r of rows) contacts.push(await publicUser(r.contact_phone, req.phone));
   return res.json({ ok: true, contacts });
 }));
 
@@ -578,11 +655,14 @@ app.get('/api/conversations', ah(auth), ah(async (req, res) => {
       last = r;
       break;
     }
-    // Unread: my peer's messages I have not read. Deleted-for-me ones
-    // are fetched and filtered out in JS — the JSON array cannot be
-    // filtered in SQL the same way on both engines.
+    // Unread: my peer's messages I have not read. read_local is the
+    // receiver-side marker (POST /api/messages/read always sets it),
+    // so unread badges still clear when my read receipts are OFF —
+    // the sender-visible `read` tick is a different column.
+    // Deleted-for-me ones are fetched and filtered out in JS — the
+    // JSON array cannot be filtered in SQL the same way on both engines.
     const unreadRows = await db.all(
-      `SELECT id, deleted_for FROM messages WHERE sender = ? AND receiver = ? AND read = FALSE
+      `SELECT id, deleted_for FROM messages WHERE sender = ? AND receiver = ? AND read_local = FALSE
        AND (expires_at = 0 OR expires_at > ?) AND created_at > ?`,
       peer, req.phone, t, mine.clearedAt);
     const unread = unreadRows.filter((r) => !deletedForUser(r, req.phone)).length;
@@ -607,12 +687,16 @@ app.get('/api/conversations', ah(auth), ah(async (req, res) => {
     const lastMessage = !last ? '' : last.deleted_for_all
       ? (last.sender === req.phone ? 'You deleted this message' : 'This message was deleted')
       : last.body;
+    const archivedRow = await db.get(
+      "SELECT 1 AS x FROM archived_chats WHERE owner_phone = ? AND kind = 'chat' AND peer_phone = ? AND group_id = 0",
+      req.phone, peer);
     out.push({
-      ...(await publicUser(peer)),
+      ...(await publicUser(peer, req.phone)),
       lastMessage,
       lastAt: last ? last.created_at : 0,
       lastId: last ? last.id : 0,
       unread,
+      archived: archivedRow ? 1 : 0,
       muted: mine.muted ? 1 : 0,
       favorite: mine.favorite ? 1 : 0,
       missedAt,
@@ -653,12 +737,17 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   // Reactions + my stars ride on the fetch, so every device that has
   // the message shows them without another request.
   await attachExtras(req, visible);
+  // Read receipts are two-way and honest: when MY receipts are OFF, I
+  // do not see the other side's blue ticks either — every tick's `read`
+  // is masked to 0, and the viewed-once list is masked to [].
+  const myPrivacy = await getPrivacy(req.phone);
+  const receiptsOff = !myPrivacy.readReceipts;
   // View-once status for MY messages: the fetch is incremental, so a
   // viewed flag that changed on an old message would never arrive —
   // this list tells the sender's bubbles to flip to "Opened".
-  const viewedOnce = await db.all(
+  const viewedOnce = receiptsOff ? [] : (await db.all(
     'SELECT id FROM messages WHERE sender = ? AND receiver = ? AND view_once = TRUE AND viewed = TRUE AND group_id IS NULL',
-    req.phone, withPhone);
+    req.phone, withPhone)).map((r) => r.id);
   // Messages from the peer that I just received count as delivered now.
   await db.run(
     'UPDATE messages SET delivered = TRUE WHERE sender = ? AND receiver = ? AND delivered = FALSE',
@@ -666,15 +755,16 @@ app.get('/api/messages', ah(auth), ah(async (req, res) => {
   // Tick state for MY messages in this conversation — returned on every
   // fetch, even when there are no new messages, so the sender's ticks
   // update from ✓ to ✓✓ to seen without re-downloading the history.
-  const ticks = await db.all(
+  const ticks = (await db.all(
     `SELECT id, delivered, read FROM messages
      WHERE sender = ? AND receiver = ? AND (expires_at = 0 OR expires_at > ?) AND created_at > ? AND group_id IS NULL
      ORDER BY id DESC LIMIT 100`,
-    req.phone, withPhone, t, mine.clearedAt);
+    req.phone, withPhone, t, mine.clearedAt))
+    .map((tk) => (receiptsOff ? { ...tk, read: 0 } : tk));
   // The peer's last activity, so the chat header can show "online" /
   // "last seen …" and keep it fresh on every poll.
   const peerRow = await db.get('SELECT last_seen FROM users WHERE phone = ?', withPhone);
-  return res.json({ ok: true, messages: visible, ticks, peerLastSeen: peerRow ? (peerRow.last_seen || 0) : 0, viewedOnce: viewedOnce.map((r) => r.id) });
+  return res.json({ ok: true, messages: visible, ticks, peerLastSeen: peerRow ? (peerRow.last_seen || 0) : 0, viewedOnce });
 }));
 
 // Delete a message (WhatsApp-style). scope "me" = only my copy goes
@@ -926,12 +1016,24 @@ app.post('/api/messages', ah(auth), ah(async (req, res) => {
 }));
 
 // Mark a conversation as read (clears my unread count for that peer).
+// read_local is always set — it is the receiver-side marker the
+// unread count reads, so the badge clears even with read receipts
+// OFF. The sender-visible `read` tick is set only when MY read
+// receipts are ON: with them off, the sender never sees a blue tick
+// from me.
 app.post('/api/messages/read', ah(auth), ah(async (req, res) => {
   const withPhone = normalizePeerOrSystem(req.body && req.body.with);
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
-  await db.run(
-    'UPDATE messages SET read = TRUE, delivered = TRUE WHERE sender = ? AND receiver = ?',
-    withPhone, req.phone);
+  const myPrivacy = await getPrivacy(req.phone);
+  if (myPrivacy.readReceipts) {
+    await db.run(
+      'UPDATE messages SET read = TRUE, read_local = TRUE, delivered = TRUE WHERE sender = ? AND receiver = ?',
+      withPhone, req.phone);
+  } else {
+    await db.run(
+      'UPDATE messages SET read_local = TRUE, delivered = TRUE WHERE sender = ? AND receiver = ?',
+      withPhone, req.phone);
+  }
   return res.json({ ok: true });
 }));
 
@@ -1058,6 +1160,523 @@ app.post('/api/chat-settings/clear', ah(auth), ah(async (req, res) => {
   return res.json({ ok: true });
 }));
 
+// ---- Settings: Privacy, Archive, Backup, Account -------------------------
+// WhatsApp-style Settings, all server-enforced. No second-factor
+// verification exists anywhere in this app (cancelled by the user),
+// and nothing here makes any encryption claim.
+
+// Privacy: GET returns the short names; POST accepts any subset of
+// them, validates strictly, and returns the updated settings.
+const PRIVACY_VALUES = ['everyone', 'contacts', 'nobody'];
+app.get('/api/privacy', ah(auth), ah(async (req, res) => {
+  return res.json({ ok: true, ...(await getPrivacy(req.phone)) });
+}));
+app.post('/api/privacy', ah(auth), ah(async (req, res) => {
+  const body = req.body || {};
+  const patch = {};
+  for (const key of ['lastSeen', 'photo', 'about']) {
+    if (body[key] !== undefined) {
+      if (!PRIVACY_VALUES.includes(body[key])) {
+        return res.status(400).json({ ok: false, error: 'bad_privacy' });
+      }
+      patch[{ lastSeen: 'last_seen_privacy', photo: 'photo_privacy', about: 'about_privacy' }[key]] = body[key];
+    }
+  }
+  if (body.readReceipts !== undefined) {
+    if (body.readReceipts === true || body.readReceipts === 1) patch.read_receipts = true;
+    else if (body.readReceipts === false || body.readReceipts === 0) patch.read_receipts = false;
+    else return res.status(400).json({ ok: false, error: 'bad_privacy' });
+  }
+  if (body.groupAdd !== undefined) {
+    if (body.groupAdd !== 'everyone' && body.groupAdd !== 'contacts') {
+      return res.status(400).json({ ok: false, error: 'bad_privacy' });
+    }
+    patch.group_add_privacy = body.groupAdd;
+  }
+  if (body.defaultTimer !== undefined) {
+    const d = Number(body.defaultTimer);
+    if (!DISAPPEAR_OPTIONS.includes(d)) {
+      return res.status(400).json({ ok: false, error: 'bad_privacy' });
+    }
+    patch.default_timer = d;
+  }
+  if (!Object.keys(patch).length) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  const sets = Object.keys(patch).map((k) => k + ' = ?').join(', ');
+  await db.run(`UPDATE users SET ${sets} WHERE phone = ?`, ...Object.values(patch), req.phone);
+  return res.json({ ok: true, ...(await getPrivacy(req.phone)) });
+}));
+
+// People I blocked (per-user block, chat_settings) with their
+// viewer-aware profile — name always visible, avatar/about follow
+// their privacy settings for me.
+app.get('/api/blocked', ah(auth), ah(async (req, res) => {
+  const rows = await db.all(
+    'SELECT peer_phone FROM chat_settings WHERE owner_phone = ? AND blocked = TRUE ORDER BY peer_phone',
+    req.phone);
+  const blocked = [];
+  for (const r of rows) {
+    const u = await publicUser(r.peer_phone, req.phone);
+    blocked.push({ phone: u.phone, name: u.name, avatar: u.avatar, about: u.about });
+  }
+  return res.json({ ok: true, blocked });
+}));
+
+// ---- archive ---------------------------------------------------------------
+// Archived chats/groups are hidden from the inbox lists but kept —
+// unarchiving brings them back with their history intact.
+
+// Last-message + unread for one archived chat, mirroring the
+// /api/conversations row (Clear-chat, expiry, delete-for-me respected).
+async function archivedChatRow(me, peer) {
+  const t = now();
+  const mine = await getChatSettings(me, peer);
+  const recent = await db.all(
+    `SELECT id, sender, receiver, body, created_at, delivered, read,
+       deleted_for_all, deleted_for FROM messages
+     WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+     AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+     ORDER BY id DESC LIMIT 5`,
+    me, peer, peer, me, t, mine.clearedAt);
+  let last = null;
+  for (const r of recent) {
+    if (deletedForUser(r, me)) continue;
+    last = r;
+    break;
+  }
+  const unreadRows = await db.all(
+    `SELECT id, deleted_for FROM messages WHERE sender = ? AND receiver = ? AND read_local = FALSE
+     AND (expires_at = 0 OR expires_at > ?) AND created_at > ?`,
+    peer, me, t, mine.clearedAt);
+  const unread = unreadRows.filter((r) => !deletedForUser(r, me)).length;
+  const u = await publicUser(peer, me);
+  return {
+    kind: 'chat',
+    peer,
+    name: u.name || displayId(peer),
+    lastMessage: !last ? '' : last.deleted_for_all
+      ? (last.sender === me ? 'You deleted this message' : 'This message was deleted')
+      : last.body,
+    lastAt: last ? last.created_at : 0,
+    unread,
+  };
+}
+async function archivedGroupRow(me, groupId) {
+  const g = await db.get('SELECT id, name FROM groups WHERE id = ?', groupId);
+  if (!g) return null;
+  const mem = await db.get('SELECT joined_at, last_read_id FROM group_members WHERE group_id = ? AND phone = ?', groupId, me);
+  const joinedAt = mem ? mem.joined_at : 0;
+  const lastRead = mem ? mem.last_read_id || 0 : 0;
+  const lastRows = await db.all(
+    `SELECT id, sender, body, created_at, deleted_for_all, deleted_for FROM messages
+     WHERE group_id = ? AND created_at >= ? ORDER BY id DESC LIMIT 5`, groupId, joinedAt);
+  let last = null;
+  for (const cand of lastRows) {
+    if (deletedForUser(cand, me)) continue;
+    last = cand;
+    break;
+  }
+  const unreadRow = await db.get(
+    `SELECT COUNT(*) AS n FROM messages WHERE group_id = ? AND created_at >= ? AND id > ? AND sender != ?`,
+    groupId, joinedAt, lastRead, me);
+  return {
+    kind: 'group',
+    groupId: g.id,
+    name: g.name,
+    lastMessage: !last ? '' : last.deleted_for_all
+      ? (last.sender === me ? 'You deleted this message' : 'This message was deleted')
+      : last.body,
+    lastAt: last ? last.created_at : 0,
+    unread: unreadRow.n,
+  };
+}
+app.get('/api/archive', ah(auth), ah(async (req, res) => {
+  const rows = await db.all(
+    'SELECT kind, peer_phone, group_id FROM archived_chats WHERE owner_phone = ? ORDER BY created_at DESC',
+    req.phone);
+  const archived = [];
+  for (const r of rows) {
+    if (r.kind === 'chat') archived.push(await archivedChatRow(req.phone, r.peer_phone));
+    else if (r.kind === 'group') {
+      const row = await archivedGroupRow(req.phone, r.group_id);
+      if (row) archived.push(row);
+    }
+  }
+  return res.json({ ok: true, archived });
+}));
+app.post('/api/archive', ah(auth), ah(async (req, res) => {
+  const body = req.body || {};
+  const kind = String(body.kind || '');
+  const archived = body.archived;
+  if ((kind !== 'chat' && kind !== 'group') || typeof archived !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  if (kind === 'chat') {
+    const peer = normalizePeerOrSystem(body.peer);
+    if (!validIdentity(peer) || peer === req.phone) {
+      return res.status(400).json({ ok: false, error: 'bad_peer' });
+    }
+    if (archived) {
+      await db.run(
+        `INSERT INTO archived_chats (owner_phone, kind, peer_phone, group_id, created_at) VALUES (?, 'chat', ?, 0, ?)
+         ON CONFLICT DO NOTHING`,
+        req.phone, peer, now());
+    } else {
+      await db.run(
+        "DELETE FROM archived_chats WHERE owner_phone = ? AND kind = 'chat' AND peer_phone = ?",
+        req.phone, peer);
+    }
+    return res.json({ ok: true, archived });
+  }
+  const groupId = Number(body.groupId || 0);
+  if (!groupId) return res.status(400).json({ ok: false, error: 'bad_input' });
+  const g = await groupOrNull(groupId);
+  if (!g) return res.status(404).json({ ok: false, error: 'not_found' });
+  const mem = await db.get('SELECT 1 FROM group_members WHERE group_id = ? AND phone = ?', groupId, req.phone);
+  if (!mem) return res.status(403).json({ ok: false, error: 'not_member' });
+  if (archived) {
+    await db.run(
+      `INSERT INTO archived_chats (owner_phone, kind, peer_phone, group_id, created_at) VALUES (?, 'group', '', ?, ?)
+       ON CONFLICT DO NOTHING`,
+      req.phone, groupId, now());
+  } else {
+    await db.run(
+      "DELETE FROM archived_chats WHERE owner_phone = ? AND kind = 'group' AND group_id = ?",
+      req.phone, groupId);
+  }
+  return res.json({ ok: true, archived });
+}));
+
+// ---- backup ----------------------------------------------------------------
+// A full export of my chats: metadata only, never media bytes. Respects
+// Clear-chat, disappearing expiry and delete-for-me exactly like the
+// normal fetch. Capped at 5000 messages per conversation and 20000
+// total, so a huge history cannot blow up the response.
+const BACKUP_COLS = `id, sender, receiver, body, created_at, media_kind, media_name,
+  media_type, media_size, media_duration, reply_to, reply_body, reply_sender,
+  forwarded, edited_at, deleted_for_all, deleted_for`;
+function backupProject(row) {
+  const { deleted_for: _deletedFor, ...rest } = row;
+  // A message deleted for everyone exports as an empty placeholder,
+  // exactly as it renders in the chat — the original text stays hidden.
+  if (rest.deleted_for_all) rest.body = '';
+  return rest;
+}
+app.get('/api/backup', ah(auth), ah(async (req, res) => {
+  const t = now();
+  const user = await publicUser(req.phone, req.phone);
+  const contactRows = await db.all(
+    'SELECT contact_phone FROM contacts WHERE owner_phone = ? ORDER BY created_at', req.phone);
+  const contacts = [];
+  for (const r of contactRows) contacts.push(await publicUser(r.contact_phone, req.phone));
+  const peers = new Map();
+  for (const r of await db.all('SELECT contact_phone AS peer FROM contacts WHERE owner_phone = ?', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT sender AS peer FROM messages WHERE receiver = ? AND group_id IS NULL', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT receiver AS peer FROM messages WHERE sender = ? AND group_id IS NULL', req.phone)) peers.set(r.peer, true);
+  let total = 0;
+  const conversations = [];
+  for (const peer of peers.keys()) {
+    if (total >= 20000) break;
+    const mine = await getChatSettings(req.phone, peer);
+    const rows = await db.all(
+      `SELECT ${BACKUP_COLS} FROM messages
+       WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+         AND group_id IS NULL AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+       ORDER BY id ASC LIMIT 5000`,
+      req.phone, peer, peer, req.phone, t, mine.clearedAt);
+    const messages = rows
+      .filter((r) => !deletedForUser(r, req.phone))
+      .map(backupProject)
+      .slice(0, 20000 - total);
+    total += messages.length;
+    conversations.push({ peer, messages });
+  }
+  const groups = [];
+  const myGroups = await db.all(
+    `SELECT g.id, g.name, gm.joined_at FROM groups g
+     JOIN group_members gm ON gm.group_id = g.id AND gm.phone = ?
+     ORDER BY g.created_at DESC`, req.phone);
+  for (const g of myGroups) {
+    if (total >= 20000) break;
+    const rows = await db.all(
+      `SELECT ${BACKUP_COLS} FROM messages
+       WHERE group_id = ? AND created_at >= ? AND (expires_at = 0 OR expires_at > ?)
+       ORDER BY id ASC LIMIT 5000`,
+      g.id, g.joined_at, t);
+    const messages = rows
+      .filter((r) => !deletedForUser(r, req.phone))
+      .map(backupProject)
+      .slice(0, 20000 - total);
+    total += messages.length;
+    groups.push({ id: g.id, name: g.name, messages });
+  }
+  return res.json({ ok: true, backup: { exportedAt: t, user, contacts, conversations, groups } });
+}));
+
+// ---- account ---------------------------------------------------------------
+// Request my data (metadata only — no message bodies), change my
+// number, or delete my account. Change-number reuses the login OTP
+// machinery (otp_codes, codeRateLimited, email/SMS send with the same
+// test-code fallback as /api/request-code).
+
+app.post('/api/account/info', ah(auth), ah(async (req, res) => {
+  const t = now();
+  const priv = await getPrivacy(req.phone);
+  const profile = {
+    ...(await publicUser(req.phone, req.phone)),
+    lastSeenPrivacy: priv.lastSeen,
+    photoPrivacy: priv.photo,
+    aboutPrivacy: priv.about,
+    readReceipts: priv.readReceipts,
+    groupAddPrivacy: priv.groupAdd,
+    defaultTimer: priv.defaultTimer,
+  };
+  const contactRows = await db.all(
+    'SELECT contact_phone FROM contacts WHERE owner_phone = ? ORDER BY created_at', req.phone);
+  const contacts = [];
+  for (const r of contactRows) contacts.push(await publicUser(r.contact_phone, req.phone));
+  const peers = new Map();
+  for (const r of await db.all('SELECT contact_phone AS peer FROM contacts WHERE owner_phone = ?', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT sender AS peer FROM messages WHERE receiver = ? AND group_id IS NULL', req.phone)) peers.set(r.peer, true);
+  for (const r of await db.all('SELECT DISTINCT receiver AS peer FROM messages WHERE sender = ? AND group_id IS NULL', req.phone)) peers.set(r.peer, true);
+  const conversations = [];
+  for (const peer of peers.keys()) {
+    const mine = await getChatSettings(req.phone, peer);
+    const recent = await db.all(
+      `SELECT id, sender, receiver, body, created_at, deleted_for_all, deleted_for FROM messages
+       WHERE ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
+       AND (expires_at = 0 OR expires_at > ?) AND created_at > ?
+       ORDER BY id DESC LIMIT 5`,
+      req.phone, peer, peer, req.phone, t, mine.clearedAt);
+    let last = null;
+    for (const r of recent) {
+      if (deletedForUser(r, req.phone)) continue;
+      last = r;
+      break;
+    }
+    const unreadRows = await db.all(
+      `SELECT id, deleted_for FROM messages WHERE sender = ? AND receiver = ? AND read_local = FALSE
+       AND (expires_at = 0 OR expires_at > ?) AND created_at > ?`,
+      peer, req.phone, t, mine.clearedAt);
+    const unread = unreadRows.filter((r) => !deletedForUser(r, req.phone)).length;
+    conversations.push({
+      peer,
+      lastMessage: !last ? '' : last.deleted_for_all
+        ? (last.sender === req.phone ? 'You deleted this message' : 'This message was deleted')
+        : last.body,
+      lastAt: last ? last.created_at : 0,
+      unread,
+    });
+  }
+  conversations.sort((a, b) => b.lastAt - a.lastAt);
+  const chatSettings = await db.all(
+    `SELECT owner_phone, peer_phone, muted, disappearing, chat_theme, blocked,
+       cleared_at, media_visibility, favorite, bubble_color
+     FROM chat_settings WHERE owner_phone = ? ORDER BY peer_phone`,
+    req.phone);
+  const groupRows = await db.all(
+    `SELECT g.id, g.name, (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) AS member_count
+     FROM groups g JOIN group_members gm ON gm.group_id = g.id AND gm.phone = ?
+     ORDER BY g.created_at DESC`,
+    req.phone);
+  const groups = groupRows.map((g) => ({ id: g.id, name: g.name, memberCount: g.member_count }));
+  const statuses = await db.all(
+    'SELECT id, phone, text, created_at, expires_at FROM statuses WHERE phone = ? AND expires_at > ? ORDER BY created_at DESC',
+    req.phone, t);
+  return res.json({
+    ok: true,
+    data: { profile, contacts, conversations, chatSettings, groups, statuses, privacy: priv },
+  });
+}));
+
+// Issue a 6-digit code for a new identity, exactly like
+// /api/request-code: real email/SMS when configured, otherwise the
+// test-code fallback. Returns { via, testCode? }.
+async function issueChangeCode(newPhone) {
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  await db.run(
+    `INSERT INTO otp_codes (phone, code_hash, expires_at, attempts)
+     VALUES (?, ?, ?, 0)
+     ON CONFLICT(phone) DO UPDATE SET code_hash = excluded.code_hash,
+       expires_at = excluded.expires_at, attempts = 0`,
+    newPhone, hashCode(code), now() + CODE_TTL_MS);
+  if (newPhone.includes('@')) {
+    if (emailSender.isConfigured()) {
+      const r = await emailSender.sendOtp(newPhone, code);
+      if (r.sent) return { via: 'email' };
+      console.error('[change-number] email failed, falling back to test code:', r.reason);
+      return { via: 'test', testCode: code };
+    }
+    return { via: 'test', testCode: code };
+  }
+  if (isConfigured()) {
+    const r = await sendOtp(newPhone, code);
+    if (r.sent) return { via: 'sms' };
+    console.error('[change-number] SMS failed, falling back to test code:', r.reason);
+    return { via: 'test', testCode: code };
+  }
+  return { via: 'test', testCode: code };
+}
+
+// Normalise a proposed new identity (phone digits or Gmail), or ''.
+function normalizeNewIdentity(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (s.includes('@')) return isEmailAddr(s) ? normalizeEmail(s) : '';
+  return normalizePhone(s);
+}
+
+app.post('/api/account/change-number', ah(auth), ah(async (req, res) => {
+  const newPhone = normalizeNewIdentity(req.body && req.body.newPhone);
+  if (!validIdentity(newPhone)) {
+    return res.status(400).json({ ok: false, error: 'bad_identity' });
+  }
+  if (newPhone === req.phone) {
+    return res.status(400).json({ ok: false, error: 'same_identity' });
+  }
+  const exists = await db.get('SELECT phone FROM users WHERE phone = ?', newPhone);
+  if (exists) return res.status(409).json({ ok: false, error: 'identity_taken' });
+  if (codeRateLimited(newPhone)) {
+    return res.status(429).json({ ok: false, error: 'too_many_codes' });
+  }
+  const out = await issueChangeCode(newPhone);
+  return res.json({ ok: true, sent: true, via: out.via, ...(out.testCode ? { testCode: out.testCode } : {}) });
+}));
+
+// Move EVERYTHING from the old identity to the new one. On a PK clash
+// (e.g. both identities already have a contacts row for the same
+// peer) the NEW identity's existing row wins and the old conflicting
+// row is deleted first. NOTE: ADMIN_USERS is env-controlled and is
+// NOT migrated — an admin keeps admin rights only if the new identity
+// is itself listed in ADMIN_USERS.
+async function migrateIdentity(oldPhone, newPhone, currentToken) {
+  await db.run('UPDATE users SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  // Sessions: re-point the CURRENT token to the new phone, delete the
+  // old identity's other sessions (they are dead after the move).
+  await db.run('UPDATE sessions SET phone = ? WHERE token = ?', newPhone, currentToken);
+  await db.run('DELETE FROM sessions WHERE phone = ?', oldPhone);
+  await db.run('DELETE FROM otp_codes WHERE phone = ?', oldPhone);
+  // Contacts, both directions (self-contact rows cannot survive).
+  await db.run('DELETE FROM contacts WHERE owner_phone = ? AND contact_phone IN (SELECT contact_phone FROM contacts WHERE owner_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE contacts SET owner_phone = ? WHERE owner_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM contacts WHERE contact_phone = ? AND owner_phone IN (SELECT owner_phone FROM contacts WHERE contact_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE contacts SET contact_phone = ? WHERE contact_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM contacts WHERE owner_phone = ? AND contact_phone = ?', newPhone, newPhone);
+  // Messages, both directions.
+  await db.run('UPDATE messages SET sender = ? WHERE sender = ?', newPhone, oldPhone);
+  await db.run('UPDATE messages SET receiver = ? WHERE receiver = ?', newPhone, oldPhone);
+  // Per-chat settings, both directions.
+  await db.run('DELETE FROM chat_settings WHERE owner_phone = ? AND peer_phone IN (SELECT peer_phone FROM chat_settings WHERE owner_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE chat_settings SET owner_phone = ? WHERE owner_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM chat_settings WHERE peer_phone = ? AND owner_phone IN (SELECT owner_phone FROM chat_settings WHERE peer_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE chat_settings SET peer_phone = ? WHERE peer_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM chat_settings WHERE owner_phone = ? AND peer_phone = ?', newPhone, newPhone);
+  // Groups I created, and my memberships (keep the admin role on a
+  // clash: if I was admin of a group the new identity already joined,
+  // the new row becomes admin before the old row is dropped).
+  await db.run('UPDATE groups SET created_by = ? WHERE created_by = ?', newPhone, oldPhone);
+  await db.run("UPDATE group_members SET role = 'admin' WHERE phone = ? AND group_id IN (SELECT group_id FROM group_members WHERE phone = ? AND role = 'admin')", newPhone, oldPhone);
+  await db.run('DELETE FROM group_members WHERE phone = ? AND group_id IN (SELECT group_id FROM group_members WHERE phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE group_members SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE statuses SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE channels SET owner_phone = ? WHERE owner_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM channel_follows WHERE phone = ? AND channel_id IN (SELECT channel_id FROM channel_follows WHERE phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE channel_follows SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE channel_posts SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE call_signals SET from_phone = ? WHERE from_phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE call_signals SET to_phone = ? WHERE to_phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE push_subscriptions SET user_phone = ? WHERE user_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM reactions WHERE phone = ? AND message_id IN (SELECT message_id FROM reactions WHERE phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE reactions SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM stars WHERE phone = ? AND message_id IN (SELECT message_id FROM stars WHERE phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE stars SET phone = ? WHERE phone = ?', newPhone, oldPhone);
+  await db.run('UPDATE reports SET reporter = ? WHERE reporter = ?', newPhone, oldPhone);
+  await db.run('UPDATE reports SET reported = ? WHERE reported = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM archived_chats WHERE owner_phone = ? AND (kind, peer_phone, group_id) IN (SELECT kind, peer_phone, group_id FROM archived_chats WHERE owner_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE archived_chats SET owner_phone = ? WHERE owner_phone = ?', newPhone, oldPhone);
+  await db.run('DELETE FROM archived_chats WHERE peer_phone = ? AND (owner_phone, kind, group_id) IN (SELECT owner_phone, kind, group_id FROM archived_chats WHERE peer_phone = ?)', oldPhone, newPhone);
+  await db.run('UPDATE archived_chats SET peer_phone = ? WHERE peer_phone = ?', newPhone, oldPhone);
+}
+
+app.post('/api/account/change-number/confirm', ah(auth), ah(async (req, res) => {
+  const newPhone = normalizeNewIdentity(req.body && req.body.newPhone);
+  const code = String((req.body && req.body.code) || '').replace(/\D/g, '');
+  if (!validIdentity(newPhone)) {
+    return res.status(400).json({ ok: false, error: 'bad_identity' });
+  }
+  if (newPhone === req.phone) {
+    return res.status(400).json({ ok: false, error: 'same_identity' });
+  }
+  if (code.length !== 6) {
+    return res.status(400).json({ ok: false, error: 'bad_input' });
+  }
+  // Re-checked at confirm time: the identity may have been taken
+  // since the code was requested.
+  const exists = await db.get('SELECT phone FROM users WHERE phone = ?', newPhone);
+  if (exists) return res.status(409).json({ ok: false, error: 'identity_taken' });
+  // Verify the code exactly like /api/verify-code (expiry + 5 attempts).
+  const row = await db.get('SELECT * FROM otp_codes WHERE phone = ?', newPhone);
+  if (!row) return res.status(400).json({ ok: false, error: 'no_code' });
+  if (row.expires_at < now()) {
+    return res.status(400).json({ ok: false, error: 'code_expired' });
+  }
+  if (row.attempts >= 5) {
+    return res.status(429).json({ ok: false, error: 'too_many_attempts' });
+  }
+  if (row.code_hash !== hashCode(code)) {
+    await db.run('UPDATE otp_codes SET attempts = attempts + 1 WHERE phone = ?', newPhone);
+    return res.status(400).json({ ok: false, error: 'wrong_code' });
+  }
+  await db.run('DELETE FROM otp_codes WHERE phone = ?', newPhone);
+  await migrateIdentity(req.phone, newPhone, req.token);
+  return res.json({ ok: true, phone: newPhone });
+}));
+
+// Delete my account and everything tied to it. Groups I administered
+// pass admin to their earliest-joined remaining member first (like
+// the leave endpoint), so they are never left without one; channels
+// I own go with their follows and posts. { confirm: true } is
+// required — anything else is a 400.
+app.post('/api/account/delete', ah(auth), ah(async (req, res) => {
+  if (!(req.body && req.body.confirm === true)) {
+    return res.status(400).json({ ok: false, error: 'confirm_required' });
+  }
+  const me = req.phone;
+  await db.run('DELETE FROM sessions WHERE phone = ?', me);
+  await db.run('DELETE FROM otp_codes WHERE phone = ?', me);
+  await db.run('DELETE FROM contacts WHERE owner_phone = ? OR contact_phone = ?', me, me);
+  await db.run('DELETE FROM messages WHERE sender = ? OR receiver = ?', me, me);
+  await db.run('DELETE FROM reactions WHERE phone = ?', me);
+  await db.run('DELETE FROM stars WHERE phone = ?', me);
+  await db.run('DELETE FROM chat_settings WHERE owner_phone = ? OR peer_phone = ?', me, me);
+  const adminGroups = await db.all("SELECT group_id FROM group_members WHERE phone = ? AND role = 'admin'", me);
+  for (const g of adminGroups) {
+    const next = await db.get(
+      'SELECT phone FROM group_members WHERE group_id = ? AND phone != ? ORDER BY joined_at ASC LIMIT 1',
+      g.group_id, me);
+    if (next) {
+      await db.run("UPDATE group_members SET role = 'admin' WHERE group_id = ? AND phone = ?", g.group_id, next.phone);
+    }
+  }
+  await db.run('DELETE FROM group_members WHERE phone = ?', me);
+  await db.run('DELETE FROM statuses WHERE phone = ?', me);
+  await db.run('DELETE FROM channel_follows WHERE phone = ?', me);
+  await db.run('DELETE FROM channel_posts WHERE phone = ?', me);
+  const myChannels = await db.all('SELECT id FROM channels WHERE owner_phone = ?', me);
+  for (const c of myChannels) {
+    await db.run('DELETE FROM channel_posts WHERE channel_id = ?', c.id);
+    await db.run('DELETE FROM channel_follows WHERE channel_id = ?', c.id);
+  }
+  await db.run('DELETE FROM channels WHERE owner_phone = ?', me);
+  await db.run('DELETE FROM call_signals WHERE from_phone = ? OR to_phone = ?', me, me);
+  await db.run('DELETE FROM push_subscriptions WHERE user_phone = ?', me);
+  await db.run('DELETE FROM reports WHERE reporter = ? OR reported = ?', me, me);
+  await db.run('DELETE FROM archived_chats WHERE owner_phone = ? OR peer_phone = ?', me, me);
+  await db.run('DELETE FROM users WHERE phone = ?', me);
+  return res.json({ ok: true });
+}));
+
 // ---- report a peer to the admins ------------------------------------------
 // The reason is a short free text and may be empty. Reports land in the
 // `reports` table; the Admin panel lists them with a Block action for
@@ -1087,7 +1706,13 @@ app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
   if (!withPhone) return res.status(400).json({ ok: false, error: 'bad_peer' });
   const t = now();
   const mine = await getChatSettings(req.phone, withPhone);
-  const peer = await db.get('SELECT phone, name, avatar, about, created_at, last_seen FROM users WHERE phone = ?', withPhone);
+  const peerRow = await db.get('SELECT phone, name, avatar, about, created_at, last_seen FROM users WHERE phone = ?', withPhone);
+  // Viewer-aware peer info: avatar / about / last seen follow the
+  // peer's privacy settings for me (name is always visible).
+  const pub = await publicUser(withPhone, req.phone);
+  const peer = peerRow
+    ? { phone: pub.phone, name: pub.name, avatar: pub.avatar, about: pub.about, created_at: peerRow.created_at, last_seen: pub.lastSeen, lastSeen: pub.lastSeen }
+    : { phone: withPhone, name: '', avatar: '', about: '', created_at: 0, last_seen: 0, lastSeen: 0 };
   const rows = await db.all(
     `SELECT id, sender, media_kind, media_name, media_type, media_size, media_duration, created_at,
        deleted_for_all, deleted_for FROM messages
@@ -1099,7 +1724,7 @@ app.get('/api/chat-media', ah(auth), ah(async (req, res) => {
   // deleted-for-everyone ones, and not the ones I deleted for myself.
   // View-once media never shows either: it is gone after one view.
   const visible = rows.filter((r) => !r.deleted_for_all && !deletedForUser(r, req.phone));
-  return res.json({ ok: true, peer: peer || { phone: withPhone, name: '', avatar: '', about: '', created_at: 0, last_seen: 0 }, media: visible });
+  return res.json({ ok: true, peer, media: visible });
 }));
 
 // ---- media messages: photo / video / voice note / file ---------------------
@@ -1347,7 +1972,7 @@ app.get('/api/statuses', ah(auth), ah(async (req, res) => {
     ...visible, t);
   const statuses = [];
   for (const r of rows) {
-    statuses.push({ ...r, mine: r.phone === req.phone, ...(await publicUser(r.phone)) });
+    statuses.push({ ...r, mine: r.phone === req.phone, ...(await publicUser(r.phone, req.phone)) });
   }
   return res.json({ ok: true, statuses });
 }));
@@ -1481,19 +2106,31 @@ app.post('/api/channels/:id/posts', ah(auth), ah(async (req, res) => {
 async function groupOrNull(id) {
   return db.get('SELECT * FROM groups WHERE id = ?', id);
 }
-async function groupMembers(id) {
+async function groupMembers(id, viewer) {
   const rows = await db.all('SELECT phone, role, joined_at, last_read_id FROM group_members WHERE group_id = ? ORDER BY joined_at ASC', id);
   const out = [];
-  for (const r of rows) out.push({ ...(await publicUser(r.phone)), role: r.role, joined_at: r.joined_at, last_read_id: r.last_read_id });
+  for (const r of rows) out.push({ ...(await publicUser(r.phone, viewer)), role: r.role, joined_at: r.joined_at, last_read_id: r.last_read_id });
   return out;
 }
 // A group message counts as seen only when every member who was in
 // the group when it was sent — and is not the sender — has read past
 // it. A member who joined later never blocks the blue ticks.
+// last_read_receipt (not last_read_id) is the marker: it advances
+// only when that member has read receipts ON, so a member with
+// receipts off never sends a blue tick.
 function groupRead(members, msg, me) {
   const others = members.filter((m) => m.phone !== me && m.joined_at <= msg.created_at);
   if (!others.length) return false;
-  return others.every((m) => (m.last_read_id || 0) >= msg.id);
+  return others.every((m) => (m.last_read_receipt || 0) >= msg.id);
+}
+// May `adder` add `candidate` to a group? The CANDIDATE's
+// group_add_privacy decides: 'everyone' allows anyone; 'contacts'
+// allows only an adder the candidate has in their contacts.
+async function groupAddAllowed(candidate, adder) {
+  if (candidate === adder) return true;
+  const priv = await getPrivacy(candidate);
+  if (priv.groupAdd === 'everyone') return true;
+  return isContact(candidate, adder);
 }
 async function requireGroupMember(req, res, id) {
   const group = await groupOrNull(id);
@@ -1516,11 +2153,15 @@ app.post('/api/groups', ah(auth), ah(async (req, res) => {
   const inserted = await db.get('INSERT INTO groups (name, created_by, created_at) VALUES (?, ?, ?) RETURNING id', name, req.phone, t);
   const gid = inserted.id;
   await db.run('INSERT INTO group_members (group_id, phone, role, joined_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING', gid, req.phone, 'admin', t);
+  // Each candidate's own group_add_privacy decides: a 'contacts'-only
+  // candidate who has not added me is skipped, never added.
+  const skipped = [];
   for (const p of phones) {
+    if (!(await groupAddAllowed(p, req.phone))) { skipped.push(p); continue; }
     await db.run('INSERT INTO group_members (group_id, phone, role, joined_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING', gid, p, 'member', t);
   }
-  const members = await groupMembers(gid);
-  return res.json({ ok: true, group: { id: gid, name, created_by: req.phone, created_at: t, members, memberCount: members.length } });
+  const members = await groupMembers(gid, req.phone);
+  return res.json({ ok: true, skipped, group: { id: gid, name, created_by: req.phone, created_at: t, members, memberCount: members.length } });
 }));
 // My groups, with member list, last message and unread count.
 app.get('/api/groups', ah(auth), ah(async (req, res) => {
@@ -1530,7 +2171,7 @@ app.get('/api/groups', ah(auth), ah(async (req, res) => {
      ORDER BY g.created_at DESC`, req.phone);
   const out = [];
   for (const r of rows) {
-    const members = await groupMembers(r.id);
+    const members = await groupMembers(r.id, req.phone);
     const lastRows = await db.all(
       `SELECT id, sender, body, created_at, deleted_for_all, deleted_for FROM messages
        WHERE group_id = ? AND created_at >= ? ORDER BY id DESC LIMIT 5`, r.id, r.joined_at);
@@ -1541,15 +2182,19 @@ app.get('/api/groups', ah(auth), ah(async (req, res) => {
       else last = cand;
       break;
     }
-    const lastSenderName = last ? ((await publicUser(last.sender)).name || displayId(last.sender)) : '';
+    const lastSenderName = last ? ((await publicUser(last.sender, req.phone)).name || displayId(last.sender)) : '';
     const unreadRow = await db.get(
       `SELECT COUNT(*) AS n FROM messages WHERE group_id = ? AND created_at >= ? AND id > ? AND sender != ?`,
       r.id, r.joined_at, r.last_read_id || 0, req.phone);
+    const archivedRow = await db.get(
+      "SELECT 1 AS x FROM archived_chats WHERE owner_phone = ? AND kind = 'group' AND group_id = ?",
+      req.phone, r.id);
     out.push({
       id: r.id, name: r.name, created_by: r.created_by, created_at: r.created_at,
       members, memberCount: members.length,
       lastMessage: last ? last.body : '', lastSenderName, lastAt: last ? last.created_at : 0,
       unread: unreadRow.n,
+      archived: archivedRow ? 1 : 0,
     });
   }
   return res.json({ ok: true, groups: out });
@@ -1559,7 +2204,7 @@ app.get('/api/groups/:id', ah(auth), ah(async (req, res) => {
   const id = Number(req.params.id);
   const found = await requireGroupMember(req, res, id);
   if (!found) return;
-  const members = await groupMembers(id);
+  const members = await groupMembers(id, req.phone);
   return res.json({ ok: true, group: { ...found.group, members, memberCount: members.length } });
 }));
 // Add members — any member may add, no limit.
@@ -1571,14 +2216,17 @@ app.post('/api/groups/:id/members', ah(auth), ah(async (req, res) => {
   const list = Array.isArray(raw.phones) ? raw.phones : (raw.phone ? [raw.phone] : []);
   const t = now();
   let added = 0;
+  const skipped = [];
   for (const pRaw of list) {
     const p = normalizePeer(pRaw);
     if (!validIdentity(p)) continue;
+    // The candidate's own group_add_privacy decides (see groupAddAllowed).
+    if (!(await groupAddAllowed(p, req.phone))) { skipped.push(p); continue; }
     const r = await db.run('INSERT INTO group_members (group_id, phone, role, joined_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING', id, p, 'member', t);
     if ((r.changes || 0) > 0) added++;
   }
-  const members = await groupMembers(id);
-  return res.json({ ok: true, added, group: { ...found.group, members, memberCount: members.length } });
+  const members = await groupMembers(id, req.phone);
+  return res.json({ ok: true, added, skipped, group: { ...found.group, members, memberCount: members.length } });
 }));
 // Remove a member — creator/admins only, never yourself (use leave).
 app.delete('/api/groups/:id/members/:phone', ah(auth), ah(async (req, res) => {
@@ -1635,14 +2283,21 @@ app.get('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
     req.phone, id);
   // My fetch delivers the messages from others to me.
   await db.run('UPDATE messages SET delivered = TRUE WHERE group_id = ? AND sender != ? AND delivered = FALSE AND created_at >= ?', id, req.phone, me.joined_at);
+  // last_read_id always advances (local unread / fetch marker).
+  // last_read_receipt advances ONLY when my read receipts are ON —
+  // with them off I never send a blue tick to the group.
+  const myPrivacy = await getPrivacy(req.phone);
   if (visible.length) {
     const maxId = Math.max(...visible.map((r) => r.id));
     await db.run('UPDATE group_members SET last_read_id = ? WHERE group_id = ? AND phone = ? AND last_read_id < ?', maxId, id, req.phone, maxId);
+    if (myPrivacy.readReceipts) {
+      await db.run('UPDATE group_members SET last_read_receipt = ? WHERE group_id = ? AND phone = ? AND last_read_receipt < ?', maxId, id, req.phone, maxId);
+    }
   }
-  const allMembers = await db.all('SELECT phone, role, joined_at, last_read_id FROM group_members WHERE group_id = ?', id);
+  const allMembers = await db.all('SELECT phone, role, joined_at, last_read_id, last_read_receipt FROM group_members WHERE group_id = ?', id);
   const senderCache = new Map();
   const senderInfo = async (phone) => {
-    if (!senderCache.has(phone)) senderCache.set(phone, await publicUser(phone));
+    if (!senderCache.has(phone)) senderCache.set(phone, await publicUser(phone, req.phone));
     return senderCache.get(phone);
   };
   const messages = [];
@@ -1652,12 +2307,13 @@ app.get('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
       ...r,
       senderName: s.name || displayId(r.sender),
       senderAvatar: s.avatar || '',
-      read: r.sender === req.phone ? (groupRead(allMembers, r, req.phone) ? 1 : 0) : r.read,
+      // With my receipts off, my own messages never show as read.
+      read: !myPrivacy.readReceipts ? 0 : (r.sender === req.phone ? (groupRead(allMembers, r, req.phone) ? 1 : 0) : r.read),
     });
   }
   const myRows = await db.all('SELECT id, delivered, created_at FROM messages WHERE group_id = ? AND sender = ? AND created_at >= ? ORDER BY id DESC LIMIT 100', id, req.phone, me.joined_at);
-  const ticks = myRows.map((r) => ({ id: r.id, delivered: r.delivered, read: groupRead(allMembers, r, req.phone) ? 1 : 0 }));
-  const members = await groupMembers(id);
+  const ticks = myRows.map((r) => ({ id: r.id, delivered: r.delivered, read: !myPrivacy.readReceipts ? 0 : (groupRead(allMembers, r, req.phone) ? 1 : 0) }));
+  const members = await groupMembers(id, req.phone);
   return res.json({ ok: true, messages, ticks, group: { id, name: found.group.name, memberCount: members.length }, viewedOnce: viewedOnce.map((r) => r.id) });
 }));
 app.post('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
@@ -1673,9 +2329,14 @@ app.post('/api/groups/:id/messages', ah(auth), ah(async (req, res) => {
     if (!reply) return res.status(400).json({ ok: false, error: 'bad_reply' });
   }
   const t = now();
+  // Group text messages expire from the SENDER's default message
+  // timer (Settings > Privacy), if they set one — groups have no
+  // per-chat disappearing setting of their own.
+  const senderPrivacy = await getPrivacy(req.phone);
+  const expiresAt = senderPrivacy.defaultTimer ? t + senderPrivacy.defaultTimer * 1000 : 0;
   const inserted = await db.get(
-    `INSERT INTO messages (sender, receiver, body, created_at, group_id, reply_to, reply_body, reply_sender, reply_media_kind) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    req.phone, body, t, id,
+    `INSERT INTO messages (sender, receiver, body, created_at, expires_at, group_id, reply_to, reply_body, reply_sender, reply_media_kind) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    req.phone, body, t, expiresAt, id,
     reply ? reply.reply_to : null, reply ? reply.reply_body : '', reply ? reply.reply_sender : '', reply ? reply.reply_media_kind : '');
   const row = await db.get('SELECT * FROM messages WHERE id = ?', inserted.id);
   row.reactions = [];
