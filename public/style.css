@@ -615,6 +615,10 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 /* Tone pickers: 15 ringtones + customs is a long list, so it scrolls
    inside the dialog. Custom tones get a red delete × on the right. */
 #ringtone-dialog .option-list, #msgtone-dialog .option-list { max-height: 52vh; overflow-y: auto; }
+/* Choice + inbox-row dialogs scroll the same way. */
+#choice-dialog .option-list, #inbox-row-dialog .option-list { max-height: 52vh; overflow-y: auto; }
+/* Small action button inside a list row (Unblock / Unarchive). */
+.mini-btn { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 700; color: var(--green-dark); cursor: pointer; font-family: inherit; flex-shrink: 0; }
 .option-btn.tone-btn { display: flex; align-items: center; gap: 8px; }
 .option-btn.tone-btn span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tone-del { color: var(--danger); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; flex-shrink: 0; }
