@@ -884,16 +884,6 @@ function consumeRowClick() {
   suppressRowClick = false;
   return true;
 }
-function attachInboxRowPin(row, key) {
-  let timer = null;
-  row.addEventListener('pointerdown', () => {
-    timer = setTimeout(() => { suppressRowClick = true; togglePin(key); }, 500);
-  });
-  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) {
-    row.addEventListener(ev, () => clearTimeout(timer));
-  }
-  row.addEventListener('contextmenu', (e) => { e.preventDefault(); togglePin(key); });
-}
 function renderInbox() {
   const q = chatSearch.trim().toLowerCase();
   const list = $('chat-list');
@@ -906,10 +896,10 @@ function renderInbox() {
   // from that cache through this same path.
   if (!inboxLoaded && !inboxCached) {
     if (inboxLoadFailed) {
-      list.innerHTML = '<div class="inbox-error" id="inbox-error">Couldn\'t load chats. Tap to retry.</div>';
+      list.innerHTML = '<div class="inbox-error" id="inbox-error">' + escapeHtml(t('inbox.error')) + '</div>';
       $('inbox-error').addEventListener('click', retryInboxLoad);
     } else {
-      list.innerHTML = '<div class="inbox-loading">Loading chats…</div>';
+      list.innerHTML = '<div class="inbox-loading">' + escapeHtml(t('inbox.loading')) + '</div>';
     }
     return;
   }
@@ -918,18 +908,21 @@ function renderInbox() {
   if (inboxCached && inboxRefreshFailed) {
     const hint = document.createElement('div');
     hint.className = 'inbox-refresh-hint';
-    hint.textContent = "Couldn't refresh - showing saved chats.";
+    hint.textContent = t('inbox.stale');
     list.appendChild(hint);
   }
   // Locked chats are hidden from the list entirely (see the chat-lock
   // section) — they only surface through the "Locked chats" row below.
+  // Archived chats are hidden the same way — they live under the
+  // "Archived" row at the top instead.
   const lockedSet = new Set(getLockedChats());
+  const archivedTotal = archivedCount();
   // 1-to-1 chats and groups share one list, newest first — exactly
   // like WhatsApp. A group row shows its name, the last message
   // prefixed with the sender's name ("Sany: Hi"), and a 👥 avatar.
-  const rows = conversations.filter((c) => !lockedSet.has(c.phone) && (!q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q)))
+  const rows = conversations.filter((c) => !lockedSet.has(c.phone) && !c.archived && (!q || peerName(c).toLowerCase().includes(q) || c.phone.includes(q)))
     .map((c) => ({ kind: 'chat', ...c }));
-  const grows = myGroups.filter((g) => !q || g.name.toLowerCase().includes(q))
+  const grows = myGroups.filter((g) => !g.archived && (!q || g.name.toLowerCase().includes(q)))
     .map((g) => ({ kind: 'group', ...g }));
   let all = [...rows, ...grows].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   // Pinned chats stick to the top (newest first among pinned).
@@ -946,11 +939,26 @@ function renderInbox() {
   // returned zero chats (or a clean cached list that was empty when
   // saved). A failed refresh never produces it — with a cached-empty
   // list and a failed refresh, only the hint above shows.
-  if (!all.length && (inboxLoaded || !inboxRefreshFailed)) {
+  if (!all.length && (inboxLoaded || !inboxRefreshFailed) && !archivedTotal) {
     const note = document.createElement('div');
     note.className = 'empty-note';
-    note.innerHTML = 'Inbox is empty.<br>Tap the green + button to add a friend\'s number or Gmail and start messaging.';
+    note.innerHTML = t('inbox.empty');
     list.appendChild(note);
+  }
+  // Archived chats: one row at the top (WhatsApp-style), with the count.
+  if (archivedTotal && !q) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">📥</div><div class="chat-row-body">' +
+      '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(t('inbox.archived')) + '</span>' +
+      '<span class="chat-row-time"></span></div>' +
+      '<div class="chat-row-top"><span class="chat-row-msg">' + bn(archivedTotal) + ' ' + escapeHtml(t('inbox.archivedChats')) + (getLang() === 'en' && archivedTotal !== 1 ? 's' : '') + '</span></div></div>';
+    row.addEventListener('click', () => {
+      renderArchivedList();
+      $('archived-overlay').classList.remove('hidden');
+      pushBackLayer('archived-overlay', () => hideLayer('archived-overlay'));
+    });
+    list.appendChild(row);
   }
   for (const c of all) {
     if (c.kind === 'group') {
@@ -968,7 +976,7 @@ function renderInbox() {
           (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
         '</div>';
       row.addEventListener('click', () => { if (consumeRowClick()) return; openGroup(c.id, c.name); });
-      attachInboxRowPin(row, 'group:' + c.id);
+      attachInboxRowMenu(row, 'group', 'group:' + c.id, c.name);
       list.appendChild(row);
       continue;
     }
@@ -990,7 +998,7 @@ function renderInbox() {
         (c.unread ? '<span class="badge">' + bn(c.unread) + '</span>' : '') + '</div>' +
       '</div>';
     row.addEventListener('click', () => { if (consumeRowClick()) return; openChat(c.phone, c.name); });
-    attachInboxRowPin(row, c.phone);
+    attachInboxRowMenu(row, 'chat', c.phone, peerName(c));
     list.appendChild(row);
   }
   // Locked chats stay hidden from the list; one row at the bottom opens
@@ -1000,9 +1008,9 @@ function renderInbox() {
     const row = document.createElement('div');
     row.className = 'chat-row';
     row.innerHTML = '<div class="avatar">🔒</div><div class="chat-row-body">' +
-      '<div class="chat-row-top"><span class="chat-row-name">Locked chats</span>' +
+      '<div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(t('inbox.locked')) + '</span>' +
       '<span class="chat-row-time"></span></div>' +
-      '<div class="chat-row-top"><span class="chat-row-msg">' + bn(locked.length) + ' hidden chat' + (locked.length === 1 ? '' : 's') + '</span></div></div>';
+      '<div class="chat-row-top"><span class="chat-row-msg">' + bn(locked.length) + ' ' + escapeHtml(t('inbox.hiddenChats')) + (getLang() === 'en' && locked.length !== 1 ? 's' : '') + '</span></div></div>';
     row.addEventListener('click', async () => {
       if (!(await verifyLockPin('Enter your PIN to see your locked chats.'))) return;
       renderLockedChatsDialog();
@@ -1012,9 +1020,9 @@ function renderInbox() {
     list.appendChild(row);
   }
   // Total unread on the Chats tab (green circle, hidden at 0) — chats
-  // and groups together. Locked chats do not count while hidden.
-  const totalUnread = conversations.filter((c) => !lockedSet.has(c.phone)).reduce((s, c) => s + (c.unread || 0), 0)
-    + myGroups.reduce((s, g) => s + (g.unread || 0), 0);
+  // and groups together. Locked and archived chats do not count while hidden.
+  const totalUnread = conversations.filter((c) => !lockedSet.has(c.phone) && !c.archived).reduce((s, c) => s + (c.unread || 0), 0)
+    + myGroups.filter((g) => !g.archived).reduce((s, g) => s + (g.unread || 0), 0);
   const badge = $('nav-chats-badge');
   badge.textContent = bn(totalUnread);
   badge.classList.toggle('hidden', totalUnread === 0);
@@ -1432,9 +1440,9 @@ function applyChatTheme() {
 }
 function updateChatMenuLabels() {
   if (!chatSettings) return;
-  $('menu-mute').textContent = chatSettings.muted ? 'Unmute notifications' : 'Mute notifications';
-  $('menu-block').textContent = chatSettings.blockedByMe ? 'Unblock' : 'Block';
-  $('menu-favorite').textContent = chatSettings.favorite ? 'Remove from Favorites' : 'Add to Favorites';
+  $('menu-mute').textContent = chatSettings.muted ? t('menu.unmute') : t('menu.mute');
+  $('menu-block').textContent = chatSettings.blockedByMe ? t('menu.unblock') : t('menu.block');
+  $('menu-favorite').textContent = chatSettings.favorite ? t('menu.unfavorite') : t('menu.favorite');
 }
 function updateBlockedNote() {
   const note = $('chat-blocked-note');
@@ -3713,6 +3721,557 @@ $('settings-invite-row').addEventListener('click', async () => {
   }
 });
 
+// ---- Generic choice + confirm dialogs (Settings) -----------------------
+// A small option list in a dialog: tap an option to pick it (the dialog
+// closes itself). Used by the Privacy choices and the message timer.
+function showChoiceDialog(title, options, onPick) {
+  $('choice-dialog-title').textContent = title;
+  const list = $('choice-dialog-list');
+  list.innerHTML = '';
+  list.className = 'option-list';
+  for (const o of options) {
+    const b = document.createElement('button');
+    b.className = 'option-btn' + (o.selected ? ' selected' : '');
+    b.type = 'button';
+    b.textContent = o.label;
+    b.addEventListener('click', () => {
+      hideLayer('choice-dialog');
+      onPick(o.value);
+    });
+    list.appendChild(b);
+  }
+  $('choice-dialog').classList.remove('hidden');
+  pushBackLayer('choice-dialog', () => hideLayer('choice-dialog'));
+}
+$('btn-choice-cancel').addEventListener('click', () => goBackLayer('choice-dialog'));
+// A yes/no confirm that resolves true/false. Used by Delete my account.
+let confirmResolve = null;
+function showConfirmDialog(title, message, okLabel) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    $('confirm-dialog-title').textContent = title;
+    $('confirm-dialog-message').textContent = message;
+    $('btn-confirm-ok').textContent = okLabel || 'Yes';
+    $('confirm-dialog').classList.remove('hidden');
+    pushBackLayer('confirm-dialog', () => { hideLayer('confirm-dialog'); if (confirmResolve) { const r = confirmResolve; confirmResolve = null; r(false); } });
+  });
+}
+$('btn-confirm-cancel').addEventListener('click', () => goBackLayer('confirm-dialog'));
+$('btn-confirm-ok').addEventListener('click', () => {
+  hideLayer('confirm-dialog');
+  if (confirmResolve) { const r = confirmResolve; confirmResolve = null; r(true); }
+});
+
+// ---- Privacy settings ------------------------------------------------------
+// Server-stored (GET/POST /api/privacy), enforced on the server: who can
+// see my last seen / photo / About, read receipts, who can add me to
+// groups, and the default message timer for new chats. The values ride
+// on /api/me (myProfile), so the screen renders without another call.
+const PRIVACY_LABELS = { everyone: 'Everyone', contacts: 'My contacts', nobody: 'Nobody' };
+const TIMER_LABELS = { 0: 'Off', 86400: '24 hours', 604800: '7 days', 7776000: '90 days' };
+function privacyValues() {
+  const p = myProfile || {};
+  return {
+    lastSeen: p.lastSeenPrivacy || 'everyone',
+    photo: p.photoPrivacy || 'everyone',
+    about: p.aboutPrivacy || 'everyone',
+    readReceipts: p.readReceipts === undefined ? 1 : p.readReceipts,
+    groupAdd: p.groupAddPrivacy || 'everyone',
+    defaultTimer: p.defaultTimer || 0,
+  };
+}
+function renderPrivacyRows() {
+  const v = privacyValues();
+  $('privacy-lastseen-state').textContent = PRIVACY_LABELS[v.lastSeen] || v.lastSeen;
+  $('privacy-photo-state').textContent = PRIVACY_LABELS[v.photo] || v.photo;
+  $('privacy-about-state').textContent = PRIVACY_LABELS[v.about] || v.about;
+  $('privacy-receipts-state').textContent = v.readReceipts ? 'On' : 'Off';
+  $('privacy-groups-state').textContent = PRIVACY_LABELS[v.groupAdd] || v.groupAdd;
+  $('privacy-timer-state').textContent = TIMER_LABELS[v.defaultTimer] || 'Off';
+  renderAppLockRow();
+  refreshBlockedCount();
+}
+async function savePrivacy(patch) {
+  try {
+    const r = await api('/api/privacy', { method: 'POST', body: JSON.stringify(patch) });
+    if (myProfile) {
+      if (r.lastSeen !== undefined) myProfile.lastSeenPrivacy = r.lastSeen;
+      if (r.photo !== undefined) myProfile.photoPrivacy = r.photo;
+      if (r.about !== undefined) myProfile.aboutPrivacy = r.about;
+      if (r.readReceipts !== undefined) myProfile.readReceipts = r.readReceipts;
+      if (r.groupAdd !== undefined) myProfile.groupAddPrivacy = r.groupAdd;
+      if (r.defaultTimer !== undefined) myProfile.defaultTimer = r.defaultTimer;
+    }
+    renderPrivacyRows();
+  } catch {
+    toast("Couldn't save — check your connection and try again");
+  }
+}
+const PRIVACY_CHOICES = [
+  { value: 'everyone', label: 'Everyone' },
+  { value: 'contacts', label: 'My contacts' },
+  { value: 'nobody', label: 'Nobody' },
+];
+$('privacy-lastseen-row').addEventListener('click', () => {
+  const v = privacyValues().lastSeen;
+  showChoiceDialog('Last seen', PRIVACY_CHOICES.map((o) => ({ ...o, selected: o.value === v })), (val) => savePrivacy({ lastSeen: val }));
+});
+$('privacy-photo-row').addEventListener('click', () => {
+  const v = privacyValues().photo;
+  showChoiceDialog('Profile photo', PRIVACY_CHOICES.map((o) => ({ ...o, selected: o.value === v })), (val) => savePrivacy({ photo: val }));
+});
+$('privacy-about-row').addEventListener('click', () => {
+  const v = privacyValues().about;
+  showChoiceDialog('About', PRIVACY_CHOICES.map((o) => ({ ...o, selected: o.value === v })), (val) => savePrivacy({ about: val }));
+});
+$('privacy-receipts-row').addEventListener('click', () => {
+  const off = privacyValues().readReceipts ? 0 : 1;
+  savePrivacy({ readReceipts: off });
+  toast(off ? 'Read receipts on — blue ticks work both ways' : 'Read receipts off — no blue ticks for you or from you');
+});
+$('privacy-groups-row').addEventListener('click', () => {
+  const v = privacyValues().groupAdd;
+  showChoiceDialog('Groups — who can add me', [
+    { value: 'everyone', label: 'Everyone', selected: v === 'everyone' },
+    { value: 'contacts', label: 'My contacts', selected: v === 'contacts' },
+  ], (val) => savePrivacy({ groupAdd: val }));
+});
+$('privacy-timer-row').addEventListener('click', () => {
+  const v = privacyValues().defaultTimer;
+  showChoiceDialog('Default message timer', [0, 86400, 604800, 7776000].map((s) => ({ value: s, label: TIMER_LABELS[s], selected: s === v })), (val) => savePrivacy({ defaultTimer: val }));
+});
+// ---- App lock (whole-app PIN lock, per device) ---------------------------
+// Like the per-chat lock PIN: a 4-digit PIN stored on THIS device only
+// (localStorage), a deterrent on a shared phone — NOT real security, and
+// never a fingerprint lock (a browser cannot do fingerprints). The app
+// asks for it when it opens; cancelling leaves you on the welcome screen.
+const APP_LOCK_KEY = 's19_app_lock';
+const APP_LOCK_PIN_KEY = 's19_app_lock_pin';
+function appLockOn() {
+  try { return localStorage.getItem(APP_LOCK_KEY) === '1'; } catch { return false; }
+}
+function renderAppLockRow() {
+  const el = $('privacy-applock-state');
+  if (el) el.textContent = appLockOn() ? 'On' : 'Off';
+}
+$('privacy-applock-row').addEventListener('click', async () => {
+  if (!appLockOn()) {
+    const pin = await showPinDialog('set', 'Set a 4-digit PIN. The app will ask for it every time it opens on this device.');
+    if (pin === null) return;
+    try {
+      localStorage.setItem(APP_LOCK_PIN_KEY, pin);
+      localStorage.setItem(APP_LOCK_KEY, '1');
+    } catch { /* storage unavailable */ }
+    renderAppLockRow();
+    toast('App lock on');
+  } else {
+    const pin = await showPinDialog('verify', 'Enter your PIN to turn off App lock.');
+    if (pin === null) return;
+    let saved = '';
+    try { saved = localStorage.getItem(APP_LOCK_PIN_KEY) || ''; } catch { /* ignore */ }
+    if (pin !== saved) { toast('Wrong PIN'); return; }
+    try {
+      localStorage.removeItem(APP_LOCK_PIN_KEY);
+      localStorage.setItem(APP_LOCK_KEY, '0');
+    } catch { /* storage unavailable */ }
+    renderAppLockRow();
+    toast('App lock off');
+  }
+});
+// Boot gate (called from init): with App lock on, the PIN must be right
+// before the app opens. Cancel (or a wrong PIN, retried) leaves the
+// welcome screen up — the app never opens unlocked.
+async function appLockGate() {
+  if (!appLockOn()) return true;
+  for (;;) {
+    const pin = await showPinDialog('verify', 'Enter your 4-digit PIN to open S_19 CHAT BOOK.');
+    if (pin === null) return false;
+    let saved = '';
+    try { saved = localStorage.getItem(APP_LOCK_PIN_KEY) || ''; } catch { /* ignore */ }
+    if (pin === saved) return true;
+    toast('Wrong PIN — try again');
+  }
+}
+// ---- Blocked contacts ------------------------------------------------------
+async function refreshBlockedCount() {
+  try {
+    const r = await api('/api/blocked');
+    const n = (r.blocked || []).length;
+    $('privacy-blocked-state').textContent = n + ' blocked';
+    return r.blocked || [];
+  } catch {
+    $('privacy-blocked-state').textContent = '—';
+    return [];
+  }
+}
+async function renderBlockedList() {
+  const box = $('blocked-list');
+  box.innerHTML = '';
+  const list = await refreshBlockedCount();
+  if (!list.length) {
+    box.innerHTML = '<div class="empty-note">No blocked contacts.</div>';
+    return;
+  }
+  for (const p of list) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">' + avatarHtml(p.name, p.phone, p.avatar) + '</div>' +
+      '<div class="chat-row-body"><div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(p.name || displayId(p.phone)) + '</span></div>' +
+      '<div class="chat-row-top"><span class="chat-row-msg">' + escapeHtml(displayId(p.phone)) + '</span></div></div>';
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn';
+    btn.type = 'button';
+    btn.textContent = 'Unblock';
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/chat-settings', { method: 'POST', body: JSON.stringify({ with: p.phone, blocked: false }) });
+        toast('Unblocked');
+        renderBlockedList();
+      } catch { toast("Couldn't unblock — try again"); }
+    });
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+}
+$('privacy-blocked-row').addEventListener('click', () => {
+  renderBlockedList();
+  $('blocked-overlay').classList.remove('hidden');
+  pushBackLayer('blocked-overlay', () => hideLayer('blocked-overlay'));
+});
+$('btn-close-blocked').addEventListener('click', () => goBackLayer('blocked-overlay'));
+
+// ---- Settings sub-screens: Account / Privacy / Chats / Language ----------
+SETTINGS_SUB_OVERLAYS.push('settings-account-overlay', 'settings-privacy-overlay', 'settings-chats-overlay', 'settings-language-overlay', 'blocked-overlay', 'archived-overlay');
+function openSettingsSub(id) {
+  $(id).classList.remove('hidden');
+  pushBackLayer(id, () => hideLayer(id));
+}
+$('settings-account-row').addEventListener('click', () => openSettingsSub('settings-account-overlay'));
+$('btn-close-account').addEventListener('click', () => goBackLayer('settings-account-overlay'));
+$('settings-privacy-row').addEventListener('click', () => {
+  renderPrivacyRows();
+  openSettingsSub('settings-privacy-overlay');
+});
+$('btn-close-privacy').addEventListener('click', () => goBackLayer('settings-privacy-overlay'));
+$('settings-chats-row').addEventListener('click', () => {
+  renderChatsScreen();
+  openSettingsSub('settings-chats-overlay');
+});
+$('btn-close-chats').addEventListener('click', () => goBackLayer('settings-chats-overlay'));
+
+// ---- Account screen --------------------------------------------------------
+// Download a JSON object as a file on this phone.
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Change number: step 1 sends a code to the NEW number/Gmail, step 2
+// confirms it and moves the whole account (chats, groups, contacts).
+let changeNumberTarget = '';
+function resetChangeNumberDialog() {
+  changeNumberTarget = '';
+  $('change-number-input').value = '';
+  $('change-number-code').value = '';
+  $('change-number-code').classList.add('hidden');
+  $('btn-change-number-send').classList.remove('hidden');
+  $('btn-change-number-confirm').classList.add('hidden');
+}
+$('account-change-number-row').addEventListener('click', () => {
+  resetChangeNumberDialog();
+  $('change-number-dialog').classList.remove('hidden');
+  pushBackLayer('change-number-dialog', () => hideLayer('change-number-dialog'));
+});
+$('btn-change-number-cancel').addEventListener('click', () => goBackLayer('change-number-dialog'));
+$('btn-change-number-send').addEventListener('click', async () => {
+  const target = $('change-number-input').value.trim();
+  if (!target) { toast('Type the new number or Gmail first'); return; }
+  try {
+    const r = await api('/api/account/change-number', { method: 'POST', body: JSON.stringify({ newPhone: target }) });
+    changeNumberTarget = target;
+    $('change-number-code').classList.remove('hidden');
+    $('btn-change-number-send').classList.add('hidden');
+    $('btn-change-number-confirm').classList.remove('hidden');
+    $('change-number-code').focus();
+    if (r.testCode) toast('Test mode — your code is ' + r.testCode);
+    else toast('Code sent to ' + target);
+  } catch (e) {
+    toast(e && e.message === 'taken' ? 'That number is already in use' : "Couldn't send the code — check the number and try again");
+  }
+});
+$('btn-change-number-confirm').addEventListener('click', async () => {
+  const code = $('change-number-code').value.trim();
+  if (!/^\d{6}$/.test(code)) { toast('Type the 6-digit code'); return; }
+  try {
+    const r = await api('/api/account/change-number/confirm', { method: 'POST', body: JSON.stringify({ newPhone: changeNumberTarget, code }) });
+    hideLayer('change-number-dialog');
+    session.phone = r.phone;
+    saveSession(session);
+    toast('Number changed — your chats moved with you');
+    loadMyProfile();
+    loadInbox();
+  } catch {
+    toast('Wrong code — try again');
+  }
+});
+// Request account info: profile, contacts, chat list, settings (no
+// message text — that is what Chat backup is for).
+$('account-info-row').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/account/info', { method: 'POST' });
+    downloadJson(r.data, 's19-account-info.json');
+    toast('Account info downloaded');
+  } catch { toast("Couldn't download — check your connection"); }
+});
+// Delete my account: two confirms, then the server deletes everything
+// and this phone logs out.
+$('account-delete-row').addEventListener('click', async () => {
+  const first = await showConfirmDialog('Delete my account?', 'Your account, messages and chats will be deleted from the server. This cannot be undone.', 'Delete');
+  if (!first) return;
+  const second = await showConfirmDialog('Really delete?', 'Type of account: ' + displayId(session.phone) + '. Everything will be gone for good.', 'Delete forever');
+  if (!second) return;
+  try {
+    await api('/api/account/delete', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+  } catch { toast("Couldn't delete — try again"); return; }
+  try { localStorage.clear(); } catch { /* ignore */ }
+  clearSession();
+  session = null;
+  location.reload();
+});
+
+// ---- Chats screen: backup + archived ---------------------------------------
+function archivedCount() {
+  return conversations.filter((c) => c.archived).length + myGroups.filter((g) => g.archived).length;
+}
+function renderChatsScreen() {
+  $('chats-archived-state').textContent = archivedCount() + ' archived';
+}
+$('chats-backup-row').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/backup');
+    downloadJson(r.backup, 's19-chat-backup-' + new Date().toISOString().slice(0, 10) + '.json');
+    toast('Chat backup downloaded');
+  } catch { toast("Couldn't download the backup — try again"); }
+});
+$('chats-archived-row').addEventListener('click', () => {
+  renderArchivedList();
+  $('archived-overlay').classList.remove('hidden');
+  pushBackLayer('archived-overlay', () => hideLayer('archived-overlay'));
+});
+$('btn-close-archived').addEventListener('click', () => goBackLayer('archived-overlay'));
+// ---- Archive ---------------------------------------------------------------
+// Archived chats stay out of the inbox until brought back. The flag lives
+// on the server (archived_chats) so it survives reinstalls.
+async function setArchived(kind, key, archived) {
+  const body = { kind, archived };
+  if (kind === 'group') body.groupId = Number(key.replace('group:', ''));
+  else body.peer = key;
+  try {
+    await api('/api/archive', { method: 'POST', body: JSON.stringify(body) });
+    if (kind === 'group') {
+      const g = myGroups.find((x) => x.id === Number(key.replace('group:', '')));
+      if (g) g.archived = archived ? 1 : 0;
+    } else {
+      const c = conversations.find((x) => x.phone === key);
+      if (c) c.archived = archived ? 1 : 0;
+    }
+    toast(archived ? 'Chat archived' : 'Chat unarchived');
+    renderInbox();
+  } catch { toast("Couldn't change that — try again"); }
+}
+function renderArchivedList() {
+  const box = $('archived-list');
+  box.innerHTML = '';
+  const items = [
+    ...conversations.filter((c) => c.archived).map((c) => ({ kind: 'chat', key: c.phone, name: peerName(c), sub: displayId(c.phone), avatar: c.avatar, lastAt: c.lastAt || 0 })),
+    ...myGroups.filter((g) => g.archived).map((g) => ({ kind: 'group', key: 'group:' + g.id, name: g.name, sub: 'Group', avatar: '', lastAt: g.lastAt || 0 })),
+  ].sort((a, b) => b.lastAt - a.lastAt);
+  $('chats-archived-state').textContent = items.length + ' archived';
+  if (!items.length) {
+    box.innerHTML = '<div class="empty-note">No archived chats.<br>Long-press a chat in the inbox to archive it.</div>';
+    return;
+  }
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    row.innerHTML = '<div class="avatar">' + (it.kind === 'group' ? '👥' : avatarHtml(it.name, it.key, it.avatar)) + '</div>' +
+      '<div class="chat-row-body"><div class="chat-row-top"><span class="chat-row-name">' + escapeHtml(it.name) + '</span></div>' +
+      '<div class="chat-row-top"><span class="chat-row-msg">' + escapeHtml(it.sub) + '</span></div></div>';
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn';
+    btn.type = 'button';
+    btn.textContent = 'Unarchive';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await setArchived(it.kind, it.key, false);
+      renderArchivedList();
+    });
+    row.appendChild(btn);
+    row.addEventListener('click', () => {
+      if (it.kind === 'group') openGroup(Number(it.key.replace('group:', '')), it.name);
+      else openChat(it.key, it.name);
+    });
+    box.appendChild(row);
+  }
+}
+// Long-press an inbox row: a small menu (Pin/Unpin, Archive/Unarchive)
+// instead of pinning straight away. Right-click opens the same menu.
+function openInboxRowMenu(kind, key, label) {
+  const pinned = getPinned().includes(key);
+  const isArchived = kind === 'group'
+    ? !!(myGroups.find((g) => 'group:' + g.id === key) || {}).archived
+    : !!(conversations.find((c) => c.phone === key) || {}).archived;
+  $('inbox-row-title').textContent = label;
+  const list = $('inbox-row-list');
+  list.innerHTML = '';
+  list.className = 'option-list';
+  const addOpt = (text, fn) => {
+    const b = document.createElement('button');
+    b.className = 'option-btn';
+    b.type = 'button';
+    b.textContent = text;
+    b.addEventListener('click', () => { hideLayer('inbox-row-dialog'); fn(); });
+    list.appendChild(b);
+  };
+  addOpt(pinned ? 'Unpin chat' : 'Pin chat', () => togglePin(key));
+  addOpt(isArchived ? 'Unarchive chat' : 'Archive chat', () => setArchived(kind, key, !isArchived));
+  $('inbox-row-dialog').classList.remove('hidden');
+  pushBackLayer('inbox-row-dialog', () => hideLayer('inbox-row-dialog'));
+}
+$('btn-inbox-row-cancel').addEventListener('click', () => goBackLayer('inbox-row-dialog'));
+function attachInboxRowMenu(row, kind, key, label) {
+  let timer = null;
+  row.addEventListener('pointerdown', () => {
+    timer = setTimeout(() => { suppressRowClick = true; openInboxRowMenu(kind, key, label); }, 500);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) {
+    row.addEventListener(ev, () => clearTimeout(timer));
+  }
+  row.addEventListener('contextmenu', (e) => { e.preventDefault(); openInboxRowMenu(kind, key, label); });
+}
+
+// ---- App language (English + বাংলা) ---------------------------------------
+// Opt-in: the app stays English by default (Bijoy's choice). Switching
+// translates the Settings, inbox and chat chrome. Deeper screens (calls,
+// media viewer, admin, status, channels) stay in English in this round —
+// the language screen says so plainly, nothing is faked.
+const I18N = {
+  en: {
+    'nav.chats': 'Chats', 'nav.updates': 'Updates', 'nav.calls': 'Calls', 'nav.tools': 'Tools', 'nav.admin': 'Admin',
+    'search': 'Search', 'message': 'Message…',
+    'settings.title': 'Settings', 'settings.name': 'Name', 'settings.about': 'About', 'settings.phone': 'Phone / Gmail',
+    'settings.autosave': 'Auto-save photos & videos', 'settings.photoguard': 'Profile photo guard',
+    'settings.account': 'Account', 'settings.privacy': 'Privacy', 'settings.chats': 'Chats',
+    'settings.notifications': 'Notifications', 'settings.storage': 'Storage and data', 'settings.language': 'App language',
+    'settings.accessibility': 'Accessibility', 'settings.help': 'Help and feedback', 'settings.invite': 'Invite a friend',
+    'settings.blocked': 'Blocked contacts', 'settings.archived': 'Archived chats',
+    'inbox.loading': 'Loading chats…', 'inbox.error': "Couldn't load chats. Tap to retry.",
+    'inbox.stale': "Couldn't refresh - showing saved chats.",
+    'inbox.empty': "Inbox is empty.<br>Tap the green + button to add a friend's number or Gmail and start messaging.",
+    'inbox.locked': 'Locked chats', 'inbox.archived': 'Archived',
+    'inbox.hiddenChats': 'hidden chat', 'inbox.archivedChats': 'archived chat',
+    'menu.viewContact': 'View contact', 'menu.search': 'Search', 'menu.media': 'Media, links, and docs',
+    'menu.mute': 'Mute notifications', 'menu.disappearing': 'Disappearing messages', 'menu.theme': 'Chat theme',
+    'menu.more': 'More', 'menu.report': 'Report', 'menu.block': 'Block', 'menu.clear': 'Clear chat',
+    'menu.export': 'Export chat', 'menu.shortcut': 'Add shortcut', 'menu.favorite': 'Add to Favorites',
+    'menu.newGroup': 'New group', 'menu.unmute': 'Unmute notifications', 'menu.unblock': 'Unblock',
+    'menu.unfavorite': 'Remove from Favorites', 'menu.back': 'Back', 'menu.starred': 'Starred messages',
+  },
+  bn: {
+    'nav.chats': 'চ্যাট', 'nav.updates': 'আপডেট', 'nav.calls': 'কল', 'nav.tools': 'টুলস', 'nav.admin': 'অ্যাডমিন',
+    'search': 'খুঁজুন', 'message': 'মেসেজ লিখুন…',
+    'settings.title': 'সেটিংস', 'settings.name': 'নাম', 'settings.about': 'সম্পর্কে', 'settings.phone': 'ফোন / জিমেইল',
+    'settings.autosave': 'ছবি ও ভিডিও অটো-সেভ', 'settings.photoguard': 'প্রোফাইল ছবির সুরক্ষা',
+    'settings.account': 'অ্যাকাউন্ট', 'settings.privacy': 'প্রাইভেসি', 'settings.chats': 'চ্যাট',
+    'settings.notifications': 'নোটিফিকেশন', 'settings.storage': 'স্টোরেজ ও ডেটা', 'settings.language': 'অ্যাপের ভাষা',
+    'settings.accessibility': 'অ্যাক্সেসিবিলিটি', 'settings.help': 'সাহায্য ও মতামত', 'settings.invite': 'বন্ধুকে আমন্ত্রণ জানান',
+    'settings.blocked': 'ব্লক করা পরিচিতি', 'settings.archived': 'আর্কাইভ করা চ্যাট',
+    'inbox.loading': 'চ্যাট লোড হচ্ছে…', 'inbox.error': 'চ্যাট লোড হয়নি। আবার চেষ্টা করতে চাপ দিন।',
+    'inbox.stale': 'আপডেট করা যায়নি — সংরক্ষিত চ্যাট দেখানো হচ্ছে।',
+    'inbox.empty': 'ইনবক্স খালি।<br>সবুজ + বোতাম চেপে বন্ধুর নম্বর বা জিমেইল যোগ করে মেসেজ শুরু করুন।',
+    'inbox.locked': 'লক করা চ্যাট', 'inbox.archived': 'আর্কাইভ',
+    'inbox.hiddenChats': 'লুকানো চ্যাট', 'inbox.archivedChats': 'আর্কাইভ করা চ্যাট',
+    'menu.viewContact': 'যোগাযোগ দেখুন', 'menu.search': 'খুঁজুন', 'menu.media': 'মিডিয়া, লিংক ও ডকুমেন্ট',
+    'menu.mute': 'নোটিফিকেশন বন্ধ করুন', 'menu.disappearing': 'অদৃশ্য হওয়া মেসেজ', 'menu.theme': 'চ্যাট থিম',
+    'menu.more': 'আরও', 'menu.report': 'রিপোর্ট', 'menu.block': 'ব্লক', 'menu.clear': 'চ্যাট মুছুন',
+    'menu.export': 'চ্যাট এক্সপোর্ট', 'menu.shortcut': 'শর্টকাট যোগ করুন', 'menu.favorite': 'প্রিয়তে যোগ করুন',
+    'menu.newGroup': 'নতুন গ্রুপ', 'menu.unmute': 'নোটিফিকেশন চালু করুন', 'menu.unblock': 'আনব্লক',
+    'menu.unfavorite': 'প্রিয় থেকে সরান', 'menu.back': 'ফিরুন', 'menu.starred': 'তারকাচিহ্নিত মেসেজ',
+  },
+};
+function getLang() {
+  try {
+    const l = localStorage.getItem('s19_lang');
+    return l === 'bn' ? 'bn' : 'en';
+  } catch { return 'en'; }
+}
+function t(key) {
+  const lang = getLang();
+  return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+}
+// Applies the language to every static string marked with data-i18n
+// (text) or data-i18n-ph (placeholder), then re-renders the inbox.
+function applyLanguage() {
+  const lang = getLang();
+  document.querySelectorAll('[data-i18n]').forEach((el) => {
+    const v = I18N[lang][el.getAttribute('data-i18n')] || I18N.en[el.getAttribute('data-i18n')];
+    if (v) el.textContent = v;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach((el) => {
+    const v = I18N[lang][el.getAttribute('data-i18n-ph')] || I18N.en[el.getAttribute('data-i18n-ph')];
+    if (v) el.placeholder = v;
+  });
+  $('settings-language-state').textContent = lang === 'bn' ? 'বাংলা' : 'English';
+  $('lang-en-state').textContent = lang === 'en' ? '✓' : '';
+  $('lang-bn-state').textContent = lang === 'bn' ? '✓' : '';
+  // Chat ⋮ menu items (static labels).
+  const menuText = (id, key) => { const el = $(id); if (el) el.textContent = t(key); };
+  menuText('menu-new-group', 'menu.newGroup');
+  menuText('menu-view-contact', 'menu.viewContact');
+  menuText('menu-search', 'menu.search');
+  menuText('menu-media', 'menu.media');
+  menuText('menu-starred', 'menu.starred');
+  menuText('menu-disappearing', 'menu.disappearing');
+  menuText('menu-chat-theme', 'menu.theme');
+  menuText('menu-report', 'menu.report');
+  menuText('menu-clear', 'menu.clear');
+  menuText('menu-export', 'menu.export');
+  menuText('menu-shortcut', 'menu.shortcut');
+  const mm = $('menu-more'); if (mm) mm.textContent = t('menu.more') + ' ›';
+  const mb = $('menu-more-back'); if (mb) mb.textContent = '‹ ' + t('menu.back');
+  updateChatMenuLabels();
+}
+function renderLanguageRows() {
+  const lang = getLang();
+  $('settings-language-state').textContent = lang === 'bn' ? 'বাংলা' : 'English';
+  $('lang-en-state').textContent = lang === 'en' ? '✓' : '';
+  $('lang-bn-state').textContent = lang === 'bn' ? '✓' : '';
+}
+$('settings-language-row').addEventListener('click', () => {
+  renderLanguageRows();
+  openSettingsSub('settings-language-overlay');
+});
+$('btn-close-language').addEventListener('click', () => goBackLayer('settings-language-overlay'));
+$('lang-en-row').addEventListener('click', () => {
+  try { localStorage.setItem('s19_lang', 'en'); } catch { /* storage unavailable */ }
+  applyLanguage();
+  renderInbox();
+  toast('Language: English');
+});
+$('lang-bn-row').addEventListener('click', () => {
+  try { localStorage.setItem('s19_lang', 'bn'); } catch { /* storage unavailable */ }
+  applyLanguage();
+  renderInbox();
+  toast('ভাষা: বাংলা');
+});
+applyLanguage();
+
 // ---- Full-screen profile photo viewer ------------------------------------
 // Opens when tapping a profile photo anywhere (see the capture-phase
 // avatar handler below, and the Settings photo handler above).
@@ -4469,7 +5028,21 @@ let callStartAt = 0;
 let callTimerId = null;
 let callSeconds = 0;
 let callIsVideo = false; // this call carries a camera picture
-let facingMode = 'user'; // front camera first; 🔄 flips to the back one
+// Front camera first; the last choice is remembered on this device, so
+// a user who prefers the back camera keeps it next call.
+let facingMode = 'user';
+try {
+  const savedFacing = localStorage.getItem('s19_facing');
+  if (savedFacing === 'environment' || savedFacing === 'user') facingMode = savedFacing;
+} catch { /* storage unavailable */ }
+let camSwitching = false; // a camera switch is already running — no double-taps
+// The own-camera preview is mirrored for the front camera (selfie view,
+// like WhatsApp) and un-mirrored for the back camera. Only the preview
+// is flipped — the track sent to the other side is never mirrored.
+function applyLocalVideoMirror() {
+  const lv = $('local-video');
+  if (lv) lv.style.transform = facingMode === 'user' ? 'scaleX(-1)' : '';
+}
 let camOn = true;
 let callConnected = false; // true once media actually connects (ICE / answer)
 let iceRestarts = 0;
@@ -5129,7 +5702,7 @@ async function startCall(peer, name, isVideo) {
   // screen shows it and opens the video UI when they answer.
   await api('/api/calls/signal', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'offer', payload: { sdp: offer.sdp, type: offer.type, video: Boolean(isVideo) } }) });
   showCallOverlay(name || displayId(peer), 'Ringing…', false, isVideo);
-  if (isVideo) $('local-video').srcObject = localStream; // my own preview, small in the corner
+  if (isVideo) { $('local-video').srcObject = localStream; applyLocalVideoMirror(); } // my own preview, small in the corner
   if (loadNotifSettings().callSound) startRinging('soft'); // caller hears a quiet ringback while waiting
   callStartAt = Date.now();
 }
@@ -5164,7 +5737,7 @@ async function answerCall() {
     pendingOffer = null;
     stopRinging();
     showCallOverlay($('call-peer-name').textContent, isVideo ? 'Video call in progress…' : 'On call…', false, isVideo);
-    if (isVideo) $('local-video').srcObject = localStream;
+    if (isVideo) { $('local-video').srcObject = localStream; applyLocalVideoMirror(); }
     startCallTimer();
   } catch (e) {
     // Any step failing here used to die silently and leave the caller
@@ -5265,13 +5838,32 @@ $('btn-cam-toggle').addEventListener('click', () => {
   $('btn-cam-toggle').title = camOn ? 'Turn camera off' : 'Turn camera on';
   toast(camOn ? 'Camera is on' : 'Camera off — only your voice will go through');
 });
+// Switch front ↔ back camera mid-call (WhatsApp-style 🔄 button).
+// The video track is swapped on the live connection with replaceTrack —
+// no renegotiation, no call drop, and the microphone keeps working
+// untouched (only a video-only stream is requested here). Fallbacks:
+// an exact facingMode can fail on some phones, so it retries with
+// "ideal"; if that fails too the device has only one camera, and the
+// call simply stays on the front camera with a plain toast.
 $('btn-cam-switch').addEventListener('click', async () => {
-  if (!localStream || !pc || !callIsVideo) return;
+  if (!localStream || !pc || !callIsVideo || camSwitching) return;
+  camSwitching = true;
   const next = facingMode === 'user' ? 'environment' : 'user';
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+  let stream = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: next }, audio: false,
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: next }, audio: false });
+  } catch {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: { ideal: next } }, audio: false });
+    } catch { stream = null; }
+  }
+  if (!stream) {
+    camSwitching = false;
+    toast('Only one camera on this device');
+    return;
+  }
+  try {
     const newTrack = stream.getVideoTracks()[0];
     const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
     if (sender) await sender.replaceTrack(newTrack);
@@ -5279,10 +5871,15 @@ $('btn-cam-switch').addEventListener('click', async () => {
     if (oldTrack) { oldTrack.stop(); localStream.removeTrack(oldTrack); }
     localStream.addTrack(newTrack);
     facingMode = next;
+    try { localStorage.setItem('s19_facing', facingMode); } catch { /* storage unavailable */ }
     $('local-video').srcObject = localStream;
+    applyLocalVideoMirror();
+    toast(facingMode === 'environment' ? 'Back camera' : 'Front camera');
   } catch {
+    stream.getTracks().forEach((t) => t.stop());
     toast("Couldn't switch the camera — check permission and try again");
   }
+  camSwitching = false;
 });
 // Signals arriving while a call is already up (answer / ICE / end).
 setInterval(async () => {
@@ -5691,9 +6288,10 @@ $('btn-logout').addEventListener('click', async () => {
   }).catch(() => {});
   if (session && session.token) {
     // Stay logged in on this device; only the name step is needed if the
-    // profile was never finished.
-    if (session.name) enterApp();
-    else showScreen('screen-name');
+    // profile was never finished. With App lock on, the PIN comes first.
+    if (session.name) {
+      appLockGate().then((ok) => { if (ok) enterApp(); else showScreen('screen-welcome'); });
+    } else showScreen('screen-name');
   } else {
     showScreen('screen-welcome');
   }
