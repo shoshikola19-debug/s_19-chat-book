@@ -97,7 +97,7 @@
 
     <!-- Chats -->
     <div id="tab-chats" class="tab-page">
-      <div class="search-row"><svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="chat-search" class="input search-input" type="search" placeholder="Search"></div>
+      <div class="search-row"><svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="chat-search" class="input search-input" type="search" placeholder="Search" data-i18n-ph="search"></div>
       <button id="favorites-chip" class="filter-chip hidden" type="button">⭐ Favorites</button>
       <div id="chat-list" class="chat-list"></div>
       <div id="start-chatting" class="start-chatting hidden"></div>
@@ -203,11 +203,11 @@
     </div>
 
     <nav class="bottom-nav">
-      <button data-tab="chats" class="nav-btn active"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg><span>Chats</span><span id="nav-chats-badge" class="nav-badge hidden">0</span></button>
-      <button data-tab="updates" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 5 5"/></svg><span>Updates</span></button>
-      <button data-tab="calls" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span>Calls</span></button>
-      <button data-tab="tools" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span>Tools</span></button>
-      <button data-tab="admin" id="nav-admin" class="nav-btn hidden"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Admin</span></button>
+      <button data-tab="chats" class="nav-btn active"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg><span data-i18n="nav.chats">Chats</span><span id="nav-chats-badge" class="nav-badge hidden">0</span></button>
+      <button data-tab="updates" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 5 5"/></svg><span data-i18n="nav.updates">Updates</span></button>
+      <button data-tab="calls" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span data-i18n="nav.calls">Calls</span></button>
+      <button data-tab="tools" class="nav-btn"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span data-i18n="nav.tools">Tools</span></button>
+      <button data-tab="admin" id="nav-admin" class="nav-btn hidden"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span data-i18n="nav.admin">Admin</span></button>
     </nav>
   </section>
 
@@ -273,7 +273,7 @@
     <div class="chat-input-row">
       <button id="btn-emoji" class="input-icon-btn" type="button" title="Emoji"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
       <div class="chat-input-wrap">
-        <input id="chat-input" class="input chat-input" type="text" placeholder="Message…" autocomplete="off">
+        <input id="chat-input" class="input chat-input" type="text" placeholder="Message…" autocomplete="off" data-i18n-ph="message">
         <button id="btn-attach" class="input-icon-btn" type="button" title="Attach"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <button id="btn-input-camera" class="input-icon-btn" type="button" title="Camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
       </div>
@@ -607,7 +607,7 @@
   <div id="settings-overlay" class="profile-overlay hidden">
     <div class="profile-top">
       <button id="btn-close-settings" class="back-btn">‹</button>
-      <span class="settings-title">Settings</span>
+      <span class="settings-title" data-i18n="settings.title">Settings</span>
     </div>
     <div class="settings-avatar-wrap" id="settings-avatar-wrap">
       <div class="profile-avatar" id="settings-avatar">?</div>
@@ -615,36 +615,48 @@
     </div>
     <div class="settings-hint">Tap the photo to view it • 📷 to change it</div>
     <button id="settings-name-row" class="settings-row" type="button">
-      <span class="settings-row-label">Name</span><span id="settings-name" class="settings-row-value"></span>
+      <span class="settings-row-label" data-i18n="settings.name">Name</span><span id="settings-name" class="settings-row-value"></span>
     </button>
     <button id="settings-about-row" class="settings-row" type="button">
-      <span class="settings-row-label">About</span><span id="settings-about" class="settings-row-value"></span>
+      <span class="settings-row-label" data-i18n="settings.about">About</span><span id="settings-about" class="settings-row-value"></span>
     </button>
     <div class="settings-row settings-row-static">
-      <span class="settings-row-label">Phone / Gmail</span><span id="settings-phone" class="settings-row-value"></span>
+      <span class="settings-row-label" data-i18n="settings.phone">Phone / Gmail</span><span id="settings-phone" class="settings-row-value"></span>
     </div>
     <button id="settings-autosave-row" class="settings-row" type="button">
-      <span class="settings-row-label">Auto-save photos &amp; videos</span><span id="settings-autosave" class="settings-row-value">On</span>
+      <span class="settings-row-label" data-i18n="settings.autosave">Auto-save photos &amp; videos</span><span id="settings-autosave" class="settings-row-value">On</span>
     </button>
     <div class="settings-hint">Photos and videos friends send are saved to your phone automatically. Voice notes and files are never auto-saved.</div>
     <button id="settings-photoguard-row" class="settings-row" type="button">
-      <span class="settings-row-label">Profile photo guard</span><span id="settings-photoguard" class="settings-row-value">On</span>
+      <span class="settings-row-label" data-i18n="settings.photoguard">Profile photo guard</span><span id="settings-photoguard" class="settings-row-value">On</span>
     </button>
     <div class="settings-hint">When on, a profile photo opens in a guarded viewer: no save button, and the photo hides when you switch away from the app. It does not stop screenshots.</div>
+    <button id="settings-account-row" class="settings-row" type="button">
+      <span class="settings-row-label" data-i18n="settings.account">Account</span><span class="settings-row-value">Change number, my data, delete</span>
+    </button>
+    <button id="settings-privacy-row" class="settings-row" type="button">
+      <span class="settings-row-label" data-i18n="settings.privacy">Privacy</span><span class="settings-row-value">Last seen, photo, read receipts</span>
+    </button>
+    <button id="settings-chats-row" class="settings-row" type="button">
+      <span class="settings-row-label" data-i18n="settings.chats">Chats</span><span class="settings-row-value">Backup, archived chats</span>
+    </button>
     <button id="settings-notif-row" class="settings-row" type="button">
-      <span class="settings-row-label">Notifications</span><span class="settings-row-value">Message, group &amp; call tones</span>
+      <span class="settings-row-label" data-i18n="settings.notifications">Notifications</span><span class="settings-row-value">Message, group &amp; call tones</span>
     </button>
     <button id="settings-storage-row" class="settings-row" type="button">
-      <span class="settings-row-label">Storage and data</span><span class="settings-row-value">Network usage, auto-download</span>
+      <span class="settings-row-label" data-i18n="settings.storage">Storage and data</span><span class="settings-row-value">Network usage, auto-download</span>
+    </button>
+    <button id="settings-language-row" class="settings-row" type="button">
+      <span class="settings-row-label" data-i18n="settings.language">App language</span><span id="settings-language-state" class="settings-row-value">English</span>
     </button>
     <button id="settings-access-row" class="settings-row" type="button">
-      <span class="settings-row-label">Accessibility</span><span class="settings-row-value">Increase contrast, animation</span>
+      <span class="settings-row-label" data-i18n="settings.accessibility">Accessibility</span><span class="settings-row-value">Increase contrast, animation</span>
     </button>
     <button id="settings-help-row" class="settings-row" type="button">
-      <span class="settings-row-label">Help and feedback</span><span class="settings-row-value">Help Center, contact us, privacy policy</span>
+      <span class="settings-row-label" data-i18n="settings.help">Help and feedback</span><span class="settings-row-value">Help Center, contact us, privacy policy</span>
     </button>
     <button id="settings-invite-row" class="settings-row" type="button">
-      <span class="settings-row-label">Invite a friend</span><span class="settings-row-value">Share S_19 CHAT BOOK</span>
+      <span class="settings-row-label" data-i18n="settings.invite">Invite a friend</span><span class="settings-row-value">Share S_19 CHAT BOOK</span>
     </button>
     <input type="file" id="settings-avatar-input" accept="image/*" class="hidden">
   </div>
@@ -653,7 +665,7 @@
   <div id="settings-notif-overlay" class="profile-overlay hidden">
     <div class="profile-top">
       <button id="btn-close-notif" class="back-btn">‹</button>
-      <span class="settings-title">Notifications</span>
+      <span class="settings-title" data-i18n="settings.notifications">Notifications</span>
     </div>
     <button id="notif-msg-row" class="settings-row" type="button">
       <span class="settings-row-label">Message notification sound</span><span id="notif-msg-state" class="settings-row-value">On</span>
@@ -688,7 +700,7 @@
   <div id="settings-storage-overlay" class="profile-overlay hidden">
     <div class="profile-top">
       <button id="btn-close-storage" class="back-btn">‹</button>
-      <span class="settings-title">Storage and data</span>
+      <span class="settings-title" data-i18n="settings.storage">Storage and data</span>
     </div>
     <div class="section-title">Media storage (estimate)</div>
     <div class="meter-card">
@@ -722,7 +734,7 @@
   <div id="settings-access-overlay" class="profile-overlay hidden">
     <div class="profile-top">
       <button id="btn-close-access" class="back-btn">‹</button>
-      <span class="settings-title">Accessibility</span>
+      <span class="settings-title" data-i18n="settings.accessibility">Accessibility</span>
     </div>
     <button id="access-text-row" class="settings-row" type="button">
       <span class="settings-row-label">Larger text</span><span id="access-text-state" class="settings-row-value">Off</span>
@@ -738,7 +750,7 @@
   <div id="settings-help-overlay" class="profile-overlay hidden">
     <div class="profile-top">
       <button id="btn-close-help" class="back-btn">‹</button>
-      <span class="settings-title">Help and feedback</span>
+      <span class="settings-title" data-i18n="settings.help">Help and feedback</span>
     </div>
     <div class="section-title">How it works</div>
     <div class="settings-sub-hint"><b>Log in</b> — with your phone number or Gmail. A 6-digit code confirms it is you.<br><br><b>Chats</b> — tap + to add a friend by number or Gmail, then message them. Photos and videos send at original quality. Long-press a message to delete it.<br><br><b>Calls</b> — tap the phone or video button in a chat. Voice calls use about 120 KB per minute; video calls use much more.<br><br><b>Groups</b> — tap + then "New group", pick friends, and chat together. Any member can add more people.<br><br><b>Status &amp; channels</b> — post a status in Updates (it lasts 24 hours), or follow a channel.</div>
@@ -749,6 +761,164 @@
     <button id="help-contact-row" class="settings-row" type="button">
       <span class="settings-row-label">Contact us</span><span class="settings-row-value">Copy the app link</span>
     </button>
+  </div>
+
+  <!-- ===== Settings: Account ===== -->
+  <div id="settings-account-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-account" class="back-btn">‹</button>
+      <span class="settings-title" data-i18n="settings.account">Account</span>
+    </div>
+    <button id="account-change-number-row" class="settings-row" type="button">
+      <span class="settings-row-label">Change number</span><span class="settings-row-value">Move chats to a new number</span>
+    </button>
+    <div class="settings-sub-hint">Your chats, groups and contacts move to the new number. A 6-digit code is sent to the new number or Gmail to confirm it is yours.</div>
+    <button id="account-info-row" class="settings-row" type="button">
+      <span class="settings-row-label">Request account info</span><span class="settings-row-value">Download your data</span>
+    </button>
+    <div class="settings-sub-hint">Downloads a file with your profile, contacts, chat list and settings. Message text is not included.</div>
+    <button id="account-delete-row" class="settings-row" type="button">
+      <span class="settings-row-label">Delete my account</span><span class="settings-row-value">Remove everything</span>
+    </button>
+    <div class="settings-sub-hint">Deletes your account, your messages and your chats from the server. This cannot be undone.</div>
+  </div>
+
+  <!-- ===== Settings: Privacy ===== -->
+  <div id="settings-privacy-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-privacy" class="back-btn">‹</button>
+      <span class="settings-title" data-i18n="settings.privacy">Privacy</span>
+    </div>
+    <div class="section-title">Who can see my personal info</div>
+    <button id="privacy-lastseen-row" class="settings-row" type="button">
+      <span class="settings-row-label">Last seen</span><span id="privacy-lastseen-state" class="settings-row-value">Everyone</span>
+    </button>
+    <div class="settings-sub-hint">If you hide your last seen from everyone, you will not see theirs either.</div>
+    <button id="privacy-photo-row" class="settings-row" type="button">
+      <span class="settings-row-label">Profile photo</span><span id="privacy-photo-state" class="settings-row-value">Everyone</span>
+    </button>
+    <button id="privacy-about-row" class="settings-row" type="button">
+      <span class="settings-row-label">About</span><span id="privacy-about-state" class="settings-row-value">Everyone</span>
+    </button>
+    <div class="section-title">Messaging</div>
+    <button id="privacy-receipts-row" class="settings-row" type="button">
+      <span class="settings-row-label">Read receipts</span><span id="privacy-receipts-state" class="settings-row-value">On</span>
+    </button>
+    <div class="settings-sub-hint">When off, you do not send blue ticks — and you do not see theirs either.</div>
+    <button id="privacy-blocked-row" class="settings-row" type="button">
+      <span class="settings-row-label">Blocked contacts</span><span id="privacy-blocked-state" class="settings-row-value">0 blocked</span>
+    </button>
+    <button id="privacy-groups-row" class="settings-row" type="button">
+      <span class="settings-row-label">Groups — who can add me</span><span id="privacy-groups-state" class="settings-row-value">Everyone</span>
+    </button>
+    <button id="privacy-timer-row" class="settings-row" type="button">
+      <span class="settings-row-label">Default message timer</span><span id="privacy-timer-state" class="settings-row-value">Off</span>
+    </button>
+    <div class="settings-sub-hint">New chats start with this timer: their messages disappear after it. You can still change the timer in each chat.</div>
+    <div class="section-title">App lock</div>
+    <button id="privacy-applock-row" class="settings-row" type="button">
+      <span class="settings-row-label">App lock</span><span id="privacy-applock-state" class="settings-row-value">Off</span>
+    </button>
+    <div class="settings-sub-hint">Asks for a 4-digit PIN when the app opens on this device. This is a PIN lock, not a fingerprint lock.</div>
+  </div>
+
+  <!-- ===== Settings: Privacy — Blocked contacts ===== -->
+  <div id="blocked-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-blocked" class="back-btn">‹</button>
+      <span class="settings-title" data-i18n="settings.blocked">Blocked contacts</span>
+    </div>
+    <div id="blocked-list"></div>
+  </div>
+
+  <!-- ===== Settings: Chats ===== -->
+  <div id="settings-chats-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-chats" class="back-btn">‹</button>
+      <span class="settings-title">Chats</span>
+    </div>
+    <button id="chats-backup-row" class="settings-row" type="button">
+      <span class="settings-row-label">Chat backup</span><span class="settings-row-value">Download all chats</span>
+    </button>
+    <div class="settings-sub-hint">Downloads all your chats as one file. Photos and videos themselves are not included — only the chat text and details.</div>
+    <button id="chats-archived-row" class="settings-row" type="button">
+      <span class="settings-row-label">Archived chats</span><span id="chats-archived-state" class="settings-row-value">0 archived</span>
+    </button>
+    <div class="settings-sub-hint">Chats you archive stay out of the inbox until you bring them back. To archive a chat, long-press its row in the inbox.</div>
+    <div class="settings-sub-hint">Chat theme and wallpaper live in each chat: open a chat, tap ⋮, then "Chat theme".</div>
+  </div>
+
+  <!-- ===== Archived chats ===== -->
+  <div id="archived-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-archived" class="back-btn">‹</button>
+      <span class="settings-title" data-i18n="settings.archived">Archived chats</span>
+    </div>
+    <div id="archived-list"></div>
+  </div>
+
+  <!-- ===== Settings: App language ===== -->
+  <div id="settings-language-overlay" class="profile-overlay hidden">
+    <div class="profile-top">
+      <button id="btn-close-language" class="back-btn">‹</button>
+      <span class="settings-title" data-i18n="settings.language">App language</span>
+    </div>
+    <button id="lang-en-row" class="settings-row" type="button">
+      <span class="settings-row-label">English</span><span id="lang-en-state" class="settings-row-value">✓</span>
+    </button>
+    <button id="lang-bn-row" class="settings-row" type="button">
+      <span class="settings-row-label">বাংলা</span><span id="lang-bn-state" class="settings-row-value"></span>
+    </button>
+    <div class="settings-sub-hint">Changes the language of the Settings, inbox and chat screens. Some screens stay in English in this version.</div>
+  </div>
+
+  <!-- ===== Generic choice dialog (privacy options, timers, …) ===== -->
+  <div id="choice-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="choice-dialog-title">Choose</h3>
+      <div id="choice-dialog-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-choice-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Generic confirm dialog ===== -->
+  <div id="confirm-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="confirm-dialog-title">Are you sure?</h3>
+      <div id="confirm-dialog-message" class="settings-sub-hint"></div>
+      <div class="dialog-buttons">
+        <button id="btn-confirm-cancel" class="btn-link">Cancel</button>
+        <button id="btn-confirm-ok" class="btn-primary">Yes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Change number dialog ===== -->
+  <div id="change-number-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3>Change number</h3>
+      <div class="settings-sub-hint">Enter the new phone number or Gmail. A 6-digit code will be sent there to confirm it is yours.</div>
+      <input id="change-number-input" class="input" type="text" placeholder="New phone number or Gmail" autocomplete="off">
+      <input id="change-number-code" class="input hidden" type="text" placeholder="6-digit code" inputmode="numeric" autocomplete="off" maxlength="6">
+      <div class="dialog-buttons">
+        <button id="btn-change-number-cancel" class="btn-link">Cancel</button>
+        <button id="btn-change-number-send" class="btn-primary">Send code</button>
+        <button id="btn-change-number-confirm" class="btn-primary hidden">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Inbox row menu (long-press a chat) ===== -->
+  <div id="inbox-row-dialog" class="dialog-backdrop hidden">
+    <div class="dialog">
+      <h3 id="inbox-row-title">Chat</h3>
+      <div id="inbox-row-list"></div>
+      <div class="dialog-buttons">
+        <button id="btn-inbox-row-cancel" class="btn-link">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- ===== Edit name / about dialog ===== -->
