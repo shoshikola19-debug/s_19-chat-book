@@ -108,7 +108,7 @@ async function main() {
       ssl: { rejectUnauthorized: false },
     });
     await client.connect();
-    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings, chat_settings, groups, group_members, reports CASCADE');
+    await client.query('DROP TABLE IF EXISTS users, sessions, otp_codes, contacts, messages, statuses, channels, channel_follows, channel_posts, call_signals, push_subscriptions, settings, chat_settings, groups, group_members, reports, archived_chats CASCADE');
     await client.end();
   } else {
     console.log('== engine: SQLite (local file) ==');
@@ -1683,6 +1683,318 @@ async function main() {
     && !appJs.includes('screenshot-proof') && !appJs.includes('cannot take a screenshot')
     && !appJs.includes("can't take a screenshot") && !appJs.includes('stops screenshots')
     && !appJs.includes('blocks screenshots'), null);
+
+  console.log('== settings: privacy, read receipts, archive, backup, account ==');
+  // Fresh users for the Settings checks, so changing their privacy
+  // can never leak into the earlier sections' assertions.
+  const PRIV_A = '8801711000011';
+  const PRIV_B = '8801711000012';
+  const PRIV_C = '8801711000013';
+  const tokPA = await login(PRIV_A, 'Privacy A');
+  const tokPB = await login(PRIV_B, 'Privacy B');
+  const tokPC = await login(PRIV_C, 'Privacy C');
+  await post('/api/profile', { avatar: AVATAR_TINY, about: 'Privacy A about' }, tokPA);
+  const priv0 = await get('/api/privacy', tokPA);
+  check('privacy defaults are everyone / on / 0',
+    priv0.status === 200 && priv0.data.lastSeen === 'everyone' && priv0.data.photo === 'everyone'
+    && priv0.data.about === 'everyone' && priv0.data.readReceipts === 1
+    && priv0.data.groupAdd === 'everyone' && priv0.data.defaultTimer === 0, priv0);
+  const mePriv = await get('/api/me', tokPA);
+  check('GET /api/me carries the privacy fields (long names)',
+    mePriv.status === 200 && mePriv.data.lastSeenPrivacy === 'everyone' && mePriv.data.photoPrivacy === 'everyone'
+    && mePriv.data.aboutPrivacy === 'everyone' && mePriv.data.readReceipts === 1
+    && mePriv.data.groupAddPrivacy === 'everyone' && mePriv.data.defaultTimer === 0, mePriv);
+  for (const bad of [{ lastSeen: 'sometimes' }, { photo: 'all' }, { about: 'friends' },
+    { readReceipts: 'yes' }, { groupAdd: 'nobody' }, { defaultTimer: 12345 }]) {
+    const r = await post('/api/privacy', bad, tokPA);
+    check('privacy rejects bad value ' + JSON.stringify(bad), r.status === 400, r);
+  }
+  const privAnon = await get('/api/privacy');
+  check('privacy needs a session', privAnon.status === 401, privAnon);
+  // 'nobody': B added A as a contact, but still sees nothing of A.
+  await post('/api/privacy', { lastSeen: 'nobody', photo: 'nobody', about: 'nobody' }, tokPA);
+  await post('/api/contacts', { phone: PRIV_A }, tokPB);
+  const contactsB = await get('/api/contacts', tokPB);
+  const cA = (contactsB.data.contacts || []).find((c) => c.phone === PRIV_A);
+  check("avatar/about/lastSeen hidden when 'nobody' (name still visible)",
+    contactsB.status === 200 && cA && cA.name === 'Privacy A' && cA.avatar === '' && cA.about === '' && cA.lastSeen === 0, cA);
+  // 'everyone': everything visible again.
+  await post('/api/privacy', { lastSeen: 'everyone', photo: 'everyone', about: 'everyone' }, tokPA);
+  const contactsB2 = await get('/api/contacts', tokPB);
+  const cA2 = (contactsB2.data.contacts || []).find((c) => c.phone === PRIV_A);
+  check("avatar/about/lastSeen visible when 'everyone'",
+    contactsB2.status === 200 && cA2 && cA2.avatar === AVATAR_TINY && cA2.about === 'Privacy A about' && cA2.lastSeen > 0, cA2);
+  // 'contacts': B is NOT in A's contacts (B added A — the direction is
+  // the other way), so B sees nothing; once A adds B, B sees everything.
+  await post('/api/privacy', { lastSeen: 'contacts', photo: 'contacts', about: 'contacts' }, tokPA);
+  const contactsB3 = await get('/api/contacts', tokPB);
+  const cA3 = (contactsB3.data.contacts || []).find((c) => c.phone === PRIV_A);
+  check("avatar/about/lastSeen hidden from non-contacts when 'contacts'",
+    contactsB3.status === 200 && cA3 && cA3.avatar === '' && cA3.about === '' && cA3.lastSeen === 0, cA3);
+  await post('/api/contacts', { phone: PRIV_B }, tokPA);
+  const contactsB4 = await get('/api/contacts', tokPB);
+  const cA4 = (contactsB4.data.contacts || []).find((c) => c.phone === PRIV_A);
+  check("avatar/about/lastSeen visible to contacts when 'contacts'",
+    contactsB4.status === 200 && cA4 && cA4.avatar === AVATAR_TINY && cA4.about === 'Privacy A about' && cA4.lastSeen > 0, cA4);
+  // Reciprocity: B sets their own lastSeen to 'nobody' — B now sees 0
+  // for A even though A is 'everyone'; avatar/about are unaffected.
+  await post('/api/privacy', { lastSeen: 'everyone', photo: 'everyone', about: 'everyone' }, tokPA);
+  await post('/api/privacy', { lastSeen: 'nobody' }, tokPB);
+  const contactsB5 = await get('/api/contacts', tokPB);
+  const cA5 = (contactsB5.data.contacts || []).find((c) => c.phone === PRIV_A);
+  check("reciprocity: viewer with lastSeen 'nobody' sees 0 for everyone",
+    contactsB5.status === 200 && cA5 && cA5.lastSeen === 0, cA5);
+  check('reciprocity hides lastSeen only, not avatar/about',
+    cA5 && cA5.avatar === AVATAR_TINY && cA5.about === 'Privacy A about', cA5);
+  await post('/api/privacy', { lastSeen: 'everyone' }, tokPB);
+  // The inbox peer view is viewer-aware too: C (a stranger to A) sees
+  // nothing of A in a conversation, and the chat-media peer is too.
+  await post('/api/privacy', { lastSeen: 'nobody', photo: 'nobody', about: 'nobody' }, tokPA);
+  await post('/api/messages', { to: PRIV_C, body: 'privacy inbox check' }, tokPA);
+  const convsC = await get('/api/conversations', tokPC);
+  const cAC = (convsC.data.conversations || []).find((c) => c.phone === PRIV_A);
+  check('inbox peer hides avatar/about/lastSeen when nobody',
+    convsC.status === 200 && cAC && cAC.avatar === '' && cAC.about === '' && cAC.lastSeen === 0, cAC);
+  const chatMediaC = await get('/api/chat-media?with=' + PRIV_A, tokPC);
+  check('chat-media peer hides avatar/about when nobody',
+    chatMediaC.status === 200 && chatMediaC.data.peer && chatMediaC.data.peer.avatar === '' && chatMediaC.data.peer.about === '', chatMediaC);
+  await post('/api/privacy', { lastSeen: 'everyone', photo: 'everyone', about: 'everyone' }, tokPA);
+  // Blocked list: A blocks B, sees B in /api/blocked, unblocks, empty.
+  await post('/api/chat-settings', { with: PRIV_B, blocked: true }, tokPA);
+  const blockedList = await get('/api/blocked', tokPA);
+  check('blocked list shows the blocked peer with name',
+    blockedList.status === 200 && (blockedList.data.blocked || []).some((b) => b.phone === PRIV_B && b.name === 'Privacy B'), blockedList);
+  await post('/api/chat-settings', { with: PRIV_B, blocked: false }, tokPA);
+  const blockedList2 = await get('/api/blocked', tokPA);
+  check('blocked list empty after unblock',
+    blockedList2.status === 200 && (blockedList2.data.blocked || []).length === 0, blockedList2);
+
+  console.log('== read receipts (two-way) ==');
+  // B turns receipts OFF, then reads: A never sees a blue tick, but
+  // B's unread badge still clears (read_local, not read).
+  await post('/api/privacy', { readReceipts: false }, tokB);
+  const rrMsg = await post('/api/messages', { to: FRIEND, body: 'receipts-off test' }, tokA);
+  const rrId = rrMsg.data.message.id;
+  await get('/api/messages?with=' + BIJOY + '&afterId=0', tokB);
+  await post('/api/messages/read', { with: BIJOY }, tokB);
+  const rrTicks = await get('/api/messages?with=' + FRIEND + '&afterId=' + rrId, tokA);
+  check('read receipts OFF: sender never sees a blue tick',
+    rrTicks.status === 200 && (rrTicks.data.ticks || []).some((t) => t.id === rrId && t.read === 0), rrTicks);
+  const rrConvs = await get('/api/conversations', tokB);
+  const rrConv = (rrConvs.data.conversations || []).find((c) => c.phone === BIJOY);
+  check('read receipts OFF: unread badge still clears',
+    rrConvs.status === 200 && rrConv && rrConv.unread === 0, rrConv);
+  await post('/api/privacy', { readReceipts: true }, tokB);
+  const rrMsg2 = await post('/api/messages', { to: FRIEND, body: 'receipts-on test' }, tokA);
+  await post('/api/messages/read', { with: BIJOY }, tokB);
+  const rrTicks2 = await get('/api/messages?with=' + FRIEND + '&afterId=' + rrMsg2.data.message.id, tokA);
+  check('read receipts ON: sender sees the blue tick again',
+    rrTicks2.status === 200 && (rrTicks2.data.ticks || []).some((t) => t.id === rrMsg2.data.message.id && t.read === 1), rrTicks2);
+  // Masking: B reads (stored read=1, B's receipts are ON), but A has
+  // receipts OFF — A's own fetch must mask the tick to 0; back ON and
+  // the stored 1 shows again.
+  await post('/api/privacy', { readReceipts: false }, tokA);
+  const aMsg2 = await post('/api/messages', { to: FRIEND, body: 'mask test' }, tokA);
+  await post('/api/messages/read', { with: BIJOY }, tokB);
+  const aFetch2 = await get('/api/messages?with=' + FRIEND + '&afterId=' + aMsg2.data.message.id, tokA);
+  check('ticks masked to 0 in my fetch when my receipts are off',
+    aFetch2.status === 200 && (aFetch2.data.ticks || []).some((t) => t.id === aMsg2.data.message.id && t.read === 0), aFetch2);
+  await post('/api/privacy', { readReceipts: true }, tokA);
+  const aFetch3 = await get('/api/messages?with=' + FRIEND + '&afterId=' + aMsg2.data.message.id, tokA);
+  check('ticks unmasked when my receipts are back on',
+    aFetch3.status === 200 && (aFetch3.data.ticks || []).some((t) => t.id === aMsg2.data.message.id && t.read === 1), aFetch3);
+  // viewedOnce: B opens A's view-once photo; A sees it with receipts
+  // on, and [] with receipts off.
+  const vo2 = await post('/api/messages/media', { to: FRIEND, mediaKind: 'image', fileName: 'vo2.png', mimeType: 'image/png', size: Buffer.from(PNG_1X1, 'base64').length, data: PNG_1X1, clientKey: 'vo2-' + Date.now(), viewOnce: true }, tokA);
+  const vo2Id = vo2.data.message.id;
+  await get('/api/media/' + vo2Id, tokB);
+  const voFetchOn = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('viewedOnce lists the opened photo with receipts on',
+    voFetchOn.status === 200 && (voFetchOn.data.viewedOnce || []).includes(vo2Id), voFetchOn);
+  await post('/api/privacy', { readReceipts: false }, tokA);
+  const voFetchOff = await get('/api/messages?with=' + FRIEND + '&afterId=0', tokA);
+  check('viewedOnce masked to [] with receipts off',
+    voFetchOff.status === 200 && Array.isArray(voFetchOff.data.viewedOnce) && voFetchOff.data.viewedOnce.length === 0, voFetchOff);
+  await post('/api/privacy', { readReceipts: true }, tokA);
+  // Group ticks: B reads gid2 ('Seen Test') with receipts OFF — A's
+  // tick stays 0; B turns receipts ON and re-reads — tick turns 1.
+  await post('/api/privacy', { readReceipts: false }, tokB);
+  const gSeenMsg = await post('/api/groups/' + gid2 + '/messages', { body: 'group receipts test' }, tokA);
+  const gSeenId = gSeenMsg.data.message.id;
+  await get('/api/groups/' + gid2 + '/messages?afterId=0', tokB);
+  const gSeenA = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokA);
+  const gTickOff = (gSeenA.data.ticks || []).find((t) => t.id === gSeenId);
+  check('group tick stays unread when the reader has receipts off',
+    gSeenA.status === 200 && gTickOff && gTickOff.read === 0, gTickOff);
+  await post('/api/privacy', { readReceipts: true }, tokB);
+  await get('/api/groups/' + gid2 + '/messages?afterId=0', tokB);
+  const gSeenA2 = await get('/api/groups/' + gid2 + '/messages?afterId=0', tokA);
+  const gTickOn = (gSeenA2.data.ticks || []).find((t) => t.id === gSeenId);
+  check('group tick turns read once the reader has receipts on and re-reads',
+    gSeenA2.status === 200 && gTickOn && gTickOn.read === 1, gTickOn);
+
+  console.log('== group-add privacy ==');
+  const tokGA = await login('8801711000014', 'Group Adder');
+  const tokGC = await login('8801711000015', 'Group ContactsOnly');
+  const tokGE = await login('8801711000016', 'Group Everyone');
+  await post('/api/privacy', { groupAdd: 'contacts' }, tokGC);
+  // GC has NOT added GA as a contact, so GC must be skipped on create
+  // (GE is 'everyone' and goes in); the skipped list names GC.
+  const gAddGrp = await post('/api/groups', { name: 'Add Privacy Group', members: ['8801711000015', '8801711000016'] }, tokGA);
+  check('group create skips a contacts-only candidate who has not added me',
+    gAddGrp.status === 200 && Array.isArray(gAddGrp.data.skipped) && gAddGrp.data.skipped.includes('8801711000015')
+    && !gAddGrp.data.skipped.includes('8801711000016') && gAddGrp.data.group.members.length === 2, gAddGrp);
+  const gid3 = gAddGrp.data.group.id;
+  const gAddSkip = await post('/api/groups/' + gid3 + '/members', { phones: ['8801711000015'] }, tokGA);
+  check('group add still skips the contacts-only candidate',
+    gAddSkip.status === 200 && gAddSkip.data.added === 0 && (gAddSkip.data.skipped || []).includes('8801711000015'), gAddSkip);
+  await post('/api/contacts', { phone: '8801711000014' }, tokGC);
+  const gAdd2 = await post('/api/groups/' + gid3 + '/members', { phones: ['8801711000015'] }, tokGA);
+  check('group add works once the candidate has me as a contact',
+    gAdd2.status === 200 && gAdd2.data.added === 1 && Array.isArray(gAdd2.data.skipped)
+    && gAdd2.data.skipped.length === 0 && gAdd2.data.group.memberCount === 3, gAdd2);
+
+  console.log('== default message timer ==');
+  const tokD1 = await login('8801711000017', 'Timer One');
+  const tokD2 = await login('8801711000018', 'Timer Two');
+  await post('/api/privacy', { defaultTimer: 86400 }, tokD1);
+  const dtMsg = await post('/api/messages', { to: '8801711000018', body: 'default timer message' }, tokD1);
+  check('default timer makes a new chat message expire in 24h',
+    dtMsg.status === 200 && dtMsg.data.message.expires_at - dtMsg.data.message.created_at === 86400 * 1000, dtMsg);
+  const dtId = dtMsg.data.message.id;
+  await execSql('UPDATE messages SET expires_at = ? WHERE id = ?', Date.now() - 1000, dtId);
+  const dtGone = await get('/api/messages?with=8801711000017&afterId=0', tokD2);
+  check('default-timer message hides after expiry',
+    dtGone.status === 200 && !(dtGone.data.messages || []).some((m) => m.id === dtId), dtGone);
+  const dtGrp = await post('/api/groups', { name: 'Timer Group', members: ['8801711000018'] }, tokD1);
+  const dtGid = dtGrp.data.group.id;
+  const dtGMsg = await post('/api/groups/' + dtGid + '/messages', { body: 'group default timer' }, tokD1);
+  check('group message expires from the sender default timer',
+    dtGMsg.status === 200 && dtGMsg.data.message.expires_at - dtGMsg.data.message.created_at === 86400 * 1000, dtGMsg);
+
+  console.log('== archive ==');
+  const archSet = await post('/api/archive', { kind: 'chat', peer: FRIEND, archived: true }, tokA);
+  check('archive a chat', archSet.status === 200 && archSet.data.archived === true, archSet);
+  const archList = await get('/api/archive', tokA);
+  check('archive list has the chat with name',
+    archList.status === 200 && (archList.data.archived || []).some((a) => a.kind === 'chat' && a.peer === FRIEND && a.name === 'Friend Test'), archList);
+  const convsArch = await get('/api/conversations', tokA);
+  const archConv = (convsArch.data.conversations || []).find((c) => c.phone === FRIEND);
+  check('conversations row carries archived=1',
+    convsArch.status === 200 && archConv && archConv.archived === 1, archConv);
+  const archGrp = await post('/api/archive', { kind: 'group', groupId: gid2, archived: true }, tokA);
+  check('archive a group', archGrp.status === 200 && archGrp.data.archived === true, archGrp);
+  const groupsArch = await get('/api/groups', tokA);
+  const archGrpRow = (groupsArch.data.groups || []).find((g) => g.id === gid2);
+  check('groups row carries archived=1',
+    groupsArch.status === 200 && archGrpRow && archGrpRow.archived === 1, archGrpRow);
+  const archList2 = await get('/api/archive', tokA);
+  check('archive list has the group too',
+    archList2.status === 200 && (archList2.data.archived || []).some((a) => a.kind === 'group' && a.groupId === gid2), archList2);
+  const archBad1 = await post('/api/archive', { kind: 'chat', archived: true }, tokA);
+  check('archive without a peer is 400', archBad1.status === 400, archBad1);
+  const archBad2 = await post('/api/archive', { kind: 'weird', archived: true }, tokA);
+  check('archive with a bad kind is 400', archBad2.status === 400, archBad2);
+  const archUnset = await post('/api/archive', { kind: 'chat', peer: FRIEND, archived: false }, tokA);
+  check('unarchive a chat', archUnset.status === 200 && archUnset.data.archived === false, archUnset);
+  await post('/api/archive', { kind: 'group', groupId: gid2, archived: false }, tokA);
+  const archList3 = await get('/api/archive', tokA);
+  check('archive list empty after unarchiving',
+    archList3.status === 200 && (archList3.data.archived || []).length === 0, archList3);
+  const convsArch2 = await get('/api/conversations', tokA);
+  const archConv2 = (convsArch2.data.conversations || []).find((c) => c.phone === FRIEND);
+  check('conversations row carries archived=0 after unarchive',
+    convsArch2.status === 200 && archConv2 && archConv2.archived === 0, archConv2);
+
+  console.log('== backup ==');
+  const backup = await get('/api/backup', tokA);
+  check('backup shape: user, contacts, conversations, groups',
+    backup.status === 200 && backup.data.backup && backup.data.backup.user
+    && backup.data.backup.user.phone === BIJOY && Array.isArray(backup.data.backup.contacts)
+    && Array.isArray(backup.data.backup.conversations) && Array.isArray(backup.data.backup.groups)
+    && typeof backup.data.backup.exportedAt === 'number', backup);
+  const backupStr = JSON.stringify(backup.data.backup);
+  check('backup carries no media_data anywhere', !backupStr.includes('media_data'), null);
+  const backupFriend = (backup.data.backup.conversations || []).find((c) => c.peer === FRIEND);
+  check('backup conversation has messages with metadata only',
+    backupFriend && Array.isArray(backupFriend.messages) && backupFriend.messages.length > 0
+    && backupFriend.messages.every((m) => typeof m.id === 'number' && 'body' in m && !('media_data' in m)), backupFriend);
+
+  console.log('== account info ==');
+  const accInfo = await post('/api/account/info', {}, tokA);
+  check('account info shape',
+    accInfo.status === 200 && accInfo.data.data && accInfo.data.data.profile
+    && accInfo.data.data.profile.phone === BIJOY && Array.isArray(accInfo.data.data.contacts)
+    && Array.isArray(accInfo.data.data.conversations) && Array.isArray(accInfo.data.data.chatSettings)
+    && Array.isArray(accInfo.data.data.groups) && Array.isArray(accInfo.data.data.statuses)
+    && accInfo.data.data.privacy && accInfo.data.data.privacy.lastSeen === 'everyone', accInfo);
+  const accConv = (accInfo.data.data.conversations || []).find((c) => c.peer === FRIEND);
+  check('account info conversation has last message + unread, no bodies list',
+    accConv && typeof accConv.lastMessage === 'string' && typeof accConv.unread === 'number', accConv);
+  const accAnon = await post('/api/account/info', {});
+  check('account info needs a session', accAnon.status === 401, accAnon);
+
+  console.log('== change number ==');
+  const CN_OLD = '8801711000019';
+  const CN_NEW = '8801711000020';
+  const tokCN1 = await login(CN_OLD, 'Change Number');
+  // A second session for the old identity: the rate limit allows one
+  // code per minute, so wait it out (61s) before the second login.
+  await new Promise((r) => setTimeout(r, 61000));
+  const tokCN2 = await login(CN_OLD, 'Change Number');
+  const cnBadSelf = await post('/api/account/change-number', { newPhone: CN_OLD }, tokCN1);
+  check('change-number to the same identity is rejected', cnBadSelf.status === 400, cnBadSelf);
+  const cnTaken = await post('/api/account/change-number', { newPhone: BIJOY }, tokCN1);
+  check('change-number to an existing identity is rejected', cnTaken.status === 409, cnTaken);
+  const cnReq = await post('/api/account/change-number', { newPhone: CN_NEW }, tokCN1);
+  check('change-number request returns a test code',
+    cnReq.status === 200 && cnReq.data.ok && cnReq.data.sent === true && cnReq.data.via === 'test'
+    && typeof cnReq.data.testCode === 'string' && cnReq.data.testCode.length === 6, cnReq);
+  const cnWrong = await post('/api/account/change-number/confirm', { newPhone: CN_NEW, code: '000000' }, tokCN1);
+  check('change-number confirm rejects a wrong code',
+    cnWrong.status === 400 && cnWrong.data.error === 'wrong_code', cnWrong);
+  const cnOk = await post('/api/account/change-number/confirm', { newPhone: CN_NEW, code: cnReq.data.testCode }, tokCN1);
+  check('change-number confirm migrates the identity',
+    cnOk.status === 200 && cnOk.data.ok && cnOk.data.phone === CN_NEW, cnOk);
+  const cnMe = await get('/api/me', tokCN1);
+  check('the current token now belongs to the new identity',
+    cnMe.status === 200 && cnMe.data.phone === CN_NEW && cnMe.data.name === 'Change Number', cnMe);
+  const cnOldTok = await get('/api/me', tokCN2);
+  check('the old identity other session is dead', cnOldTok.status === 401, cnOldTok);
+  // The change-number code for the new identity was issued seconds
+  // ago, so a fresh login code needs the 60s rate-limit window first.
+  await new Promise((r) => setTimeout(r, 61000));
+  const tokCNNew = await login(CN_NEW, 'Change Number');
+  check('new identity logs in', typeof tokCNNew === 'string' && tokCNNew.length > 0);
+
+  console.log('== delete account ==');
+  const DEL_U = '8801711000021';
+  const tokDel = await login(DEL_U, 'Delete Me');
+  await post('/api/contacts', { phone: FRIEND }, tokDel);
+  await post('/api/messages', { to: FRIEND, body: 'delete me message' }, tokDel);
+  const delNoConfirm = await post('/api/account/delete', {}, tokDel);
+  check('delete account needs confirm:true', delNoConfirm.status === 400, delNoConfirm);
+  const delOk = await post('/api/account/delete', { confirm: true }, tokDel);
+  check('delete account works', delOk.status === 200 && delOk.data.ok === true, delOk);
+  const delTokenCheck = await get('/api/me', tokDel);
+  check('deleted account token is dead', delTokenCheck.status === 401, delTokenCheck);
+  const delFetch = await get('/api/messages?with=' + DEL_U + '&afterId=0', tokB);
+  check('deleted account messages are gone for the friend',
+    delFetch.status === 200 && !(delFetch.data.messages || []).some((m) => m.body === 'delete me message'), delFetch);
+  // The login code for this identity was issued seconds ago, so the
+  // fresh code below needs the 60s rate-limit window first.
+  await new Promise((r) => setTimeout(r, 61000));
+  const delRc = await post('/api/request-code', { phone: DEL_U });
+  check('deleted identity can request a fresh code',
+    delRc.status === 200 && typeof delRc.data.testCode === 'string', delRc);
+  const delVc = await post('/api/verify-code', { phone: DEL_U, code: delRc.data.testCode });
+  check('deleted identity is a new user again (user row gone)',
+    delVc.status === 200 && delVc.data.isNewUser === true, delVc);
+
+  console.log('== camera switch (parent client build) ==');
+  check('camera switch pieces in the client: btn-cam-switch, replaceTrack, facingMode, s19_facing',
+    appJs.includes('btn-cam-switch') && appJs.includes('replaceTrack')
+    && appJs.includes('facingMode') && appJs.includes('s19_facing'));
 
   console.log('== logout ==');
   const lo = await post('/api/logout', {}, tokA);
